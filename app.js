@@ -8,6 +8,18 @@ function migrateCharacter(ch) {
   if (!ch.currency)       ch.currency = { cp:0, sp:0, ep:0, gp:0, pp:0 };
   if (!ch.attacks)        ch.attacks = [];
   if (!ch.skillExpertise) ch.skillExpertise = [];
+  // v2 fields
+  if (!ch.subclass)       ch.subclass = '';
+  if (!ch.traits)         ch.traits = '';
+  if (!ch.spells)         ch.spells = {};
+  if (!ch.spells.slots)    ch.spells.slots    = {1:0,2:0,3:0,4:0,5:0,6:0,7:0,8:0,9:0};
+  if (!ch.spells.slotsMax) ch.spells.slotsMax = {1:0,2:0,3:0,4:0,5:0,6:0,7:0,8:0,9:0};
+  if (!ch.spells.known)    ch.spells.known    = [];
+  if (!ch.spells.prepared) ch.spells.prepared = [];
+  if (!ch.combat)          ch.combat = {ac:10,initiative:0,speed:30,maxHP:10,currentHP:10,tempHP:0,hitDice:'1d8'};
+  if (!ch.deathSaves)      ch.deathSaves = {successes:0,failures:0};
+  if (!ch.saveProficiencies)  ch.saveProficiencies = [];
+  if (!ch.skillProficiencies) ch.skillProficiencies = [];
   return ch;
 }
 
@@ -20,6 +32,7 @@ function loadData() {
       if (!c.npcs) c.npcs = [];
       if (!c.initiative) c.initiative = null;
       if (!c.campaignTab) c.campaignTab = 'characters';
+      if (c.activeCharId === undefined) c.activeCharId = (c.characters||[])[0] || null;
     });
     Object.values(raw.characters).forEach(ch => migrateCharacter(ch));
     return raw;
@@ -42,6 +55,8 @@ let currentCharId = null;
 let currentNpcId = null;
 let currentTab = 'core'; // still used by campaign tabs
 let monsterCache = null;
+let charPanelOpen = false;
+let wizardData = {};
 
 // ── Routing & Breadcrumb ───────────────────────────────────────────────────────
 function showCampaigns() {
@@ -55,6 +70,7 @@ function showCampaign(id, tab) {
 }
 function showCharacter(id) {
   currentView = 'character'; currentCharId = id;
+  CharacterStore.setActive(id);
   renderBreadcrumb(); renderApp();
 }
 function showNpc(id) {
@@ -88,6 +104,7 @@ function renderApp() {
   else if (currentView === 'character')  app.innerHTML = renderCharacterSheet();
   else if (currentView === 'npc')        app.innerHTML = renderNpcSheet();
   if (currentView === 'character') window.scrollTo(0, scrollY);
+  renderCharSelector();
 }
 
 // ── Campaign List ─────────────────────────────────────────────────────────────
@@ -131,7 +148,7 @@ function openEditCampaignModal(id) {
 function createCampaign() {
   const name = document.getElementById('camp-name').value.trim();
   if (!name) { alert('Please enter a campaign name.'); return; }
-  db.campaigns.push({ id:uid(), name, description:document.getElementById('camp-desc').value.trim(), characters:[], npcs:[], initiative:null, campaignTab:'characters', createdAt:Date.now() });
+  db.campaigns.push({ id:uid(), name, description:document.getElementById('camp-desc').value.trim(), characters:[], npcs:[], initiative:null, campaignTab:'characters', activeCharId:null, createdAt:Date.now() });
   saveData(db); closeModal(); renderApp();
 }
 function updateCampaign(id) {
@@ -221,7 +238,10 @@ function deleteCharacter(id) {
   if (!confirm('Delete this character?')) return;
   delete db.characters[id];
   const c = db.campaigns.find(c => c.id === currentCampaignId);
-  if (c) c.characters = c.characters.filter(cid => cid !== id);
+  if (c) {
+    c.characters = c.characters.filter(cid => cid !== id);
+    if (c.activeCharId === id) c.activeCharId = c.characters[0] || null;
+  }
   saveData(db); renderApp();
 }
 
@@ -403,23 +423,31 @@ function addCombatant() {
   saveData(db); closeModal(); renderApp();
 }
 function quickAddCombatant(entityId, type) {
-  let name, ac, maxHP, hp;
-  if (type==='player') { const ch=db.characters[entityId]; name=ch.name; ac=ch.combat.ac; maxHP=ch.combat.maxHP; hp=ch.combat.currentHP; }
-  else { const npc=db.npcs[entityId]; name=npc.name; ac=npc.ac||10; maxHP=npc.maxHP||10; hp=npc.hp||10; }
-  getInitiative().combatants.push({ id:uid(), name, initiative:Math.ceil(Math.random()*20), ac, hp, maxHP, type, conditions:[] });
+  let name, ac, maxHP, hp, charId = null;
+  if (type==='player') {
+    const ch=db.characters[entityId];
+    name=ch.name; ac=ch.combat.ac; maxHP=ch.combat.maxHP; hp=ch.combat.currentHP;
+    charId=entityId; // link back to character record for HP sync
+  } else {
+    const npc=db.npcs[entityId]; name=npc.name; ac=npc.ac||10; maxHP=npc.maxHP||10; hp=npc.hp||10;
+  }
+  getInitiative().combatants.push({ id:uid(), charId, name, initiative:Math.ceil(Math.random()*20), ac, hp, maxHP, type, conditions:[] });
   saveData(db); closeModal(); renderApp();
 }
 function addAllPcsToInitiative() {
   const campaign=getCampaign(), init=getInitiative();
-  const existing=new Set(init.combatants.map(c=>c.name));
-  (campaign.characters||[]).forEach(id => { const ch=db.characters[id]; if(!ch||existing.has(ch.name)) return; init.combatants.push({id:uid(),name:ch.name,initiative:Math.ceil(Math.random()*20),ac:ch.combat.ac,hp:ch.combat.currentHP,maxHP:ch.combat.maxHP,type:'player',conditions:[]}); });
+  const linked=new Set(init.combatants.filter(c=>c.charId).map(c=>c.charId));
+  (campaign.characters||[]).forEach(id => {
+    const ch=db.characters[id]; if(!ch||linked.has(id)) return;
+    init.combatants.push({id:uid(),charId:id,name:ch.name,initiative:Math.ceil(Math.random()*20),ac:ch.combat.ac,hp:ch.combat.currentHP,maxHP:ch.combat.maxHP,type:'player',conditions:[]});
+  });
   saveData(db); renderApp();
 }
 function sortInitiative() { const init=getInitiative(); init.combatants.sort((a,b)=>b.initiative-a.initiative); init.currentIndex=0; saveData(db); renderApp(); }
 function nextTurn() { const init=getInitiative(); if(!init.combatants.length) return; init.currentIndex=(init.currentIndex||0)+1; if(init.currentIndex>=init.combatants.length){init.currentIndex=0;init.round++;} saveData(db); renderApp(); }
-function updateCombatantHP(i,val) { const init=getInitiative(); init.combatants[i].hp=Math.max(0,Math.min(val,init.combatants[i].maxHP)); saveData(db); }
-function damageCombatant(i,amt) { const init=getInitiative(); init.combatants[i].hp=Math.max(0,init.combatants[i].hp-amt); saveData(db); renderApp(); }
-function healCombatant(i,amt) { const init=getInitiative(); const cb=init.combatants[i]; cb.hp=Math.min(cb.maxHP,cb.hp+amt); saveData(db); renderApp(); }
+function updateCombatantHP(i,val) { CharacterStore.updateInitiativeHP(currentCampaignId,i,+val); }
+function damageCombatant(i,amt) { const cb=getInitiative().combatants[i]; CharacterStore.updateInitiativeHP(currentCampaignId,i,cb.hp-amt); renderApp(); }
+function healCombatant(i,amt)  { const cb=getInitiative().combatants[i]; CharacterStore.updateInitiativeHP(currentCampaignId,i,cb.hp+amt); renderApp(); }
 function removeCombatant(i) { const init=getInitiative(); init.combatants.splice(i,1); if(init.currentIndex>=init.combatants.length) init.currentIndex=0; saveData(db); renderApp(); }
 function clearInitiative() { if(!confirm('End combat and clear all combatants?')) return; getCampaign().initiative={round:1,currentIndex:0,combatants:[]}; saveData(db); renderApp(); }
 function openConditionPicker(i) {
@@ -492,22 +520,127 @@ function addMonsterToCombat(m) {
 // ── Character Data Model ──────────────────────────────────────────────────────
 function newCharacter(name, race, cls, level) {
   return {
-    id:uid(), name, race:race||'', class:cls||'Fighter', level:level||1,
-    background:'', alignment:'True Neutral', xp:0,
-    abilities:{str:10,dex:10,con:10,int:10,wis:10,cha:10},
-    proficiencyBonus:profBonus(level),
-    saveProficiencies:[], skillProficiencies:[],
-    combat:{ac:10,initiative:0,speed:30,maxHP:10,currentHP:10,tempHP:0,hitDice:'1d8'},
-    deathSaves:{successes:0,failures:0},
-    equipment:[], features:'', notes:'',
-    personality:'', ideals:'', bonds:'', flaws:'',
-    spells:{slots:{},known:[]},
-    inspiration:false, languages:'', proficiencies:'',
-    currency:{cp:0,sp:0,ep:0,gp:0,pp:0},
-    attacks:[], skillExpertise:[],
-    createdAt:Date.now()
+    id: uid(),
+    name, race: race||'', class: cls||'Fighter', subclass: '', level: level||1,
+    background: '', alignment: 'True Neutral', xp: 0,
+    proficiencyBonus: profBonus(level),
+    inspiration: false,
+    abilities: { str:10, dex:10, con:10, int:10, wis:10, cha:10 },
+    saveProficiencies: [], skillProficiencies: [], skillExpertise: [],
+    combat: { ac:10, initiative:0, speed:30, maxHP:10, currentHP:10, tempHP:0, hitDice:'1d8' },
+    deathSaves: { successes:0, failures:0 },
+    spells: {
+      slots:    { 1:0, 2:0, 3:0, 4:0, 5:0, 6:0, 7:0, 8:0, 9:0 },
+      slotsMax: { 1:0, 2:0, 3:0, 4:0, 5:0, 6:0, 7:0, 8:0, 9:0 },
+      known: [],
+      prepared: []
+    },
+    attacks: [],
+    equipment: [],
+    currency: { cp:0, sp:0, ep:0, gp:0, pp:0 },
+    features: '', traits: '', personality: '', ideals: '', bonds: '', flaws: '',
+    proficiencies: '', languages: '', notes: '',
+    createdAt: Date.now()
   };
 }
+
+// ── CharacterStore — central state manager ────────────────────────────────────
+const CharacterStore = {
+  /** Get a character by ID */
+  get(id) { return db.characters[id] || null; },
+
+  /** Get the active character for the current campaign */
+  getActive() {
+    const c = db.campaigns.find(c => c.id === currentCampaignId);
+    if (!c || !c.activeCharId) return null;
+    return db.characters[c.activeCharId] || null;
+  },
+
+  /** Mark a character as the active one for its campaign */
+  setActive(charId) {
+    const c = db.campaigns.find(c => c.id === currentCampaignId);
+    if (c) { c.activeCharId = charId; saveData(db); }
+  },
+
+  /** Get all characters belonging to a campaign, in order */
+  getAllForCampaign(campaignId) {
+    const c = db.campaigns.find(c => c.id === campaignId);
+    return (c?.characters || []).map(id => db.characters[id]).filter(Boolean);
+  },
+
+  /** Shallow-patch top-level fields on a character and save */
+  update(id, patch) {
+    if (!db.characters[id]) return;
+    Object.assign(db.characters[id], patch);
+    saveData(db);
+  },
+
+  /** Update current HP on the character record, then sync to any initiative
+   *  combatant that is linked to this character via charId */
+  updateCombatHP(charId, newHP) {
+    const ch = db.characters[charId];
+    if (!ch) return;
+    ch.combat.currentHP = Math.max(0, Math.min(newHP, ch.combat.maxHP));
+    // Sync to linked initiative combatant if present
+    const campaign = db.campaigns.find(c => c.id === currentCampaignId);
+    if (campaign?.initiative) {
+      const cb = campaign.initiative.combatants.find(cb => cb.charId === charId);
+      if (cb) { cb.hp = ch.combat.currentHP; cb.maxHP = ch.combat.maxHP; }
+    }
+    saveData(db);
+  },
+
+  /** Update a combatant's HP in the initiative tracker and sync back to character
+   *  sheet if the combatant is a linked player character */
+  updateInitiativeHP(campaignId, combatantIndex, newHP) {
+    const campaign = db.campaigns.find(c => c.id === campaignId);
+    if (!campaign?.initiative) return;
+    const cb = campaign.initiative.combatants[combatantIndex];
+    if (!cb) return;
+    cb.hp = Math.max(0, Math.min(newHP, cb.maxHP));
+    if (cb.type === 'player' && cb.charId) {
+      const ch = db.characters[cb.charId];
+      if (ch) ch.combat.currentHP = cb.hp;
+    }
+    saveData(db);
+  },
+
+  /** Decrement a spell slot (current), floor 0 */
+  useSpellSlot(charId, level) {
+    const ch = db.characters[charId];
+    if (!ch) return;
+    const cur = ch.spells.slots[level] || 0;
+    if (cur > 0) { ch.spells.slots[level] = cur - 1; saveData(db); }
+  },
+
+  /** Increment a spell slot (current), ceiling = slotsMax */
+  restoreSpellSlot(charId, level) {
+    const ch = db.characters[charId];
+    if (!ch) return;
+    const cur = ch.spells.slots[level] || 0;
+    const max = ch.spells.slotsMax[level] || 0;
+    if (cur < max) { ch.spells.slots[level] = cur + 1; saveData(db); }
+  },
+
+  /** Long rest: restore HP, spell slots, clear temp HP + death saves */
+  longRest(charId) {
+    const ch = db.characters[charId];
+    if (!ch) return;
+    ch.combat.currentHP = ch.combat.maxHP;
+    ch.combat.tempHP    = 0;
+    ch.deathSaves       = { successes:0, failures:0 };
+    ch.inspiration      = false;
+    ch.spells.slots     = { ...ch.spells.slotsMax };
+    this.updateCombatHP(charId, ch.combat.currentHP);
+    saveData(db);
+  },
+
+  /** Proficiency bonus derived from level */
+  profBonus(charId) {
+    const ch = db.characters[charId];
+    return ch ? profBonus(ch.level) : 2;
+  }
+};
 function profBonus(level) { return Math.ceil(level/4)+1; }
 
 // ── Character Sheet — Helpers ─────────────────────────────────────────────────
@@ -522,6 +655,16 @@ const SKILLS = [
   {name:'Performance',ability:'cha'},{name:'Persuasion',ability:'cha'},{name:'Religion',ability:'int'},
   {name:'Sleight of Hand',ability:'dex'},{name:'Stealth',ability:'dex'},{name:'Survival',ability:'wis'},
 ];
+const CLASS_ICONS = {
+  Barbarian:'⚔', Bard:'♬', Cleric:'✙', Druid:'❧', Fighter:'⚔',
+  Monk:'☯', Paladin:'✦', Ranger:'⚹', Rogue:'◈', Sorcerer:'✴',
+  Warlock:'⛧', Wizard:'✶', Artificer:'⚙', 'Blood Hunter':'✸'
+};
+const HIT_DICE = {
+  Barbarian:12, Bard:8, Cleric:8, Druid:8, Fighter:10, Monk:8, Paladin:10,
+  Ranger:10, Rogue:8, Sorcerer:6, Warlock:8, Wizard:6, Artificer:8, 'Blood Hunter':10
+};
+
 function mod(score) { return Math.floor((score-10)/2); }
 function modStr(score) { const m=mod(score); return (m>=0?'+':'')+m; }
 function skillBonus(ch, skillName, abilityKey, pb) {
@@ -669,25 +812,262 @@ function renderEquipmentCurrency(ch) {
   </div>`;
 }
 
+// ── Spells Tab ────────────────────────────────────────────────────────────────
+const SPELL_ABILITY = {
+  Bard:'cha', Cleric:'wis', Druid:'wis', Paladin:'cha', Ranger:'wis',
+  Sorcerer:'cha', Warlock:'cha', Wizard:'int', Artificer:'int',
+  'Blood Hunter':'int'
+};
+const SCHOOL_COLORS = {
+  Abjuration:'#6d8fd4', Conjuration:'#6dba8f', Divination:'#c4a85a',
+  Enchantment:'#c084fc', Evocation:'#e87070', Illusion:'#7b9dd4',
+  Necromancy:'#9c7bc4', Transmutation:'#7bbdb8'
+};
+const SPELL_CACHE_KEY = 'dnd_spell_cache_v1';
+let spellApiCache = null; // in-memory: { classKey: [spells...] }
+
+function loadSpellCache() {
+  if (spellApiCache) return;
+  try { spellApiCache = JSON.parse(localStorage.getItem(SPELL_CACHE_KEY)) || {}; }
+  catch { spellApiCache = {}; }
+}
+function saveSpellCache() {
+  try { localStorage.setItem(SPELL_CACHE_KEY, JSON.stringify(spellApiCache)); } catch {}
+}
+
+async function fetchSpellsForClass(cls) {
+  loadSpellCache();
+  const key = cls.toLowerCase().replace(' ', '-');
+  if (spellApiCache[key]) return spellApiCache[key];
+  const el = document.getElementById('spell-api-list');
+  if (el) el.innerHTML = `<div class="spell-loading">✾ Loading ${cls} spells…</div>`;
+  try {
+    const res = await fetch(`https://api.open5e.com/v1/spells/?limit=400&dnd_class=${encodeURIComponent(cls)}`);
+    const data = await res.json();
+    const spells = (data.results || []).sort((a,b) => (a.level_int||0) - (b.level_int||0) || a.name.localeCompare(b.name));
+    spellApiCache[key] = spells;
+    saveSpellCache();
+    renderSpellApiList(currentCharId);
+  } catch {
+    if (el) el.innerHTML = `<div class="spell-loading" style="color:var(--red-lt)">Could not load spells — check connection.</div>`;
+  }
+}
+
 function renderSpellsSection(ch) {
+  const pb = profBonus(ch.level);
+  const spellAbility = SPELL_ABILITY[ch.class] || null;
+  const spellMod  = spellAbility ? mod(ch.abilities[spellAbility]) : null;
+  const saveDC    = spellAbility ? (8 + pb + spellMod) : null;
+  const atkBonus  = spellAbility ? (pb + spellMod) : null;
+  const abilLabel = spellAbility ? ABILITY_SHORT[spellAbility] : null;
+  const isSpellcaster = !!spellAbility;
+
+  const headerStats = isSpellcaster ? `
+    <div class="spell-stat-row">
+      <div class="spell-stat-box">
+        <div class="spell-stat-label">Spellcasting Ability</div>
+        <div class="spell-stat-val">${abilLabel}</div>
+      </div>
+      <div class="spell-stat-box">
+        <div class="spell-stat-label">Spell Save DC</div>
+        <div class="spell-stat-val">${saveDC}</div>
+      </div>
+      <div class="spell-stat-box">
+        <div class="spell-stat-label">Spell Attack</div>
+        <div class="spell-stat-val">${atkBonus >= 0 ? '+' : ''}${atkBonus}</div>
+      </div>
+    </div>` : `<p class="text-dim" style="font-size:0.82rem;margin-bottom:0.8rem">${esc(ch.class)} does not use spellcasting.</p>`;
+
+  // Spell slots
+  const slotsHtml = isSpellcaster ? `
+    <div class="spell-slots-section">
+      <div class="cs-field-label" style="margin-bottom:0.55rem">Spell Slots</div>
+      <div class="spell-slots-grid">
+        ${[1,2,3,4,5,6,7,8,9].map(lvl => {
+          const cur = (ch.spells.slots||{})[lvl] || 0;
+          const max = (ch.spells.slotsMax||{})[lvl] || 0;
+          return `<div class="spell-slot-col">
+            <div class="spell-slot-level">${lvl}</div>
+            <div class="spell-slot-bubbles">
+              ${Array.from({length: Math.max(cur,max,1)}, (_,i) => `
+                <div class="spell-bubble ${i < cur ? 'filled' : ''}"
+                     onclick="toggleSpellBubble(${lvl},${i})" title="Slot ${i+1}"></div>`).join('')}
+            </div>
+            <div class="spell-slot-inputs">
+              <input type="number" min="0" max="9" value="${cur}" title="Current" oninput="updateSpellSlot(${lvl},+this.value)" class="spell-slot-num">
+              <span class="spell-slot-sep">/</span>
+              <input type="number" min="0" max="9" value="${max}" title="Max" oninput="updateSpellSlotMax(${lvl},+this.value)" class="spell-slot-num">
+            </div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>` : '';
+
+  // Prepared & known
+  const prepared = ch.spells.prepared || [];
+  const known    = ch.spells.known    || [];
+
+  const preparedHtml = `
+    <div class="spell-group">
+      <div class="spell-group-heading">✿ Prepared Spells <span class="spell-count">${prepared.length}</span></div>
+      ${prepared.length === 0
+        ? `<p class="spell-empty">No prepared spells. Add from below ↓</p>`
+        : prepared.map((sp,i) => renderSpellEntry(sp, 'prepared', i)).join('')}
+    </div>`;
+
+  const knownHtml = `
+    <div class="spell-group">
+      <div class="spell-group-heading">✿ Known Spells <span class="spell-count">${known.length}</span></div>
+      ${known.length === 0
+        ? `<p class="spell-empty">No known spells yet.</p>`
+        : known.map((sp,i) => renderSpellEntry(sp, 'known', i)).join('')}
+    </div>`;
+
+  // API spell browser
+  const browserHtml = isSpellcaster ? `
+    <div class="spell-group" style="margin-top:0.5rem">
+      <div class="spell-group-heading">✿ ${esc(ch.class)} Spell List
+        <button class="btn btn-sm" style="margin-left:auto;font-size:0.65rem" onclick="fetchSpellsForClass('${esc(ch.class)}')">Load from SRD</button>
+      </div>
+      <div style="margin:0.4rem 0 0.5rem">
+        <input type="text" id="spell-search" placeholder="Search spells…" oninput="filterSpellList(this.value)"
+          style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-family:inherit;font-size:0.82rem;padding:0.3rem 0.55rem;width:100%">
+      </div>
+      <div id="spell-api-list" class="spell-api-list"></div>
+    </div>` : '';
+
   return `<div class="sheet-panel" style="margin-top:0.6rem">
     <div class="cs-section-label">Spells</div>
-    <div class="cs-field-label" style="margin-bottom:0.4rem">Spell Slots</div>
-    <div style="display:grid;grid-template-columns:repeat(9,1fr);gap:0.3rem;margin-bottom:0.8rem">
-      ${[1,2,3,4,5,6,7,8,9].map(lvl=>`<div style="text-align:center">
-        <div style="font-size:0.55rem;color:var(--text-dim);margin-bottom:0.1rem">${lvl}</div>
-        <input type="number" min="0" max="9" value="${(ch.spells.slots||{})[lvl]||0}" oninput="updateSpellSlot(${lvl},+this.value)" style="width:100%;text-align:center;font-size:0.9rem;background:transparent;border:none;border-bottom:1px solid var(--border);color:var(--gold);font-weight:bold;padding:0.1rem 0">
-      </div>`).join('')}
-    </div>
-    <div class="cs-field-label" style="margin-bottom:0.4rem">Known Spells</div>
-    <ul class="eq-list" style="max-height:160px;overflow-y:auto">
-      ${(ch.spells.known||[]).map((sp,i)=>`<li class="eq-item"><span class="eq-name">${esc(sp)}</span><button class="btn btn-icon btn-danger" onclick="removeSpell(${i})">&times;</button></li>`).join('')}
-    </ul>
-    <div class="eq-add-row">
-      <input type="text" id="spell-input" placeholder="Add spell..." onkeydown="if(event.key==='Enter')addSpell()">
-      <button class="btn btn-sm" onclick="addSpell()">Add</button>
-    </div>
+    ${headerStats}
+    ${slotsHtml}
+    ${preparedHtml}
+    ${knownHtml}
+    ${browserHtml}
   </div>`;
+}
+
+function renderSpellEntry(sp, listType, idx) {
+  const isObj = typeof sp === 'object';
+  const name  = isObj ? sp.name : sp;
+  const level = isObj ? (sp.level_int != null ? (sp.level_int === 0 ? 'Cantrip' : `Lv ${sp.level_int}`) : '') : '';
+  const school = isObj ? (sp.school || '') : '';
+  const schoolColor = SCHOOL_COLORS[school] || '#7b6d8d';
+  const conc  = isObj && sp.concentration === 'yes';
+  const ritual = isObj && sp.ritual === 'yes';
+  const castTime = isObj ? (sp.casting_time || '') : '';
+  const range = isObj ? (sp.range || '') : '';
+  const components = isObj ? (sp.components || '') : '';
+  const id = `spell-desc-${listType}-${idx}`;
+  const removeAction = `removeSpellEntry('${listType}',${idx})`;
+  const castAction   = listType === 'prepared' ? `castSpell('${esc(name)}')` : '';
+
+  return `<div class="spell-card">
+    <div class="spell-card-top">
+      <div class="spell-card-left">
+        <span class="spell-name">${esc(name)}</span>
+        ${level || school ? `<span class="spell-badge" style="border-color:${schoolColor};color:${schoolColor}">${level}${level && school ? ' · ' : ''}${esc(school)}</span>` : ''}
+        ${conc  ? `<span class="spell-tag conc" title="Concentration">C</span>` : ''}
+        ${ritual ? `<span class="spell-tag ritual" title="Ritual">R</span>` : ''}
+      </div>
+      <div class="spell-card-right">
+        ${castAction ? `<button class="btn btn-sm btn-primary" onclick="${castAction}" title="Use a spell slot">Cast</button>` : ''}
+        ${isObj ? `<button class="btn btn-sm" onclick="toggleSpellDesc('${id}')" title="Details">▾</button>` : ''}
+        <button class="btn btn-icon btn-danger" onclick="${removeAction}">&times;</button>
+      </div>
+    </div>
+    ${castTime||range||components ? `<div class="spell-meta">${[castTime,range,components].filter(Boolean).map(esc).join(' · ')}</div>` : ''}
+    ${isObj ? `<div class="spell-desc hidden" id="${id}">${esc(sp.desc || '')}</div>` : ''}
+  </div>`;
+}
+
+function toggleSpellDesc(id) {
+  const el = document.getElementById(id); if (!el) return;
+  el.classList.toggle('hidden');
+}
+
+function renderSpellApiList(charId) {
+  const el = document.getElementById('spell-api-list'); if (!el) return;
+  const ch = db.characters[charId]; if (!ch) return;
+  loadSpellCache();
+  const key = (ch.class || '').toLowerCase().replace(' ', '-');
+  const all = spellApiCache[key];
+  if (!all) { el.innerHTML = ''; return; }
+  const q = (document.getElementById('spell-search')?.value || '').toLowerCase().trim();
+  const filtered = q ? all.filter(s => s.name.toLowerCase().includes(q) || (s.school||'').toLowerCase().includes(q)) : all.slice(0, 60);
+  const known    = new Set((ch.spells.known    || []).map(s => typeof s === 'object' ? s.name : s));
+  const prepared = new Set((ch.spells.prepared || []).map(s => typeof s === 'object' ? s.name : s));
+  const lvlOrder = ['Cantrip','1st-level','2nd-level','3rd-level','4th-level','5th-level','6th-level','7th-level','8th-level','9th-level'];
+
+  if (!filtered.length) { el.innerHTML = `<p class="spell-empty">No results.</p>`; return; }
+
+  el.innerHTML = filtered.slice(0, 80).map(sp => {
+    const school = sp.school || '';
+    const schoolColor = SCHOOL_COLORS[school] || '#7b6d8d';
+    const lvlLabel = sp.level_int === 0 ? 'Cantrip' : sp.level ? sp.level : '';
+    const inKnown    = known.has(sp.name);
+    const inPrepared = prepared.has(sp.name);
+    return `<div class="spell-browser-row">
+      <div class="spell-browser-left">
+        <span class="spell-name" style="font-size:0.82rem">${esc(sp.name)}</span>
+        <span class="spell-badge" style="border-color:${schoolColor};color:${schoolColor};font-size:0.58rem">${esc(lvlLabel)}${lvlLabel && school?' · ':''}${esc(school)}</span>
+        ${sp.concentration==='yes'?`<span class="spell-tag conc">C</span>`:''}
+        ${sp.ritual==='yes'?`<span class="spell-tag ritual">R</span>`:''}
+      </div>
+      <div class="flex gap-1" style="flex-shrink:0">
+        <button class="btn btn-sm${inPrepared?' btn-primary':''}" onclick="addSpellToList('prepared','${sp.name.replace(/'/g,"\\'")}',${sp.level_int||0},'${esc(school)}','${esc(sp.casting_time||'')}','${esc(sp.range||'')}','${esc(sp.components||'')}','${sp.concentration||'no'}','${sp.ritual||'no'}',${JSON.stringify(sp.desc||'').replace(/'/g,"&apos;")})">${inPrepared?'✓ Prepared':'Prepare'}</button>
+        <button class="btn btn-sm${inKnown?' btn-primary':''}" onclick="addSpellToList('known','${sp.name.replace(/'/g,"\\'")}',${sp.level_int||0},'${esc(school)}','${esc(sp.casting_time||'')}','${esc(sp.range||'')}','${esc(sp.components||'')}','${sp.concentration||'no'}','${sp.ritual||'no'}',${JSON.stringify(sp.desc||'').replace(/'/g,"&apos;")})">${inKnown?'✓ Known':'Learn'}</button>
+      </div>
+    </div>`;
+  }).join('');
+  if (filtered.length > 80) el.innerHTML += `<p class="spell-empty" style="text-align:center">Showing 80 of ${filtered.length} — refine search to see more</p>`;
+}
+
+function filterSpellList(q) { renderSpellApiList(currentCharId); }
+
+function addSpellToList(listType, name, levelInt, school, castTime, range, components, conc, ritual, desc) {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  ch.spells[listType] = ch.spells[listType] || [];
+  const already = ch.spells[listType].some(s => (typeof s === 'object' ? s.name : s) === name);
+  if (already) return;
+  ch.spells[listType].push({ name, level_int: levelInt, school, casting_time: castTime, range, components, concentration: conc, ritual, desc });
+  saveData(db); renderApp();
+}
+
+function removeSpellEntry(listType, idx) {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  ch.spells[listType].splice(idx, 1);
+  saveData(db); renderApp();
+}
+
+function castSpell(spellName) {
+  // Find the lowest available slot and use it
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  const sp = (ch.spells.prepared || []).find(s => (typeof s === 'object' ? s.name : s) === spellName);
+  const minLvl = (sp && typeof sp === 'object') ? (sp.level_int || 1) : 1;
+  for (let lvl = Math.max(1, minLvl); lvl <= 9; lvl++) {
+    if ((ch.spells.slots[lvl] || 0) > 0) {
+      CharacterStore.useSpellSlot(currentCharId, lvl);
+      renderApp(); return;
+    }
+  }
+  alert('No spell slots available!');
+}
+
+function toggleSpellBubble(level, index) {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  const cur = ch.spells.slots[level] || 0;
+  // Clicking a filled bubble expends it; clicking empty restores
+  ch.spells.slots[level] = index < cur ? index : index + 1;
+  saveData(db); renderApp();
+}
+
+function updateSpellSlotMax(level, value) {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  ch.spells.slotsMax = ch.spells.slotsMax || {};
+  ch.spells.slotsMax[level] = Math.max(0, parseInt(value) || 0);
+  // Don't exceed max
+  if ((ch.spells.slots[level] || 0) > ch.spells.slotsMax[level]) ch.spells.slots[level] = ch.spells.slotsMax[level];
+  saveData(db); renderApp();
 }
 
 function renderPersonalitySection(ch) {
@@ -902,6 +1282,278 @@ function setLevel() {
   const ch = db.characters[currentCharId];
   ch.level = Math.min(20,Math.max(1,val)); ch.proficiencyBonus = profBonus(ch.level);
   saveData(db); closeModal(); renderApp();
+}
+
+// ── Character Selector ────────────────────────────────────────────────────────
+function renderCharSelector() {
+  const wrap = document.getElementById('char-selector-wrap');
+  if (!wrap) return;
+  if (!currentCampaignId) { wrap.innerHTML = ''; return; }
+  const campaign = db.campaigns.find(c => c.id === currentCampaignId);
+  if (!campaign) { wrap.innerHTML = ''; return; }
+  const ch = campaign.activeCharId ? db.characters[campaign.activeCharId] : null;
+  const icon = ch ? (CLASS_ICONS[ch.class] || '⚔') : '✾';
+  const name = ch ? esc(ch.name || 'Unnamed') : 'No Character';
+  const meta = ch ? `Lv ${ch.level} ${esc(ch.class)}` : 'Select a character';
+  wrap.innerHTML = `
+    <button class="char-selector-btn${charPanelOpen ? ' open' : ''}" id="char-selector-btn" onclick="toggleCharPanel()">
+      <span class="char-selector-icon">${icon}</span>
+      <div><div class="char-selector-name">${name}</div><div class="char-selector-meta">${meta}</div></div>
+    </button>`;
+}
+
+function toggleCharPanel() { charPanelOpen ? closeCharPanel() : openCharPanel(); }
+
+function openCharPanel() {
+  charPanelOpen = true;
+  renderCharSelector();
+  document.getElementById('char-panel')?.remove();
+  if (!currentCampaignId) return;
+  const campaign = db.campaigns.find(c => c.id === currentCampaignId);
+  if (!campaign) return;
+  const chars = CharacterStore.getAllForCampaign(currentCampaignId);
+  const atLimit = chars.length >= 20;
+  const panel = document.createElement('div');
+  panel.id = 'char-panel';
+  panel.className = 'char-panel';
+  panel.innerHTML = `
+    <div class="char-panel-header">
+      <span class="char-panel-title">✿ Characters (${chars.length}/20)</span>
+      <button class="btn btn-sm btn-primary" onclick="openCharWizard()"${atLimit ? ' disabled title="Limit reached"' : ''}>+ New</button>
+    </div>
+    ${chars.length === 0
+      ? `<p class="text-dim" style="text-align:center;padding:0.8rem 0;font-size:0.85rem">No characters yet.</p>`
+      : chars.map(ch => renderCharPanelCard(ch, campaign.activeCharId === ch.id)).join('')}`;
+  document.body.appendChild(panel);
+  const btn = document.getElementById('char-selector-btn');
+  if (btn) {
+    const r = btn.getBoundingClientRect();
+    panel.style.top   = (r.bottom + 6) + 'px';
+    panel.style.right = Math.max(8, window.innerWidth - r.right) + 'px';
+  }
+  setTimeout(() => document.addEventListener('click', charPanelOutsideClick), 0);
+}
+
+function closeCharPanel() {
+  charPanelOpen = false;
+  document.getElementById('char-panel')?.remove();
+  document.removeEventListener('click', charPanelOutsideClick);
+  renderCharSelector();
+}
+
+function charPanelOutsideClick(e) {
+  const panel = document.getElementById('char-panel');
+  const btn   = document.getElementById('char-selector-btn');
+  if (panel && !panel.contains(e.target) && btn && !btn.contains(e.target)) closeCharPanel();
+}
+
+function renderCharPanelCard(ch, isActive) {
+  const icon = CLASS_ICONS[ch.class] || '⚔';
+  const pct  = ch.combat.maxHP > 0 ? Math.round((ch.combat.currentHP / ch.combat.maxHP) * 100) : 100;
+  const bar  = pct <= 25 ? 'low' : pct <= 50 ? 'mid' : '';
+  return `<div class="char-panel-card${isActive ? ' active-char' : ''}">
+    <div class="char-panel-card-top">
+      <span class="char-panel-icon">${icon}</span>
+      <span class="char-panel-name">${esc(ch.name || 'Unnamed')}</span>
+      <span class="char-panel-level">Lv ${ch.level}</span>
+    </div>
+    <div class="char-panel-sub">${esc(ch.race || '—')} ${esc(ch.class)}</div>
+    <div style="font-size:0.7rem;color:var(--text-dim);margin-bottom:0.25rem">HP ${ch.combat.currentHP}/${ch.combat.maxHP}</div>
+    <div class="hp-bar-wrap" style="height:6px;margin-bottom:0.4rem"><div class="hp-bar ${bar}" style="width:${pct}%"></div></div>
+    <div class="char-panel-actions">
+      ${isActive
+        ? `<span class="btn btn-sm" style="opacity:0.45;cursor:default;pointer-events:none">Active</span>`
+        : `<button class="btn btn-sm btn-primary" onclick="switchToCharacter('${ch.id}')">Switch</button>`}
+      <button class="btn btn-sm" onclick="duplicateCharacter('${ch.id}')">Duplicate</button>
+      <button class="btn btn-sm btn-danger" onclick="deleteCharacterFromPanel('${ch.id}')">Delete</button>
+    </div>
+  </div>`;
+}
+
+function switchToCharacter(charId) {
+  closeCharPanel();
+  const app = document.getElementById('app');
+  app.classList.add('char-switching');
+  setTimeout(() => {
+    app.classList.remove('char-switching');
+    currentCharId = charId;
+    currentView   = 'character';
+    CharacterStore.setActive(charId);
+    renderBreadcrumb();
+    renderApp();
+    app.classList.add('char-showing');
+    setTimeout(() => app.classList.remove('char-showing'), 280);
+  }, 180);
+}
+
+function duplicateCharacter(charId) {
+  if (CharacterStore.getAllForCampaign(currentCampaignId).length >= 20) {
+    alert('20 character limit reached.'); return;
+  }
+  const orig = db.characters[charId]; if (!orig) return;
+  const copy = JSON.parse(JSON.stringify(orig));
+  copy.id = uid(); copy.name = (orig.name || 'Unnamed') + ' (Copy)'; copy.createdAt = Date.now();
+  db.characters[copy.id] = copy;
+  const c = db.campaigns.find(c => c.id === currentCampaignId);
+  c.characters.push(copy.id);
+  saveData(db);
+  closeCharPanel(); openCharPanel();
+}
+
+function deleteCharacterFromPanel(charId) {
+  if (!confirm('Delete this character?')) return;
+  delete db.characters[charId];
+  const c = db.campaigns.find(c => c.id === currentCampaignId);
+  if (c) {
+    c.characters = c.characters.filter(id => id !== charId);
+    if (c.activeCharId === charId) c.activeCharId = c.characters[0] || null;
+  }
+  saveData(db);
+  if (currentCharId === charId) {
+    closeCharPanel();
+    if (c?.activeCharId) { currentCharId = c.activeCharId; renderApp(); }
+    else showCampaign(currentCampaignId);
+  } else {
+    closeCharPanel(); openCharPanel();
+  }
+  renderCharSelector();
+}
+
+// ── Character Setup Wizard ────────────────────────────────────────────────────
+function openCharWizard() {
+  closeCharPanel();
+  wizardData = {
+    name: '', race: '', class: 'Fighter', level: 1,
+    abilities: { str:10, dex:10, con:10, int:10, wis:10, cha:10 },
+    maxHP: 10, maxHPSet: false
+  };
+  renderWizardStep(0);
+}
+
+function wizardProgress(current) {
+  return `<div class="wizard-progress">${[0,1,2,3,4,5].map(i =>
+    `<div class="wizard-step-dot ${i < current ? 'done' : i === current ? 'current' : ''}"></div>`
+  ).join('')}</div>`;
+}
+
+function renderWizardStep(step) {
+  let body = '';
+  if (step === 0) {
+    body = `<h2>✾ New Character</h2>${wizardProgress(0)}
+      <div class="form-group"><label>Character Name</label>
+        <input type="text" id="wiz-name" value="${esc(wizardData.name)}" placeholder="Thorin Ironfist">
+      </div>
+      <div class="form-actions">
+        <button class="btn" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="wizardNext(0)">Next →</button>
+      </div>`;
+  } else if (step === 1) {
+    body = `<h2>✾ Species</h2>${wizardProgress(1)}
+      <div class="form-group"><label>Species / Race</label>
+        <input type="text" id="wiz-race" value="${esc(wizardData.race)}" placeholder="Dwarf, Elf, Human, Tiefling...">
+      </div>
+      <div class="form-actions">
+        <button class="btn" onclick="renderWizardStep(0)">← Back</button>
+        <button class="btn btn-primary" onclick="wizardNext(1)">Next →</button>
+      </div>`;
+  } else if (step === 2) {
+    const classes = ['Barbarian','Bard','Cleric','Druid','Fighter','Monk','Paladin','Ranger','Rogue','Sorcerer','Warlock','Wizard','Artificer','Blood Hunter'];
+    body = `<h2>✾ Class</h2>${wizardProgress(2)}
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.35rem;margin-bottom:1rem">
+        ${classes.map(c => `<button class="btn btn-sm ${wizardData.class === c ? 'btn-primary' : ''}" onclick="wiz_setClass('${c}')" style="justify-content:flex-start;gap:0.4rem"><span>${CLASS_ICONS[c] || '⚔'}</span>${c}</button>`).join('')}
+      </div>
+      <div class="form-actions">
+        <button class="btn" onclick="renderWizardStep(1)">← Back</button>
+        <button class="btn btn-primary" onclick="renderWizardStep(3)">Next →</button>
+      </div>`;
+  } else if (step === 3) {
+    body = `<h2>✾ Level</h2>${wizardProgress(3)}
+      <div style="text-align:center;padding:1.2rem 0">
+        <div class="cs-field-label" style="margin-bottom:0.8rem">Character Level</div>
+        <div style="display:flex;align-items:center;justify-content:center;gap:1.4rem">
+          <button class="btn" onclick="wiz_setLevel(${Math.max(1, wizardData.level - 1)})">−</button>
+          <span style="font-size:2.8rem;font-weight:bold;color:var(--gold);min-width:2ch;text-align:center">${wizardData.level}</span>
+          <button class="btn" onclick="wiz_setLevel(${Math.min(20, wizardData.level + 1)})">+</button>
+        </div>
+        <div style="font-size:0.8rem;color:var(--text-dim);margin-top:0.7rem">Proficiency Bonus: +${profBonus(wizardData.level)}</div>
+      </div>
+      <div class="form-actions">
+        <button class="btn" onclick="renderWizardStep(2)">← Back</button>
+        <button class="btn btn-primary" onclick="renderWizardStep(4)">Next →</button>
+      </div>`;
+  } else if (step === 4) {
+    body = `<h2>✾ Ability Scores</h2>${wizardProgress(4)}
+      <p style="font-size:0.75rem;color:var(--text-dim);margin-bottom:0.5rem">Standard array: 15, 14, 13, 12, 10, 8 — or roll your own.</p>
+      <div class="wizard-ability-grid">
+        ${ABILITIES.map(a => `<div class="wizard-ability-box">
+          <label>${ABILITY_SHORT[a]}</label>
+          <input type="number" id="wiz-ab-${a}" value="${wizardData.abilities[a]}" min="1" max="30" oninput="wizardData.abilities['${a}']=+this.value||10">
+        </div>`).join('')}
+      </div>
+      <div class="form-actions">
+        <button class="btn" onclick="renderWizardStep(3)">← Back</button>
+        <button class="btn btn-primary" onclick="renderWizardStep(5)">Next →</button>
+      </div>`;
+  } else if (step === 5) {
+    const hd = HIT_DICE[wizardData.class] || 8;
+    const conMod = Math.floor((wizardData.abilities.con - 10) / 2);
+    const suggested = Math.max(1, (hd + conMod) * wizardData.level);
+    if (!wizardData.maxHPSet) wizardData.maxHP = suggested;
+    body = `<h2>✾ Hit Points</h2>${wizardProgress(5)}
+      <div class="form-group"><label>Maximum HP</label>
+        <input type="number" id="wiz-hp" value="${wizardData.maxHP}" min="1">
+        <div style="font-size:0.75rem;color:var(--text-dim);margin-top:0.4rem">
+          Hit Die: d${hd} &nbsp;|&nbsp; CON mod: ${conMod >= 0 ? '+' : ''}${conMod}
+          <button class="btn btn-sm" style="margin-left:0.5rem" onclick="document.getElementById('wiz-hp').value=${suggested};wizardData.maxHP=${suggested};wizardData.maxHPSet=true">Use Suggested (${suggested})</button>
+        </div>
+      </div>
+      <div style="background:var(--surface2);border-radius:var(--radius);padding:0.75rem;font-size:0.82rem;margin:0.5rem 0 0.8rem">
+        <div style="font-weight:bold;color:var(--gold-lt);margin-bottom:0.3rem">${CLASS_ICONS[wizardData.class] || '⚔'} ${esc(wizardData.name)}</div>
+        <div style="color:var(--text-dim)">Level ${wizardData.level} ${esc(wizardData.race || '—')} ${esc(wizardData.class)} &nbsp;&bull;&nbsp; PB +${profBonus(wizardData.level)}</div>
+      </div>
+      <div class="form-actions">
+        <button class="btn" onclick="renderWizardStep(4)">← Back</button>
+        <button class="btn btn-primary" onclick="wizardFinish()">Create Character ✦</button>
+      </div>`;
+  }
+  openModal(body);
+  setTimeout(() => {
+    const inp = document.querySelector('#modal-content input[type="text"], #modal-content input[type="number"]');
+    if (inp && step !== 2 && step !== 3) inp.focus();
+  }, 40);
+}
+
+function wizardNext(step) {
+  if (step === 0) {
+    const v = document.getElementById('wiz-name')?.value.trim();
+    if (!v) { const el = document.getElementById('wiz-name'); if (el) { el.style.borderColor = 'var(--red-lt)'; el.focus(); } return; }
+    wizardData.name = v; renderWizardStep(1);
+  } else if (step === 1) {
+    wizardData.race = document.getElementById('wiz-race')?.value.trim() || '';
+    renderWizardStep(2);
+  }
+}
+
+function wiz_setClass(cls) { wizardData.class = cls; renderWizardStep(2); }
+function wiz_setLevel(lvl) { wizardData.level = Math.min(20, Math.max(1, lvl)); renderWizardStep(3); }
+
+function wizardFinish() {
+  if (CharacterStore.getAllForCampaign(currentCampaignId).length >= 20) {
+    alert('20 character limit reached.'); return;
+  }
+  wizardData.maxHP = Math.max(1, parseInt(document.getElementById('wiz-hp')?.value) || wizardData.maxHP || 1);
+  const ch = newCharacter(wizardData.name, wizardData.race, wizardData.class, wizardData.level);
+  ch.abilities        = { ...wizardData.abilities };
+  ch.combat.maxHP     = wizardData.maxHP;
+  ch.combat.currentHP = wizardData.maxHP;
+  ch.proficiencyBonus = profBonus(wizardData.level);
+  db.characters[ch.id] = ch;
+  const c = db.campaigns.find(c => c.id === currentCampaignId);
+  (c.characters = c.characters || []).push(ch.id);
+  if (!c.activeCharId) c.activeCharId = ch.id;
+  saveData(db);
+  closeModal();
+  switchToCharacter(ch.id);
 }
 
 // ── Modal ──────────────────────────────────────────────────────────────────────

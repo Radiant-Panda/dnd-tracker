@@ -4,13 +4,14 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>D&D Campaign Tracker</title>
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=3">
 </head>
 <body>
   <header>
     <div class="header-inner">
       <h1 class="site-title" id="site-title" onclick="showCampaigns()">✾ D&amp;D Tracker</h1>
       <nav id="breadcrumb"></nav>
+      <div id="char-selector-wrap"></div>
       <div class="header-actions">
         <button class="btn btn-sm" onclick="exportData()" title="Export all data as JSON">Export</button>
         <label class="btn btn-sm" title="Import data from JSON">
@@ -30,6 +31,10 @@
     </div>
   </div>
 
-  <script src="app.js"></script>
+  <script>
+    // Cache buster — bump this number after any app.js change
+    const _v = 2;
+  </script>
+  <script src="app.js?v=3"></script>
 </body>
 </html>
