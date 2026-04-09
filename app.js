@@ -8,6 +8,7 @@ function migrateCharacter(ch) {
   if (!ch.currency)       ch.currency = { cp:0, sp:0, ep:0, gp:0, pp:0 };
   if (!ch.attacks)        ch.attacks = [];
   if (!ch.skillExpertise) ch.skillExpertise = [];
+  if (!ch.sessionLog)    ch.sessionLog = [];
   // v2 fields
   if (!ch.subclass)       ch.subclass = '';
   if (!ch.traits)         ch.traits = '';
@@ -103,7 +104,11 @@ function renderApp() {
   else if (currentView === 'campaign')   app.innerHTML = renderCampaignDetail();
   else if (currentView === 'character')  app.innerHTML = renderCharacterSheet();
   else if (currentView === 'npc')        app.innerHTML = renderNpcSheet();
-  if (currentView === 'character') window.scrollTo(0, scrollY);
+  if (currentView === 'character') {
+    window.scrollTo(0, scrollY);
+    // Populate spell tab after DOM is ready
+    setTimeout(() => renderSpellTabContent(), 0);
+  }
   renderCharSelector();
 }
 
@@ -338,6 +343,38 @@ function saveNpcSheet() {
 
 // ── Initiative Tracker ────────────────────────────────────────────────────────
 const CONDITIONS = ['Blinded','Charmed','Deafened','Exhausted','Frightened','Grappled','Incapacitated','Invisible','Paralyzed','Petrified','Poisoned','Prone','Restrained','Stunned','Unconscious'];
+
+function getConditionEmoji(cond) {
+  const emojis = {
+    'Blinded': '👁️',
+    'Charmed': '💕',
+    'Deafened': '🔇',
+    'Exhausted': '😩',
+    'Frightened': '😨',
+    'Grappled': '🤝',
+    'Incapacitated': '💤',
+    'Invisible': '👻',
+    'Paralyzed': '🔒',
+    'Petrified': '🪨',
+    'Poisoned': '☠️',
+    'Prone': '⬇️',
+    'Restrained': '⛓️',
+    'Stunned': '⚡',
+    'Unconscious': '😴'
+  };
+  return emojis[cond] || '•';
+}
+
+function getConditionClass(cond) {
+  const classes = {
+    'Poisoned': 'poisoned',
+    'Stunned': 'stunned',
+    'Prone': 'prone',
+    'Frightened': 'frightened'
+  };
+  return classes[cond] || '';
+}
+
 function getCampaign() { return db.campaigns.find(c => c.id === currentCampaignId); }
 function getInitiative() { const c=getCampaign(); if(!c.initiative) c.initiative={round:1,currentIndex:0,combatants:[]}; return c.initiative; }
 
@@ -380,7 +417,7 @@ function renderInitiativeTracker(campaign) {
             </div>
             <div class="hp-bar-wrap"><div class="hp-bar ${hpPct<=25?'low':hpPct<=50?'mid':''}" style="width:${hpPct}%"></div></div>
             <div class="condition-row">
-              ${(cb.conditions||[]).map(cond=>`<span class="condition-tag" onclick="removeCondition(${i},'${cond}')" title="Click to remove">${cond} &times;</span>`).join('')}
+              ${(cb.conditions||[]).map(cond=>`<span class="condition-tag ${getConditionClass(cond)}" onclick="removeCondition(${i},'${cond}')" title="Click to remove">${getConditionEmoji(cond)} ${cond} &times;</span>`).join('')}
               <button class="btn btn-sm" onclick="openConditionPicker(${i})">+ Condition</button>
             </div>
           </div>
@@ -462,7 +499,7 @@ function toggleCondition(i, cond) {
   saveData(db);
   document.querySelectorAll('.condition-option').forEach(el => { if(el.textContent.trim()===cond) el.classList.toggle('active',cb.conditions.includes(cond)); });
   const row=document.querySelectorAll('.initiative-row')[i];
-  if(row) { const cr=row.querySelector('.condition-row'); if(cr) cr.innerHTML=`${cb.conditions.map(c=>`<span class="condition-tag" onclick="removeCondition(${i},'${c}')" title="Click to remove">${c} &times;</span>`).join('')}<button class="btn btn-sm" onclick="openConditionPicker(${i})">+ Condition</button>`; }
+  if(row) { const cr=row.querySelector('.condition-row'); if(cr) cr.innerHTML=`${cb.conditions.map(c=>`<span class="condition-tag ${getConditionClass(c)}" onclick="removeCondition(${i},'${c}')" title="Click to remove">${getConditionEmoji(c)} ${c} &times;</span>`).join('')}<button class="btn btn-sm" onclick="openConditionPicker(${i})">+ Condition</button>`; }
 }
 function removeCondition(i,cond) { const init=getInitiative(); init.combatants[i].conditions=(init.combatants[i].conditions||[]).filter(c=>c!==cond); saveData(db); renderApp(); }
 
@@ -812,7 +849,7 @@ function renderEquipmentCurrency(ch) {
   </div>`;
 }
 
-// ── Spells Tab ────────────────────────────────────────────────────────────────
+// ── Spells System ─────────────────────────────────────────────────────────────
 const SPELL_ABILITY = {
   Bard:'cha', Cleric:'wis', Druid:'wis', Paladin:'cha', Ranger:'wis',
   Sorcerer:'cha', Warlock:'cha', Wizard:'int', Artificer:'int',
@@ -823,34 +860,381 @@ const SCHOOL_COLORS = {
   Enchantment:'#c084fc', Evocation:'#e87070', Illusion:'#7b9dd4',
   Necromancy:'#9c7bc4', Transmutation:'#7bbdb8'
 };
-const SPELL_CACHE_KEY = 'dnd_spell_cache_v1';
-let spellApiCache = null; // in-memory: { classKey: [spells...] }
+const SPELL_ALL_KEY    = 'dnd_spells_all_v2';
+const CUSTOM_SPELLS_KEY = 'dnd_custom_spells_v1';
 
-function loadSpellCache() {
-  if (spellApiCache) return;
-  try { spellApiCache = JSON.parse(localStorage.getItem(SPELL_CACHE_KEY)) || {}; }
-  catch { spellApiCache = {}; }
+let allSpellsDb   = null; // sorted master list from API
+let customSpells  = null; // [{...}, ...]  user-created
+let spellViewTab  = 'all'; // 'all' | 'known' | 'prepared'
+let spellFilters  = { q:'', level:'all', school:'all', cls:'all', conc:false, ritual:false };
+let spellFetching = false;
+
+function loadAllSpells() {
+  if (allSpellsDb) return;
+  try { allSpellsDb = JSON.parse(localStorage.getItem(SPELL_ALL_KEY)) || null; }
+  catch { allSpellsDb = null; }
 }
-function saveSpellCache() {
-  try { localStorage.setItem(SPELL_CACHE_KEY, JSON.stringify(spellApiCache)); } catch {}
+function saveAllSpells() {
+  try { localStorage.setItem(SPELL_ALL_KEY, JSON.stringify(allSpellsDb)); } catch {}
+}
+function loadCustomSpells() {
+  if (customSpells) return;
+  try { customSpells = JSON.parse(localStorage.getItem(CUSTOM_SPELLS_KEY)) || []; }
+  catch { customSpells = []; }
+}
+function saveCustomSpells() {
+  try { localStorage.setItem(CUSTOM_SPELLS_KEY, JSON.stringify(customSpells)); } catch {}
 }
 
-async function fetchSpellsForClass(cls) {
-  loadSpellCache();
-  const key = cls.toLowerCase().replace(' ', '-');
-  if (spellApiCache[key]) return spellApiCache[key];
-  const el = document.getElementById('spell-api-list');
-  if (el) el.innerHTML = `<div class="spell-loading">✾ Loading ${cls} spells…</div>`;
-  try {
-    const res = await fetch(`https://api.open5e.com/v1/spells/?limit=400&dnd_class=${encodeURIComponent(cls)}`);
-    const data = await res.json();
-    const spells = (data.results || []).sort((a,b) => (a.level_int||0) - (b.level_int||0) || a.name.localeCompare(b.name));
-    spellApiCache[key] = spells;
-    saveSpellCache();
-    renderSpellApiList(currentCharId);
-  } catch {
-    if (el) el.innerHTML = `<div class="spell-loading" style="color:var(--red-lt)">Could not load spells — check connection.</div>`;
+function getMergedSpells() {
+  loadAllSpells(); loadCustomSpells();
+  const api = allSpellsDb || [];
+  // Deduplicate API spells by name (same spell can appear in multiple sourcebooks)
+  const seen = new Set();
+  const deduped = [];
+  for (const sp of api) {
+    if (!seen.has(sp.name)) { seen.add(sp.name); deduped.push(sp); }
   }
+  return [...deduped, ...customSpells.map(s => ({...s, _custom:true}))];
+}
+
+async function fetchAllSpells() {
+  if (spellFetching) return;
+  spellFetching = true;
+  setSpellStatus('✾ Loading all spells…');
+  try {
+    let url = 'https://api.open5e.com/spells/?limit=400&format=json';
+    let all = [];
+    while (url) {
+      const res  = await fetch(url);
+      const data = await res.json();
+      all = all.concat(data.results || []);
+      url = data.next || null;
+    }
+    allSpellsDb = all.sort((a,b) => (a.level_int||0)-(b.level_int||0) || a.name.localeCompare(b.name));
+    saveAllSpells();
+    setSpellStatus('');
+    renderSpellTabContent();
+  } catch(e) {
+    setSpellStatus('Could not load spells — check connection.', true);
+  } finally { spellFetching = false; }
+}
+
+function setSpellStatus(msg, isErr) {
+  const el = document.getElementById('spell-status');
+  if (!el) return;
+  el.textContent = msg;
+  el.style.color = isErr ? 'var(--red-lt)' : 'var(--text-dim)';
+}
+
+function switchSpellTab(tab) {
+  spellViewTab = tab;
+  renderSpellTabContent();
+  document.querySelectorAll('.spell-tab').forEach(el => el.classList.toggle('active', el.dataset.tab === tab));
+}
+
+function applySpellFilter(key, value) {
+  if (typeof spellFilters[key] === 'boolean') spellFilters[key] = !spellFilters[key];
+  else spellFilters[key] = value;
+  renderSpellTabContent();
+}
+
+function renderSpellTabContent() {
+  const el = document.getElementById('spell-tab-content'); if (!el) return;
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  if      (spellViewTab === 'all')      el.innerHTML = renderAllSpellsView(ch);
+  else if (spellViewTab === 'known')    el.innerHTML = renderKnownView(ch);
+  else if (spellViewTab === 'prepared') el.innerHTML = renderPreparedView(ch);
+}
+
+function getFilteredAllSpells(ch) {
+  const merged = getMergedSpells();
+  const f = spellFilters;
+  return merged.filter(sp => {
+    if (f.q && !sp.name.toLowerCase().includes(f.q.toLowerCase()) && !(sp.school||'').toLowerCase().includes(f.q.toLowerCase()) && !(sp.desc||'').toLowerCase().includes(f.q.toLowerCase())) return false;
+    if (f.level !== 'all' && (sp.level_int ?? -1) !== parseInt(f.level)) return false;
+    if (f.school !== 'all' && (sp.school||'').toLowerCase() !== f.school.toLowerCase()) return false;
+    if (f.cls !== 'all') {
+      const classes = (sp.dnd_class || sp.page || '').toLowerCase();
+      if (!classes.includes(f.cls.toLowerCase())) return false;
+    }
+    if (f.conc   && sp.concentration !== 'yes') return false;
+    if (f.ritual && sp.ritual        !== 'yes') return false;
+    return true;
+  });
+}
+
+function renderFilterBar() {
+  const schools = ['Abjuration','Conjuration','Divination','Enchantment','Evocation','Illusion','Necromancy','Transmutation'];
+  const classes = ['Barbarian','Bard','Cleric','Druid','Fighter','Monk','Paladin','Ranger','Rogue','Sorcerer','Warlock','Wizard','Artificer','Blood Hunter'];
+  return `<div class="spell-filter-bar">
+    <input type="text" class="spell-filter-input" placeholder="Search spells…" value="${esc(spellFilters.q)}"
+      oninput="spellFilters.q=this.value;renderSpellTabContent()">
+    <select class="spell-filter-select" onchange="applySpellFilter('level',this.value)">
+      <option value="all"${spellFilters.level==='all'?' selected':''}>All Levels</option>
+      <option value="0"${spellFilters.level==='0'?' selected':''}>Cantrip</option>
+      ${[1,2,3,4,5,6,7,8,9].map(l=>`<option value="${l}"${spellFilters.level===String(l)?' selected':''}>${l}${['st','nd','rd','th','th','th','th','th','th'][l-1]}-level</option>`).join('')}
+    </select>
+    <select class="spell-filter-select" onchange="applySpellFilter('school',this.value)">
+      <option value="all"${spellFilters.school==='all'?' selected':''}>All Schools</option>
+      ${schools.map(s=>`<option value="${s}"${spellFilters.school===s?' selected':''}>${s}</option>`).join('')}
+    </select>
+    <select class="spell-filter-select" onchange="applySpellFilter('cls',this.value)">
+      <option value="all"${spellFilters.cls==='all'?' selected':''}>All Classes</option>
+      ${classes.map(c=>`<option value="${c}"${spellFilters.cls===c?' selected':''}>${c}</option>`).join('')}
+    </select>
+    <label class="spell-filter-toggle${spellFilters.conc?' active':''}">
+      <input type="checkbox" ${spellFilters.conc?'checked':''} onchange="applySpellFilter('conc')"> C
+    </label>
+    <label class="spell-filter-toggle${spellFilters.ritual?' active':''}">
+      <input type="checkbox" ${spellFilters.ritual?'checked':''} onchange="applySpellFilter('ritual')"> R
+    </label>
+  </div>`;
+}
+
+function renderAllSpellsView(ch) {
+  loadAllSpells(); loadCustomSpells();
+  const known    = new Set((ch.spells.known    ||[]).map(s=>typeof s==='object'?s.name:s));
+  const prepared = new Set((ch.spells.prepared ||[]).map(s=>typeof s==='object'?s.name:s));
+
+  if (!allSpellsDb) {
+    return `${renderFilterBar()}
+      <div class="spell-loading">
+        No spell data loaded. <button class="btn btn-sm btn-primary" onclick="fetchAllSpells()">✾ Load All Spells</button>
+        <span id="spell-status" style="margin-left:0.5rem;font-size:0.75rem"></span>
+      </div>`;
+  }
+
+  const filtered = getFilteredAllSpells(ch);
+  const show = filtered.slice(0, 100);
+
+  return `${renderFilterBar()}
+    <div style="display:flex;align-items:center;justify-content:space-between;margin:0.3rem 0 0.4rem;font-size:0.7rem;color:var(--text-dim)">
+      <span>${filtered.length} spells${filtered.length > 100 ? ' (showing 100)' : ''}</span>
+      <div class="flex gap-1">
+        <button class="btn btn-sm" onclick="openCustomSpellModal()">+ Custom Spell</button>
+        <button class="btn btn-sm" onclick="fetchAllSpells()" title="Refresh from API">↻</button>
+      </div>
+    </div>
+    <span id="spell-status" style="font-size:0.72rem"></span>
+    <div class="spell-api-list">
+      ${show.length === 0 ? `<p class="spell-empty">No spells match filters.</p>` :
+        show.map(sp => {
+          const school = sp.school || '';
+          const sc = SCHOOL_COLORS[school] || '#7b6d8d';
+          const lvlLabel = sp.level_int === 0 ? 'Cantrip' : sp.level || '';
+          const inK = known.has(sp.name), inP = prepared.has(sp.name);
+          const safeData = encodeURIComponent(JSON.stringify({name:sp.name,level_int:sp.level_int||0,school:sp.school||'',casting_time:sp.casting_time||'',range:sp.range||'',components:sp.components||'',concentration:sp.concentration||'no',ritual:sp.ritual||'no',desc:sp.desc||'',dnd_class:sp.dnd_class||'',_custom:sp._custom||false}));
+          return `<div class="spell-browser-row">
+            <div class="spell-browser-left">
+              ${sp._custom?`<span style="font-size:0.6rem;color:#c084fc;border:1px solid rgba(192,132,252,0.4);border-radius:3px;padding:0 3px;flex-shrink:0">✏</span>`:''}
+              <span class="spell-name" style="font-size:0.82rem">${esc(sp.name)}</span>
+              <span class="spell-badge" style="border-color:${sc};color:${sc};font-size:0.58rem">${esc(lvlLabel)}${lvlLabel&&school?' · ':''}${esc(school)}</span>
+              ${sp.concentration==='yes'?`<span class="spell-tag conc">C</span>`:''}
+              ${sp.ritual==='yes'?`<span class="spell-tag ritual">R</span>`:''}
+            </div>
+            <div class="flex gap-1" style="flex-shrink:0">
+              <button class="btn btn-sm" onclick="toggleSpellDesc('sd-all-${esc(sp.name).replace(/\s/g,'-')}')">▾</button>
+              <button class="btn btn-sm${inP?' btn-primary':''}" onclick="spellAddFromEncoded('prepared','${safeData}')">${inP?'✓ Prep':'Prepare'}</button>
+              <button class="btn btn-sm${inK?' btn-primary':''}" onclick="spellAddFromEncoded('known','${safeData}')">${inK?'✓ Known':'Learn'}</button>
+            </div>
+          </div>
+          <div class="spell-desc hidden" id="sd-all-${esc(sp.name).replace(/\s/g,'-')}" style="margin:0 0 0.3rem 0.5rem;border-top:none;padding-top:0.2rem">${esc(sp.desc||'No description.')}</div>`;
+        }).join('')}
+    </div>`;
+}
+
+function renderKnownView(ch) {
+  const known    = ch.spells.known    || [];
+  const prepared = new Set((ch.spells.prepared||[]).map(s=>typeof s==='object'?s.name:s));
+  if (known.length === 0) return `<p class="spell-empty" style="padding:1rem 0">No known spells. Add some from All Spells ↑</p>`;
+  return `<div>${known.map((sp,i) => {
+    const isObj = typeof sp === 'object';
+    const name = isObj ? sp.name : sp;
+    const inPrep = prepared.has(name);
+    const sc = SCHOOL_COLORS[isObj?sp.school:''] || '#7b6d8d';
+    const lvlLabel = isObj ? (sp.level_int===0?'Cantrip':sp.level_int?`Lv ${sp.level_int}`:'') : '';
+    const id = `sd-known-${i}`;
+    return `<div class="spell-card">
+      <div class="spell-card-top">
+        <div class="spell-card-left">
+          <span class="spell-name">${esc(name)}</span>
+          ${lvlLabel||isObj&&sp.school?`<span class="spell-badge" style="border-color:${sc};color:${sc}">${lvlLabel}${lvlLabel&&isObj&&sp.school?' · ':''}${esc(isObj?sp.school||'':'')}</span>`:''}
+          ${isObj&&sp.concentration==='yes'?`<span class="spell-tag conc">C</span>`:''}
+          ${isObj&&sp.ritual==='yes'?`<span class="spell-tag ritual">R</span>`:''}
+        </div>
+        <div class="spell-card-right">
+          <button class="btn btn-sm${inPrep?' btn-primary':''}" onclick="togglePrepareFromKnown(${i})" title="${inPrep?'Remove from Prepared':'Add to Prepared'}">${inPrep?'✓ Prep':'Prepare'}</button>
+          ${isObj?`<button class="btn btn-sm" onclick="toggleSpellDesc('${id}')">▾</button>`:''}
+          <button class="btn btn-icon btn-danger" onclick="removeSpellEntry('known',${i})">&times;</button>
+        </div>
+      </div>
+      ${isObj&&(sp.casting_time||sp.range||sp.components)?`<div class="spell-meta">${[sp.casting_time,sp.range,sp.components].filter(Boolean).map(esc).join(' · ')}</div>`:''}
+      ${isObj?`<div class="spell-desc hidden" id="${id}">${esc(sp.desc||'')}</div>`:''}
+    </div>`;
+  }).join('')}</div>`;
+}
+
+function renderPreparedView(ch) {
+  const prepared = ch.spells.prepared || [];
+  if (prepared.length === 0) return `<p class="spell-empty" style="padding:1rem 0">No prepared spells. Mark spells as Prepared from Known ↑ or All Spells.</p>`;
+  return `<div>${prepared.map((sp,i) => {
+    const isObj = typeof sp === 'object';
+    const name = isObj ? sp.name : sp;
+    const sc = SCHOOL_COLORS[isObj?sp.school:''] || '#7b6d8d';
+    const lvlLabel = isObj ? (sp.level_int===0?'Cantrip':sp.level_int?`Lv ${sp.level_int}`:'') : '';
+    const id = `sd-prep-${i}`;
+    return `<div class="spell-card">
+      <div class="spell-card-top">
+        <div class="spell-card-left">
+          <span class="spell-name">${esc(name)}</span>
+          ${lvlLabel||isObj&&sp.school?`<span class="spell-badge" style="border-color:${sc};color:${sc}">${lvlLabel}${lvlLabel&&isObj&&sp.school?' · ':''}${esc(isObj?sp.school||'':'')}</span>`:''}
+          ${isObj&&sp.concentration==='yes'?`<span class="spell-tag conc">C</span>`:''}
+          ${isObj&&sp.ritual==='yes'?`<span class="spell-tag ritual">R</span>`:''}
+        </div>
+        <div class="spell-card-right">
+          <button class="btn btn-sm btn-primary" onclick="openCastModal('${esc(name)}',${isObj?sp.level_int||0:0})">Cast</button>
+          ${isObj?`<button class="btn btn-sm" onclick="toggleSpellDesc('${id}')">▾</button>`:''}
+          <button class="btn btn-icon btn-danger" onclick="removeSpellEntry('prepared',${i})">&times;</button>
+        </div>
+      </div>
+      ${isObj&&(sp.casting_time||sp.range||sp.components)?`<div class="spell-meta">${[sp.casting_time,sp.range,sp.components].filter(Boolean).map(esc).join(' · ')}</div>`:''}
+      ${isObj?`<div class="spell-desc hidden" id="${id}">${esc(sp.desc||'')}</div>`:''}
+    </div>`;
+  }).join('')}</div>`;
+}
+
+function spellAddFromEncoded(listType, encoded) {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  const sp = JSON.parse(decodeURIComponent(encoded));
+  ch.spells[listType] = ch.spells[listType] || [];
+  const already = ch.spells[listType].some(s => (typeof s==='object'?s.name:s) === sp.name);
+  if (!already) { ch.spells[listType].push(sp); saveData(db); }
+  renderSpellTabContent();
+}
+
+function togglePrepareFromKnown(knownIdx) {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  const sp = ch.spells.known[knownIdx]; if (!sp) return;
+  const name = typeof sp==='object' ? sp.name : sp;
+  ch.spells.prepared = ch.spells.prepared || [];
+  const pIdx = ch.spells.prepared.findIndex(s => (typeof s==='object'?s.name:s) === name);
+  if (pIdx >= 0) ch.spells.prepared.splice(pIdx, 1);
+  else ch.spells.prepared.push(typeof sp==='object' ? {...sp} : sp);
+  saveData(db); renderSpellTabContent();
+}
+
+// ── Cast Modal ────────────────────────────────────────────────────────────────
+function openCastModal(spellName, minLevel) {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  const slots = ch.spells.slots || {};
+  const maxSlots = ch.spells.slotsMax || {};
+  const availableLevels = [];
+  for (let lvl = Math.max(1, minLevel); lvl <= 9; lvl++) {
+    if ((slots[lvl] || 0) > 0) availableLevels.push(lvl);
+  }
+  const ordinals = ['','1st','2nd','3rd','4th','5th','6th','7th','8th','9th'];
+  openModal(`<h2>Cast ${esc(spellName)}</h2>
+    <p style="font-size:0.8rem;color:var(--text-dim);margin-bottom:0.9rem">Choose a slot level:</p>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:0.5rem;margin-bottom:1rem">
+      ${[1,2,3,4,5,6,7,8,9].map(lvl => {
+        const cur = slots[lvl] || 0;
+        const available = cur > 0 && lvl >= minLevel;
+        return `<button class="btn${available?' btn-primary':''}" ${!available?'disabled style="opacity:0.35"':''}
+          onclick="confirmCast('${esc(spellName)}',${lvl})">
+          <div style="font-size:0.75rem">${ordinals[lvl]}</div>
+          <div style="font-size:0.62rem;opacity:0.7">${cur} slot${cur!==1?'s':''}</div>
+        </button>`;
+      }).join('')}
+    </div>
+    ${availableLevels.length===0?`<p style="color:var(--red-lt);font-size:0.82rem">No spell slots available!</p>`:''}
+    <div class="form-actions"><button class="btn" onclick="closeModal()">Cancel</button></div>`);
+}
+
+function confirmCast(spellName, slotLevel) {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  if ((ch.spells.slots[slotLevel] || 0) <= 0) { alert('No slots at that level!'); return; }
+  CharacterStore.useSpellSlot(currentCharId, slotLevel);
+  const ordinals = ['','1st','2nd','3rd','4th','5th','6th','7th','8th','9th'];
+  const entry = `${spellName} cast at ${ordinals[slotLevel]} level`;
+  ch.sessionLog = ch.sessionLog || [];
+  ch.sessionLog.unshift({ text: entry, ts: Date.now() });
+  if (ch.sessionLog.length > 100) ch.sessionLog = ch.sessionLog.slice(0, 100);
+  saveData(db);
+  closeModal();
+  renderSpellTabContent();
+  // Flash the slot grid
+  const slotEl = document.querySelector(`.spell-slot-col:nth-child(${slotLevel}) .spell-slot-bubbles`);
+  if (slotEl) { slotEl.style.transition='opacity 0.1s'; slotEl.style.opacity='0.3'; setTimeout(()=>slotEl.style.opacity='1', 200); }
+}
+
+// ── Custom Spell ──────────────────────────────────────────────────────────────
+function openCustomSpellModal(editIdx) {
+  loadCustomSpells();
+  const editing = editIdx != null ? customSpells[editIdx] : null;
+  const sp = editing || {};
+  const schools = ['Abjuration','Conjuration','Divination','Enchantment','Evocation','Illusion','Necromancy','Transmutation',''];
+  openModal(`<h2>${editing ? 'Edit' : '✏ New'} Custom Spell</h2>
+    <div class="form-row">
+      <div class="form-group"><label>Name</label><input type="text" id="csp-name" value="${esc(sp.name||'')}"></div>
+      <div class="form-group"><label>Level (0=Cantrip)</label><input type="number" id="csp-level" value="${sp.level_int??0}" min="0" max="9"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>School</label>
+        <select id="csp-school">${schools.map(s=>`<option${sp.school===s?' selected':''}>${s}</option>`).join('')}</select>
+      </div>
+      <div class="form-group"><label>Casting Time</label><input type="text" id="csp-cast" value="${esc(sp.casting_time||'1 action')}"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Range</label><input type="text" id="csp-range" value="${esc(sp.range||'')}"></div>
+      <div class="form-group"><label>Components</label><input type="text" id="csp-comp" value="${esc(sp.components||'')}"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Duration</label><input type="text" id="csp-dur" value="${esc(sp.duration||'')}"></div>
+      <div class="form-group"><label>Classes</label><input type="text" id="csp-cls" value="${esc(sp.dnd_class||'')}" placeholder="Wizard, Sorcerer…"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label style="display:flex;align-items:center;gap:0.5rem"><input type="checkbox" id="csp-conc" ${sp.concentration==='yes'?'checked':''}> Concentration</label></div>
+      <div class="form-group"><label style="display:flex;align-items:center;gap:0.5rem"><input type="checkbox" id="csp-ritual" ${sp.ritual==='yes'?'checked':''}> Ritual</label></div>
+    </div>
+    <div class="form-group"><label>Description</label><textarea id="csp-desc" rows="4">${esc(sp.desc||'')}</textarea></div>
+    <div class="form-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      ${editing?`<button class="btn btn-danger" onclick="deleteCustomSpell(${editIdx})">Delete</button>`:''}
+      <button class="btn btn-primary" onclick="saveCustomSpell(${editIdx??'null'})">Save Spell</button>
+    </div>`);
+  document.getElementById('csp-name')?.focus();
+}
+
+function saveCustomSpell(editIdx) {
+  loadCustomSpells();
+  const name = document.getElementById('csp-name')?.value.trim();
+  if (!name) { alert('Spell name required.'); return; }
+  const sp = {
+    name, level_int: parseInt(document.getElementById('csp-level')?.value)||0,
+    school: document.getElementById('csp-school')?.value,
+    casting_time: document.getElementById('csp-cast')?.value.trim(),
+    range: document.getElementById('csp-range')?.value.trim(),
+    components: document.getElementById('csp-comp')?.value.trim(),
+    duration: document.getElementById('csp-dur')?.value.trim(),
+    dnd_class: document.getElementById('csp-cls')?.value.trim(),
+    concentration: document.getElementById('csp-conc')?.checked ? 'yes' : 'no',
+    ritual: document.getElementById('csp-ritual')?.checked ? 'yes' : 'no',
+    desc: document.getElementById('csp-desc')?.value.trim(),
+    level: document.getElementById('csp-level')?.value === '0' ? 'cantrip' : `${document.getElementById('csp-level')?.value}th-level`,
+  };
+  if (editIdx != null) customSpells[editIdx] = sp; else customSpells.push(sp);
+  saveCustomSpells();
+  closeModal();
+  renderSpellTabContent();
+}
+
+function deleteCustomSpell(idx) {
+  if (!confirm('Delete this custom spell?')) return;
+  customSpells.splice(idx, 1);
+  saveCustomSpells();
+  closeModal();
+  renderSpellTabContent();
 }
 
 function renderSpellsSection(ch) {
@@ -861,24 +1245,17 @@ function renderSpellsSection(ch) {
   const atkBonus  = spellAbility ? (pb + spellMod) : null;
   const abilLabel = spellAbility ? ABILITY_SHORT[spellAbility] : null;
   const isSpellcaster = !!spellAbility;
+  const known    = (ch.spells.known    || []).length;
+  const prepared = (ch.spells.prepared || []).length;
 
-  const headerStats = isSpellcaster ? `
-    <div class="spell-stat-row">
-      <div class="spell-stat-box">
-        <div class="spell-stat-label">Spellcasting Ability</div>
-        <div class="spell-stat-val">${abilLabel}</div>
-      </div>
-      <div class="spell-stat-box">
-        <div class="spell-stat-label">Spell Save DC</div>
-        <div class="spell-stat-val">${saveDC}</div>
-      </div>
-      <div class="spell-stat-box">
-        <div class="spell-stat-label">Spell Attack</div>
-        <div class="spell-stat-val">${atkBonus >= 0 ? '+' : ''}${atkBonus}</div>
-      </div>
-    </div>` : `<p class="text-dim" style="font-size:0.82rem;margin-bottom:0.8rem">${esc(ch.class)} does not use spellcasting.</p>`;
+  const headerStats = isSpellcaster
+    ? `<div class="spell-stat-row">
+        <div class="spell-stat-box"><div class="spell-stat-label">Spellcasting Ability</div><div class="spell-stat-val">${abilLabel}</div></div>
+        <div class="spell-stat-box"><div class="spell-stat-label">Spell Save DC</div><div class="spell-stat-val">${saveDC}</div></div>
+        <div class="spell-stat-box"><div class="spell-stat-label">Spell Attack</div><div class="spell-stat-val">${atkBonus>=0?'+':''}${atkBonus}</div></div>
+      </div>`
+    : `<p class="text-dim" style="font-size:0.82rem;margin-bottom:0.8rem">${esc(ch.class)} does not use spellcasting.</p>`;
 
-  // Spell slots
   const slotsHtml = isSpellcaster ? `
     <div class="spell-slots-section">
       <div class="cs-field-label" style="margin-bottom:0.55rem">Spell Slots</div>
@@ -889,9 +1266,7 @@ function renderSpellsSection(ch) {
           return `<div class="spell-slot-col">
             <div class="spell-slot-level">${lvl}</div>
             <div class="spell-slot-bubbles">
-              ${Array.from({length: Math.max(cur,max,1)}, (_,i) => `
-                <div class="spell-bubble ${i < cur ? 'filled' : ''}"
-                     onclick="toggleSpellBubble(${lvl},${i})" title="Slot ${i+1}"></div>`).join('')}
+              ${Array.from({length:Math.max(cur,max,1)},(_,i)=>`<div class="spell-bubble ${i<cur?'filled':''}" onclick="toggleSpellBubble(${lvl},${i})" title="Slot ${i+1}"></div>`).join('')}
             </div>
             <div class="spell-slot-inputs">
               <input type="number" min="0" max="9" value="${cur}" title="Current" oninput="updateSpellSlot(${lvl},+this.value)" class="spell-slot-num">
@@ -903,160 +1278,39 @@ function renderSpellsSection(ch) {
       </div>
     </div>` : '';
 
-  // Prepared & known
-  const prepared = ch.spells.prepared || [];
-  const known    = ch.spells.known    || [];
-
-  const preparedHtml = `
-    <div class="spell-group">
-      <div class="spell-group-heading">✿ Prepared Spells <span class="spell-count">${prepared.length}</span></div>
-      ${prepared.length === 0
-        ? `<p class="spell-empty">No prepared spells. Add from below ↓</p>`
-        : prepared.map((sp,i) => renderSpellEntry(sp, 'prepared', i)).join('')}
-    </div>`;
-
-  const knownHtml = `
-    <div class="spell-group">
-      <div class="spell-group-heading">✿ Known Spells <span class="spell-count">${known.length}</span></div>
-      ${known.length === 0
-        ? `<p class="spell-empty">No known spells yet.</p>`
-        : known.map((sp,i) => renderSpellEntry(sp, 'known', i)).join('')}
-    </div>`;
-
-  // API spell browser
-  const browserHtml = isSpellcaster ? `
-    <div class="spell-group" style="margin-top:0.5rem">
-      <div class="spell-group-heading">✿ ${esc(ch.class)} Spell List
-        <button class="btn btn-sm" style="margin-left:auto;font-size:0.65rem" onclick="fetchSpellsForClass('${esc(ch.class)}')">Load from SRD</button>
-      </div>
-      <div style="margin:0.4rem 0 0.5rem">
-        <input type="text" id="spell-search" placeholder="Search spells…" oninput="filterSpellList(this.value)"
-          style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-family:inherit;font-size:0.82rem;padding:0.3rem 0.55rem;width:100%">
-      </div>
-      <div id="spell-api-list" class="spell-api-list"></div>
+  // Session log
+  const log = (ch.sessionLog || []).slice(0, 8);
+  const logHtml = log.length ? `
+    <div class="spell-group" style="margin-top:0.6rem">
+      <div class="spell-group-heading">✿ Session Log</div>
+      ${log.map(e => `<div class="spell-log-entry">${esc(e.text)}<span class="spell-log-ts">${new Date(e.ts).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span></div>`).join('')}
     </div>` : '';
 
   return `<div class="sheet-panel" style="margin-top:0.6rem">
     <div class="cs-section-label">Spells</div>
     ${headerStats}
     ${slotsHtml}
-    ${preparedHtml}
-    ${knownHtml}
-    ${browserHtml}
-  </div>`;
-}
-
-function renderSpellEntry(sp, listType, idx) {
-  const isObj = typeof sp === 'object';
-  const name  = isObj ? sp.name : sp;
-  const level = isObj ? (sp.level_int != null ? (sp.level_int === 0 ? 'Cantrip' : `Lv ${sp.level_int}`) : '') : '';
-  const school = isObj ? (sp.school || '') : '';
-  const schoolColor = SCHOOL_COLORS[school] || '#7b6d8d';
-  const conc  = isObj && sp.concentration === 'yes';
-  const ritual = isObj && sp.ritual === 'yes';
-  const castTime = isObj ? (sp.casting_time || '') : '';
-  const range = isObj ? (sp.range || '') : '';
-  const components = isObj ? (sp.components || '') : '';
-  const id = `spell-desc-${listType}-${idx}`;
-  const removeAction = `removeSpellEntry('${listType}',${idx})`;
-  const castAction   = listType === 'prepared' ? `castSpell('${esc(name)}')` : '';
-
-  return `<div class="spell-card">
-    <div class="spell-card-top">
-      <div class="spell-card-left">
-        <span class="spell-name">${esc(name)}</span>
-        ${level || school ? `<span class="spell-badge" style="border-color:${schoolColor};color:${schoolColor}">${level}${level && school ? ' · ' : ''}${esc(school)}</span>` : ''}
-        ${conc  ? `<span class="spell-tag conc" title="Concentration">C</span>` : ''}
-        ${ritual ? `<span class="spell-tag ritual" title="Ritual">R</span>` : ''}
-      </div>
-      <div class="spell-card-right">
-        ${castAction ? `<button class="btn btn-sm btn-primary" onclick="${castAction}" title="Use a spell slot">Cast</button>` : ''}
-        ${isObj ? `<button class="btn btn-sm" onclick="toggleSpellDesc('${id}')" title="Details">▾</button>` : ''}
-        <button class="btn btn-icon btn-danger" onclick="${removeAction}">&times;</button>
-      </div>
+    <div class="spell-tabs">
+      <button class="spell-tab${spellViewTab==='all'?' active':''}" data-tab="all" onclick="switchSpellTab('all')">✿ All Spells</button>
+      <button class="spell-tab${spellViewTab==='known'?' active':''}" data-tab="known" onclick="switchSpellTab('known')">Known <span class="spell-count">${known}</span></button>
+      <button class="spell-tab${spellViewTab==='prepared'?' active':''}" data-tab="prepared" onclick="switchSpellTab('prepared')">Prepared <span class="spell-count">${prepared}</span></button>
     </div>
-    ${castTime||range||components ? `<div class="spell-meta">${[castTime,range,components].filter(Boolean).map(esc).join(' · ')}</div>` : ''}
-    ${isObj ? `<div class="spell-desc hidden" id="${id}">${esc(sp.desc || '')}</div>` : ''}
+    <div id="spell-tab-content"></div>
+    ${logHtml}
   </div>`;
 }
 
-function toggleSpellDesc(id) {
-  const el = document.getElementById(id); if (!el) return;
-  el.classList.toggle('hidden');
-}
-
-function renderSpellApiList(charId) {
-  const el = document.getElementById('spell-api-list'); if (!el) return;
-  const ch = db.characters[charId]; if (!ch) return;
-  loadSpellCache();
-  const key = (ch.class || '').toLowerCase().replace(' ', '-');
-  const all = spellApiCache[key];
-  if (!all) { el.innerHTML = ''; return; }
-  const q = (document.getElementById('spell-search')?.value || '').toLowerCase().trim();
-  const filtered = q ? all.filter(s => s.name.toLowerCase().includes(q) || (s.school||'').toLowerCase().includes(q)) : all.slice(0, 60);
-  const known    = new Set((ch.spells.known    || []).map(s => typeof s === 'object' ? s.name : s));
-  const prepared = new Set((ch.spells.prepared || []).map(s => typeof s === 'object' ? s.name : s));
-  const lvlOrder = ['Cantrip','1st-level','2nd-level','3rd-level','4th-level','5th-level','6th-level','7th-level','8th-level','9th-level'];
-
-  if (!filtered.length) { el.innerHTML = `<p class="spell-empty">No results.</p>`; return; }
-
-  el.innerHTML = filtered.slice(0, 80).map(sp => {
-    const school = sp.school || '';
-    const schoolColor = SCHOOL_COLORS[school] || '#7b6d8d';
-    const lvlLabel = sp.level_int === 0 ? 'Cantrip' : sp.level ? sp.level : '';
-    const inKnown    = known.has(sp.name);
-    const inPrepared = prepared.has(sp.name);
-    return `<div class="spell-browser-row">
-      <div class="spell-browser-left">
-        <span class="spell-name" style="font-size:0.82rem">${esc(sp.name)}</span>
-        <span class="spell-badge" style="border-color:${schoolColor};color:${schoolColor};font-size:0.58rem">${esc(lvlLabel)}${lvlLabel && school?' · ':''}${esc(school)}</span>
-        ${sp.concentration==='yes'?`<span class="spell-tag conc">C</span>`:''}
-        ${sp.ritual==='yes'?`<span class="spell-tag ritual">R</span>`:''}
-      </div>
-      <div class="flex gap-1" style="flex-shrink:0">
-        <button class="btn btn-sm${inPrepared?' btn-primary':''}" onclick="addSpellToList('prepared','${sp.name.replace(/'/g,"\\'")}',${sp.level_int||0},'${esc(school)}','${esc(sp.casting_time||'')}','${esc(sp.range||'')}','${esc(sp.components||'')}','${sp.concentration||'no'}','${sp.ritual||'no'}',${JSON.stringify(sp.desc||'').replace(/'/g,"&apos;")})">${inPrepared?'✓ Prepared':'Prepare'}</button>
-        <button class="btn btn-sm${inKnown?' btn-primary':''}" onclick="addSpellToList('known','${sp.name.replace(/'/g,"\\'")}',${sp.level_int||0},'${esc(school)}','${esc(sp.casting_time||'')}','${esc(sp.range||'')}','${esc(sp.components||'')}','${sp.concentration||'no'}','${sp.ritual||'no'}',${JSON.stringify(sp.desc||'').replace(/'/g,"&apos;")})">${inKnown?'✓ Known':'Learn'}</button>
-      </div>
-    </div>`;
-  }).join('');
-  if (filtered.length > 80) el.innerHTML += `<p class="spell-empty" style="text-align:center">Showing 80 of ${filtered.length} — refine search to see more</p>`;
-}
-
-function filterSpellList(q) { renderSpellApiList(currentCharId); }
-
-function addSpellToList(listType, name, levelInt, school, castTime, range, components, conc, ritual, desc) {
-  const ch = db.characters[currentCharId]; if (!ch) return;
-  ch.spells[listType] = ch.spells[listType] || [];
-  const already = ch.spells[listType].some(s => (typeof s === 'object' ? s.name : s) === name);
-  if (already) return;
-  ch.spells[listType].push({ name, level_int: levelInt, school, casting_time: castTime, range, components, concentration: conc, ritual, desc });
-  saveData(db); renderApp();
-}
+function toggleSpellDesc(id) { document.getElementById(id)?.classList.toggle('hidden'); }
 
 function removeSpellEntry(listType, idx) {
   const ch = db.characters[currentCharId]; if (!ch) return;
   ch.spells[listType].splice(idx, 1);
-  saveData(db); renderApp();
-}
-
-function castSpell(spellName) {
-  // Find the lowest available slot and use it
-  const ch = db.characters[currentCharId]; if (!ch) return;
-  const sp = (ch.spells.prepared || []).find(s => (typeof s === 'object' ? s.name : s) === spellName);
-  const minLvl = (sp && typeof sp === 'object') ? (sp.level_int || 1) : 1;
-  for (let lvl = Math.max(1, minLvl); lvl <= 9; lvl++) {
-    if ((ch.spells.slots[lvl] || 0) > 0) {
-      CharacterStore.useSpellSlot(currentCharId, lvl);
-      renderApp(); return;
-    }
-  }
-  alert('No spell slots available!');
+  saveData(db); renderSpellTabContent();
 }
 
 function toggleSpellBubble(level, index) {
   const ch = db.characters[currentCharId]; if (!ch) return;
   const cur = ch.spells.slots[level] || 0;
-  // Clicking a filled bubble expends it; clicking empty restores
   ch.spells.slots[level] = index < cur ? index : index + 1;
   saveData(db); renderApp();
 }
@@ -1065,7 +1319,6 @@ function updateSpellSlotMax(level, value) {
   const ch = db.characters[currentCharId]; if (!ch) return;
   ch.spells.slotsMax = ch.spells.slotsMax || {};
   ch.spells.slotsMax[level] = Math.max(0, parseInt(value) || 0);
-  // Don't exceed max
   if ((ch.spells.slots[level] || 0) > ch.spells.slotsMax[level]) ch.spells.slots[level] = ch.spells.slotsMax[level];
   saveData(db); renderApp();
 }
