@@ -403,7 +403,7 @@ function renderInitiativeTracker(campaign) {
         const isActive = i===(init.currentIndex%combatants.length);
         const hpPct = cb.maxHP>0?Math.round((cb.hp/cb.maxHP)*100):100;
         return `<div class="initiative-row ${isActive?'active':''}">
-          <div class="init-order">${cb.initiative}</div>
+          <div class="init-order"><input type="number" class="init-order-input" value="${cb.initiative}" min="1" max="30" title="Click to edit initiative" oninput="updateCombatantInitiative(${i},+this.value)"></div>
           <div class="init-body">
             <div class="init-top">
               <span class="init-name">${esc(cb.name)}</span>
@@ -412,7 +412,7 @@ function renderInitiativeTracker(campaign) {
             </div>
             <div class="init-stats">
               <span>AC <strong>${cb.ac}</strong></span>
-              <span>HP <input type="number" value="${cb.hp}" min="0" max="${cb.maxHP}" oninput="updateCombatantHP(${i},+this.value)" style="width:48px;background:transparent;border:none;border-bottom:1px solid var(--border);color:var(--gold);text-align:center;font-weight:bold"> / ${cb.maxHP}</span>
+              <span>HP <input type="number" class="hp-input" value="${cb.hp}" min="0" max="${cb.maxHP}" oninput="updateCombatantHP(${i},+this.value)"> / ${cb.maxHP}</span>
               <span><button class="btn btn-sm" onclick="healCombatant(${i},1)">+</button><button class="btn btn-sm btn-danger" onclick="damageCombatant(${i},1)">-</button></span>
             </div>
             <div class="hp-bar-wrap"><div class="hp-bar ${hpPct<=25?'low':hpPct<=50?'mid':''}" style="width:${hpPct}%"></div></div>
@@ -420,6 +420,8 @@ function renderInitiativeTracker(campaign) {
               ${(cb.conditions||[]).map(cond=>`<span class="condition-tag ${getConditionClass(cond)}" onclick="removeCondition(${i},'${cond}')" title="Click to remove">${getConditionEmoji(cond)} ${cond} &times;</span>`).join('')}
               <button class="btn btn-sm" onclick="openConditionPicker(${i})">+ Condition</button>
             </div>
+            ${cb.statBlock?`<button class="btn btn-sm stat-block-toggle" onclick="toggleStatBlock(${i})">&#128214; Stat Block</button>
+            <div class="stat-block-panel" id="stat-block-${i}">${renderCombatantStatBlock(cb.statBlock, i)}</div>`:''}
           </div>
           <button class="btn btn-icon btn-danger" onclick="removeCombatant(${i})">&times;</button>
         </div>`;
@@ -464,11 +466,15 @@ function quickAddCombatant(entityId, type) {
   if (type==='player') {
     const ch=db.characters[entityId];
     name=ch.name; ac=ch.combat.ac; maxHP=ch.combat.maxHP; hp=ch.combat.currentHP;
-    charId=entityId; // link back to character record for HP sync
+    charId=entityId;
   } else {
     const npc=db.npcs[entityId]; name=npc.name; ac=npc.ac||10; maxHP=npc.maxHP||10; hp=npc.hp||10;
   }
-  getInitiative().combatants.push({ id:uid(), charId, name, initiative:Math.ceil(Math.random()*20), ac, hp, maxHP, type, conditions:[] });
+  const rolled = Math.ceil(Math.random()*20);
+  const raw = prompt(`Initiative roll for ${name}:`, rolled);
+  if (raw === null) return; // cancelled
+  const initiative = parseInt(raw) || rolled;
+  getInitiative().combatants.push({ id:uid(), charId, name, initiative, ac, hp, maxHP, type, conditions:[] });
   saveData(db); closeModal(); renderApp();
 }
 function addAllPcsToInitiative() {
@@ -483,6 +489,7 @@ function addAllPcsToInitiative() {
 function sortInitiative() { const init=getInitiative(); init.combatants.sort((a,b)=>b.initiative-a.initiative); init.currentIndex=0; saveData(db); renderApp(); }
 function nextTurn() { const init=getInitiative(); if(!init.combatants.length) return; init.currentIndex=(init.currentIndex||0)+1; if(init.currentIndex>=init.combatants.length){init.currentIndex=0;init.round++;} saveData(db); renderApp(); }
 function updateCombatantHP(i,val) { CharacterStore.updateInitiativeHP(currentCampaignId,i,+val); }
+function updateCombatantInitiative(i,val) { if(!val||isNaN(val)) return; getInitiative().combatants[i].initiative=val; saveData(db); }
 function damageCombatant(i,amt) { const cb=getInitiative().combatants[i]; CharacterStore.updateInitiativeHP(currentCampaignId,i,cb.hp-amt); renderApp(); }
 function healCombatant(i,amt)  { const cb=getInitiative().combatants[i]; CharacterStore.updateInitiativeHP(currentCampaignId,i,cb.hp+amt); renderApp(); }
 function removeCombatant(i) { const init=getInitiative(); init.combatants.splice(i,1); if(init.currentIndex>=init.combatants.length) init.currentIndex=0; saveData(db); renderApp(); }
@@ -529,7 +536,10 @@ async function loadMonsterStat(index, name) {
   try { const res=await fetch(`https://www.dnd5eapi.co/api/monsters/${index}`); const m=await res.json(); if(el) el.innerHTML=renderMonsterStatBlock(m); }
   catch { if(el) el.innerHTML=`<p class="text-red">Failed to load monster stats.</p>`; }
 }
+let _pendingMonster = null;
+
 function renderMonsterStatBlock(m) {
+  _pendingMonster = m;
   const abilityMod=s=>{const mod=Math.floor((s-10)/2);return (mod>=0?'+':'')+mod;};
   return `<button class="btn btn-sm" onclick="renderMonsterResults(document.getElementById('monster-query').value)" style="margin-bottom:0.8rem">&#8592; Back</button>
     <div class="stat-block">
@@ -545,13 +555,167 @@ function renderMonsterStatBlock(m) {
       ${m.challenge_rating!==undefined?`<div><strong>CR</strong> ${m.challenge_rating} &nbsp;<strong>XP</strong> ${m.xp?.toLocaleString()||'—'}</div>`:''}
       ${m.special_abilities?.length?`<div style="margin-top:0.5rem"><strong>Special:</strong> ${m.special_abilities.map(a=>esc(a.name)).join(', ')}</div>`:''}
       ${m.actions?.length?`<div style="margin-top:0.3rem"><strong>Actions:</strong> ${m.actions.map(a=>esc(a.name)).join(', ')}</div>`:''}
-      <div class="form-actions" style="margin-top:1rem"><button class="btn btn-primary" onclick='addMonsterToCombat(${JSON.stringify(m).replace(/'/g,"&#39;")})'>+ Add to Initiative</button></div>
+      <div class="form-actions" style="margin-top:1rem"><button class="btn btn-primary" onclick="addMonsterToCombat(_pendingMonster)">+ Add to Initiative</button></div>
     </div>`;
 }
 function addMonsterToCombat(m) {
   const init=getInitiative(), dexMod=Math.floor(((m.dexterity||10)-10)/2);
-  init.combatants.push({id:uid(),name:m.name,initiative:Math.ceil(Math.random()*20)+dexMod,ac:m.armor_class?.[0]?.value||m.armor_class||10,hp:m.hit_points,maxHP:m.hit_points,type:'monster',conditions:[]});
+  const initiative = Math.ceil(Math.random()*20)+dexMod;
+  init.combatants.push({
+    id:uid(), name:m.name, initiative,
+    ac:m.armor_class?.[0]?.value||m.armor_class||10,
+    hp:m.hit_points, maxHP:m.hit_points, type:'monster', conditions:[],
+    statBlock: {
+      size: m.size||'', type: m.type||'', alignment: m.alignment||'',
+      hit_points_roll: m.hit_points_roll||'',
+      speed: m.speed||{},
+      strength: m.strength||10, dexterity: m.dexterity||10, constitution: m.constitution||10,
+      intelligence: m.intelligence||10, wisdom: m.wisdom||10, charisma: m.charisma||10,
+      saving_throws: m.proficiencies?.filter(p=>p.proficiency?.index?.startsWith('saving-throw')).map(p=>({name:p.proficiency.name,value:p.value}))||[],
+      skills: m.proficiencies?.filter(p=>p.proficiency?.index?.startsWith('skill')).map(p=>({name:p.proficiency.name,value:p.value}))||[],
+      damage_immunities: m.damage_immunities||[],
+      damage_resistances: m.damage_resistances||[],
+      condition_immunities: m.condition_immunities?.map(c=>c.name||c)||[],
+      senses: m.senses||{},
+      languages: m.languages||'',
+      challenge_rating: m.challenge_rating, xp: m.xp||0,
+      special_abilities: m.special_abilities||[],
+      actions: m.actions||[],
+      reactions: m.reactions||[],
+      legendary_actions: m.legendary_actions||[]
+    }
+  });
   saveData(db); closeModal(); showCampaign(currentCampaignId,'initiative');
+}
+
+function toggleStatBlock(i) {
+  const el = document.getElementById('stat-block-'+i);
+  if (el) el.classList.toggle('open');
+}
+
+function parseAttackInfo(desc) {
+  const hitMatch = desc.match(/([+-]\d+)\s+to hit/i);
+  const dmgMatch = desc.match(/(\d+d\d+(?:\s*[+-]\s*\d+)?)\)?\s+(\w+)\s+damage/i);
+  return {
+    attackBonus: hitMatch ? hitMatch[1] : null,
+    damageDice: dmgMatch ? dmgMatch[1].replace(/\s/g,'') : null,
+    damageType: dmgMatch ? dmgMatch[2] : null
+  };
+}
+
+function rollDice(diceStr) {
+  const parts = diceStr.match(/^(\d+)d(\d+)([+-]\d+)?$/);
+  if (!parts) return { total: 0, rolls: [], modifier: 0, formula: diceStr };
+  const count = parseInt(parts[1]), sides = parseInt(parts[2]), mod = parseInt(parts[3]||'0');
+  const rolls = [];
+  for (let i = 0; i < count; i++) rolls.push(Math.ceil(Math.random()*sides));
+  return { total: rolls.reduce((s,r)=>s+r,0)+mod, rolls, modifier: mod, formula: diceStr };
+}
+
+function showActionPopover(combatantIdx, actionIdx, actionType) {
+  // Close any existing popover
+  document.querySelectorAll('.action-popover').forEach(el => el.remove());
+
+  const sb = getInitiative().combatants[combatantIdx].statBlock;
+  const actionList = actionType === 'legendary' ? sb.legendary_actions :
+                     actionType === 'reaction' ? sb.reactions : sb.actions;
+  const action = actionList[actionIdx];
+  if (!action) return;
+
+  const attack = parseAttackInfo(action.desc || '');
+  const btn = document.getElementById(`action-btn-${combatantIdx}-${actionType}-${actionIdx}`);
+
+  let popHtml = `<div class="action-popover" id="action-popover-${combatantIdx}">`;
+  popHtml += `<div class="action-popover-header"><strong>${esc(action.name)}</strong><button class="action-popover-close" onclick="this.closest('.action-popover').remove()">&times;</button></div>`;
+
+  if (attack.attackBonus || attack.damageDice) {
+    popHtml += `<div class="action-popover-attack">`;
+    if (attack.attackBonus) popHtml += `<span class="attack-bonus">${attack.attackBonus} to hit</span>`;
+    if (attack.damageDice) {
+      popHtml += `<span class="attack-damage">${attack.damageDice} ${attack.damageType||''}</span>`;
+      popHtml += `<button class="btn btn-sm dice-roll-btn" onclick="rollActionDamage(this,'${attack.damageDice}')" title="Roll damage">&#127922;</button>`;
+    }
+    popHtml += `</div>`;
+  }
+
+  popHtml += `<div class="action-popover-desc">${esc(action.desc||'')}</div>`;
+  popHtml += `</div>`;
+
+  if (btn) btn.insertAdjacentHTML('afterend', popHtml);
+}
+
+function rollActionDamage(btnEl, diceStr) {
+  const result = rollDice(diceStr);
+  let resultEl = btnEl.closest('.action-popover-attack').querySelector('.dice-result');
+  if (!resultEl) {
+    btnEl.insertAdjacentHTML('afterend', `<span class="dice-result"></span>`);
+    resultEl = btnEl.closest('.action-popover-attack').querySelector('.dice-result');
+  }
+  resultEl.textContent = `= ${result.total} [${result.rolls.join('+')}${result.modifier?result.modifier>0?'+'+result.modifier:result.modifier:''}]`;
+  resultEl.classList.add('dice-flash');
+  setTimeout(() => resultEl.classList.remove('dice-flash'), 400);
+}
+
+function renderCombatantStatBlock(sb, combatantIdx) {
+  const abilityMod = s => { const mod=Math.floor((s-10)/2); return (mod>=0?'+':'')+mod; };
+
+  // Quick-reference action buttons
+  const allActions = [];
+  (sb.actions||[]).forEach((a,j) => allActions.push({...a, idx:j, type:'action'}));
+  (sb.reactions||[]).forEach((a,j) => allActions.push({...a, idx:j, type:'reaction'}));
+  (sb.legendary_actions||[]).forEach((a,j) => allActions.push({...a, idx:j, type:'legendary'}));
+
+  let html = '';
+  if (allActions.length) {
+    html += `<div class="action-quick-bar">`;
+    allActions.forEach(a => {
+      const atk = parseAttackInfo(a.desc||'');
+      const badge = atk.attackBonus ? ` <span class="action-badge">${atk.attackBonus}</span>` : '';
+      html += `<button class="btn btn-sm action-quick-btn" id="action-btn-${combatantIdx}-${a.type}-${a.idx}" onclick="showActionPopover(${combatantIdx},${a.idx},'${a.type}')">${esc(a.name)}${badge}</button>`;
+    });
+    html += `</div><hr class="stat-block-divider">`;
+  }
+
+  html += `<div class="stat-block-meta">${esc(sb.size)} ${esc(sb.type)}, ${esc(sb.alignment)}</div>`;
+  html += `<hr class="stat-block-divider">`;
+  html += `<div><strong>Speed</strong> ${Object.entries(sb.speed).map(([k,v])=>`${k} ${v}`).join(', ')}</div>`;
+  html += `<hr class="stat-block-divider">`;
+  html += `<div class="ability-grid" style="margin:0.5rem 0">`;
+  ['strength','dexterity','constitution','intelligence','wisdom','charisma'].forEach(a => {
+    html += `<div class="ability-box"><div class="ability-name">${a.slice(0,3).toUpperCase()}</div><div style="font-size:1rem;font-weight:bold;color:var(--gold)">${sb[a]}</div><div class="ability-mod">${abilityMod(sb[a])}</div></div>`;
+  });
+  html += `</div><hr class="stat-block-divider">`;
+  if (sb.saving_throws?.length) html += `<div><strong>Saving Throws</strong> ${sb.saving_throws.map(s=>`${s.name.replace('Saving Throw: ','')} +${s.value}`).join(', ')}</div>`;
+  if (sb.skills?.length) html += `<div><strong>Skills</strong> ${sb.skills.map(s=>`${s.name.replace('Skill: ','')} +${s.value}`).join(', ')}</div>`;
+  if (sb.damage_resistances?.length) html += `<div><strong>Damage Resistances</strong> ${sb.damage_resistances.join(', ')}</div>`;
+  if (sb.damage_immunities?.length) html += `<div><strong>Damage Immunities</strong> ${sb.damage_immunities.join(', ')}</div>`;
+  if (sb.condition_immunities?.length) html += `<div><strong>Condition Immunities</strong> ${sb.condition_immunities.join(', ')}</div>`;
+  const senseStr = Object.entries(sb.senses||{}).map(([k,v])=>`${k.replace(/_/g,' ')} ${v}`).join(', ');
+  if (senseStr) html += `<div><strong>Senses</strong> ${senseStr}</div>`;
+  if (sb.languages) html += `<div><strong>Languages</strong> ${esc(sb.languages)}</div>`;
+  if (sb.challenge_rating !== undefined) html += `<div><strong>CR</strong> ${sb.challenge_rating} (${(sb.xp||0).toLocaleString()} XP)</div>`;
+  html += `<hr class="stat-block-divider">`;
+  if (sb.special_abilities?.length) {
+    html += `<div class="stat-block-section"><strong>Special Abilities</strong>`;
+    sb.special_abilities.forEach(a => { html += `<div class="stat-block-entry"><em>${esc(a.name)}.</em> ${esc(a.desc||'')}</div>`; });
+    html += `</div>`;
+  }
+  if (sb.actions?.length) {
+    html += `<div class="stat-block-section"><strong>Actions</strong>`;
+    sb.actions.forEach(a => { html += `<div class="stat-block-entry"><em>${esc(a.name)}.</em> ${esc(a.desc||'')}</div>`; });
+    html += `</div>`;
+  }
+  if (sb.reactions?.length) {
+    html += `<div class="stat-block-section"><strong>Reactions</strong>`;
+    sb.reactions.forEach(a => { html += `<div class="stat-block-entry"><em>${esc(a.name)}.</em> ${esc(a.desc||'')}</div>`; });
+    html += `</div>`;
+  }
+  if (sb.legendary_actions?.length) {
+    html += `<div class="stat-block-section"><strong>Legendary Actions</strong>`;
+    sb.legendary_actions.forEach(a => { html += `<div class="stat-block-entry"><em>${esc(a.name)}.</em> ${esc(a.desc||'')}</div>`; });
+    html += `</div>`;
+  }
+  return html;
 }
 
 // ── Character Data Model ──────────────────────────────────────────────────────
@@ -860,13 +1024,13 @@ const SCHOOL_COLORS = {
   Enchantment:'#c084fc', Evocation:'#e87070', Illusion:'#7b9dd4',
   Necromancy:'#9c7bc4', Transmutation:'#7bbdb8'
 };
-const SPELL_ALL_KEY    = 'dnd_spells_all_v2';
+const SPELL_ALL_KEY    = 'dnd_spells_local_v1';
 const CUSTOM_SPELLS_KEY = 'dnd_custom_spells_v1';
 
 let allSpellsDb   = null; // sorted master list from API
 let customSpells  = null; // [{...}, ...]  user-created
 let spellViewTab  = 'all'; // 'all' | 'known' | 'prepared'
-let spellFilters  = { q:'', level:'all', school:'all', cls:'all', conc:false, ritual:false };
+let spellFilters  = { q:'', level:'all', school:'all', cls:'all', source:'all', conc:false, ritual:false };
 let spellFetching = false;
 
 function loadAllSpells() {
@@ -901,22 +1065,17 @@ function getMergedSpells() {
 async function fetchAllSpells() {
   if (spellFetching) return;
   spellFetching = true;
-  setSpellStatus('✾ Loading all spells…');
+  setSpellStatus('✾ Loading spells…');
   try {
-    let url = 'https://api.open5e.com/spells/?limit=400&format=json';
-    let all = [];
-    while (url) {
-      const res  = await fetch(url);
-      const data = await res.json();
-      all = all.concat(data.results || []);
-      url = data.next || null;
-    }
-    allSpellsDb = all.sort((a,b) => (a.level_int||0)-(b.level_int||0) || a.name.localeCompare(b.name));
+    const res = await fetch('./data/spells.json');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const all = await res.json();
+    allSpellsDb = Array.isArray(all) ? all : [];
     saveAllSpells();
     setSpellStatus('');
     renderSpellTabContent();
   } catch(e) {
-    setSpellStatus('Could not load spells — check connection.', true);
+    setSpellStatus('Could not load spells — data/spells.json missing or invalid.', true);
   } finally { spellFetching = false; }
 }
 
@@ -958,6 +1117,10 @@ function getFilteredAllSpells(ch) {
       const classes = (sp.dnd_class || sp.page || '').toLowerCase();
       if (!classes.includes(f.cls.toLowerCase())) return false;
     }
+    if (f.source !== 'all') {
+      const sourceMap = { "Player's Handbook (2024)": 'phb2024', "Xanathar's Guide to Everything": 'xge', "Tasha's Cauldron of Everything": 'tce', "Explorer's Guide to Wildemount": 'egw', "Free Basic Rules (2024)": 'basic2024', "Free Basic Rules (2014)": 'basic2014', "Player's Handbook": 'phb2014' };
+      if (sourceMap[sp.source] !== f.source) return false;
+    }
     if (f.conc   && sp.concentration !== 'yes') return false;
     if (f.ritual && sp.ritual        !== 'yes') return false;
     return true;
@@ -967,6 +1130,16 @@ function getFilteredAllSpells(ch) {
 function renderFilterBar() {
   const schools = ['Abjuration','Conjuration','Divination','Enchantment','Evocation','Illusion','Necromancy','Transmutation'];
   const classes = ['Barbarian','Bard','Cleric','Druid','Fighter','Monk','Paladin','Ranger','Rogue','Sorcerer','Warlock','Wizard','Artificer','Blood Hunter'];
+  const sources = [
+    {val:'all',label:'All Sources'},
+    {val:'phb2024',label:'PHB 2024'},
+    {val:'phb2014',label:'PHB 2014'},
+    {val:'xge',label:"Xanathar's (XGE)"},
+    {val:'tce',label:"Tasha's (TCE)"},
+    {val:'egw',label:"Explorer's Guide (EGW)"},
+    {val:'basic2024',label:'Basic Rules 2024'},
+    {val:'basic2014',label:'Basic Rules 2014'},
+  ];
   return `<div class="spell-filter-bar">
     <input type="text" class="spell-filter-input" placeholder="Search spells…" value="${esc(spellFilters.q)}"
       oninput="spellFilters.q=this.value;renderSpellTabContent()">
@@ -982,6 +1155,10 @@ function renderFilterBar() {
     <select class="spell-filter-select" onchange="applySpellFilter('cls',this.value)">
       <option value="all"${spellFilters.cls==='all'?' selected':''}>All Classes</option>
       ${classes.map(c=>`<option value="${c}"${spellFilters.cls===c?' selected':''}>${c}</option>`).join('')}
+    </select>
+    <select class="spell-filter-select" onchange="applySpellFilter('source',this.value)">
+      <option value="all"${spellFilters.source==='all'?' selected':''}>All Sources</option>
+      ${sources.map(s=>`<option value="${s.val}"${spellFilters.source===s.val?' selected':''}>${s.label}</option>`).join('')}
     </select>
     <label class="spell-filter-toggle${spellFilters.conc?' active':''}">
       <input type="checkbox" ${spellFilters.conc?'checked':''} onchange="applySpellFilter('conc')"> C
@@ -1013,7 +1190,7 @@ function renderAllSpellsView(ch) {
       <span>${filtered.length} spells${filtered.length > 100 ? ' (showing 100)' : ''}</span>
       <div class="flex gap-1">
         <button class="btn btn-sm" onclick="openCustomSpellModal()">+ Custom Spell</button>
-        <button class="btn btn-sm" onclick="fetchAllSpells()" title="Refresh from API">↻</button>
+        <button class="btn btn-sm" onclick="fetchAllSpells()" title="Reload spells from local file">↻</button>
       </div>
     </div>
     <span id="spell-status" style="font-size:0.72rem"></span>
@@ -1024,12 +1201,15 @@ function renderAllSpellsView(ch) {
           const sc = SCHOOL_COLORS[school] || '#7b6d8d';
           const lvlLabel = sp.level_int === 0 ? 'Cantrip' : sp.level || '';
           const inK = known.has(sp.name), inP = prepared.has(sp.name);
+          const sourceMap = { "Player's Handbook (2024)": {abbr:'PHB24',color:'#c084fc'}, "Xanathar's Guide to Everything": {abbr:'XGE',color:'#3b82f6'}, "Tasha's Cauldron of Everything": {abbr:'TCE',color:'#14b8a6'}, "Explorer's Guide to Wildemount": {abbr:'EGW',color:'#f59e0b'}, "Free Basic Rules (2024)": {abbr:'BR24',color:'#9b6dff'}, "Free Basic Rules (2014)": {abbr:'BR14',color:'#9b6dff'}, "Player's Handbook": {abbr:'PHB14',color:'#6d7b9b'} };
+          const srcInfo = sourceMap[sp.source] || {abbr:'?',color:'#7b6d8d'};
           const safeData = encodeURIComponent(JSON.stringify({name:sp.name,level_int:sp.level_int||0,school:sp.school||'',casting_time:sp.casting_time||'',range:sp.range||'',components:sp.components||'',concentration:sp.concentration||'no',ritual:sp.ritual||'no',desc:sp.desc||'',dnd_class:sp.dnd_class||'',_custom:sp._custom||false}));
           return `<div class="spell-browser-row">
             <div class="spell-browser-left">
               ${sp._custom?`<span style="font-size:0.6rem;color:#c084fc;border:1px solid rgba(192,132,252,0.4);border-radius:3px;padding:0 3px;flex-shrink:0">✏</span>`:''}
               <span class="spell-name" style="font-size:0.82rem">${esc(sp.name)}</span>
               <span class="spell-badge" style="border-color:${sc};color:${sc};font-size:0.58rem">${esc(lvlLabel)}${lvlLabel&&school?' · ':''}${esc(school)}</span>
+              <span class="spell-source-badge" style="background:${srcInfo.color}">${srcInfo.abbr}</span>
               ${sp.concentration==='yes'?`<span class="spell-tag conc">C</span>`:''}
               ${sp.ritual==='yes'?`<span class="spell-tag ritual">R</span>`:''}
             </div>
