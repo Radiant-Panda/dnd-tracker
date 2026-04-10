@@ -17,7 +17,15 @@ function migrateCharacter(ch) {
   if (!ch.spells.slotsMax) ch.spells.slotsMax = {1:0,2:0,3:0,4:0,5:0,6:0,7:0,8:0,9:0};
   if (!ch.spells.known)    ch.spells.known    = [];
   if (!ch.spells.prepared) ch.spells.prepared = [];
-  if (!ch.combat)          ch.combat = {ac:10,initiative:0,speed:30,maxHP:10,currentHP:10,tempHP:0,hitDice:'1d8'};
+  if (!ch.combat)          ch.combat = {ac:10,initiative:0,speed:30,maxHP:10,currentHP:10,tempHP:0,hitDice:'1d8',hitDiceUsed:0};
+  if (ch.combat.hitDiceUsed === undefined) ch.combat.hitDiceUsed = 0;
+  if (!ch.featuresList)    ch.featuresList = [];
+  if (ch.carryWeight === undefined) ch.carryWeight = 0;
+  if (ch.resistances        === undefined) ch.resistances        = '';
+  if (ch.vulnerabilities    === undefined) ch.vulnerabilities    = '';
+  if (ch.damageImmunities   === undefined) ch.damageImmunities   = '';
+  if (ch.conditionImmunities=== undefined) ch.conditionImmunities= '';
+  if (ch.otherSenses        === undefined) ch.otherSenses        = '';
   if (!ch.deathSaves)      ch.deathSaves = {successes:0,failures:0};
   if (!ch.saveProficiencies)  ch.saveProficiencies = [];
   if (!ch.skillProficiencies) ch.skillProficiencies = [];
@@ -57,6 +65,7 @@ let currentNpcId = null;
 let currentTab = 'core'; // still used by campaign tabs
 let monsterCache = null;
 let charPanelOpen = false;
+let sheetTab = 'combat'; // 'combat' | 'spells' | 'inventory' | 'features' | 'notes'
 let wizardData = {};
 
 // ── Routing & Breadcrumb ───────────────────────────────────────────────────────
@@ -511,81 +520,216 @@ function toggleCondition(i, cond) {
 function removeCondition(i,cond) { const init=getInitiative(); init.combatants[i].conditions=(init.combatants[i].conditions||[]).filter(c=>c!==cond); saveData(db); renderApp(); }
 
 // ── Monster Search ─────────────────────────────────────────────────────────────
+let monsterFullData = null;
+let monsterBookFilter = 'all';
+let monsterShowCount = 80;
+
+const MONSTER_BOOK_NAMES = {
+  MM:'Monster Manual', BR14:'Basic Rules 2014', BR24:'Basic Rules 2024', MPMM:"Mordenkainen's Multiverse",
+  VGM:"Volo's Guide", MTF:"Mordenkainen's Foes", FM:'Flee Mortals', FTD:"Fizban's Dragons",
+  TCE:"Tasha's Cauldron", BGG:"Bigby's Giants", ToB:'Tome of Beasts', ToB2:'Tome of Beasts 2',
+  ToB3:'Tome of Beasts 3', CC:'Creature Codex', SJ:'Spelljammer', EGW:'Wildemount',
+  MOT:'Theros', PAM:'Planescape', VER:'Vecna', QIS:'Infinite Staircase', PHB24:'PHB 2024',
+};
+const MONSTER_BOOK_COLORS = {
+  MM:'#c084fc', BR14:'#9b6dff', BR24:'#9b6dff', MPMM:'#3b82f6', VGM:'#6d8fd4',
+  MTF:'#6d8fd4', FM:'#e87070', FTD:'#f59e0b', TCE:'#14b8a6', BGG:'#c4a85a',
+  ToB:'#7bbdb8', ToB2:'#7bbdb8', ToB3:'#7bbdb8', CC:'#9c7bc4',
+  SJ:'#6dba8f', EGW:'#f59e0b', MOT:'#c4a85a', PAM:'#6dba8f',
+  VER:'#e87070', QIS:'#7b9dd4', PHB24:'#c084fc',
+};
+
 async function openMonsterSearchModal() {
   openModal(`<h2>&#128269; Monster Search</h2>
-    <div class="flex gap-1" style="margin-bottom:1rem"><input type="text" id="monster-query" placeholder="Search monsters..." style="flex:1" oninput="searchMonsters(this.value)"></div>
+    <div class="flex gap-1" style="margin-bottom:0.5rem">
+      <input type="text" id="monster-query" placeholder="Search monsters..." style="flex:1" oninput="searchMonsters()">
+    </div>
+    <div class="flex gap-1" style="margin-bottom:0.8rem">
+      <select id="monster-book-filter" onchange="monsterBookFilter=this.value;searchMonsters()" style="flex:1;font-size:0.8rem">
+        <option value="all">All Books</option>
+      </select>
+      <select id="monster-cr-filter" onchange="searchMonsters()" style="width:80px;font-size:0.8rem">
+        <option value="all">All CR</option>
+        <option value="0">CR 0</option><option value="0.125">CR 1/8</option><option value="0.25">CR 1/4</option><option value="0.5">CR 1/2</option>
+        ${Array.from({length:30},(_,i)=>i+1).map(n=>`<option value="${n}">CR ${n}</option>`).join('')}
+      </select>
+    </div>
     <div id="monster-results" class="monster-results"><p class="text-dim" style="text-align:center">Loading monster list...</p></div>`);
   document.getElementById('monster-query').focus();
   await loadMonsterList();
 }
+
 async function loadMonsterList() {
-  if (monsterCache) { renderMonsterResults(''); return; }
-  try { const res=await fetch('https://www.dnd5eapi.co/api/monsters'); const data=await res.json(); monsterCache=data.results; renderMonsterResults(''); }
-  catch { const el=document.getElementById('monster-results'); if(el) el.innerHTML=`<p class="text-red">Could not load monster list. Check your internet connection.</p>`; }
+  if (monsterCache) { populateBookFilter(); searchMonsters(); return; }
+  try {
+    const res = await fetch('./data/monsters-index.json');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    monsterCache = await res.json();
+    populateBookFilter();
+    searchMonsters();
+  } catch {
+    const el = document.getElementById('monster-results');
+    if (el) el.innerHTML = `<p class="text-red">Could not load monster list — data/monsters-index.json missing.</p>`;
+  }
 }
-function searchMonsters(query) { renderMonsterResults(query); }
-function renderMonsterResults(query) {
-  const el=document.getElementById('monster-results'); if(!el||!monsterCache) return;
-  const q=query.toLowerCase().trim();
-  const filtered=q?monsterCache.filter(m=>m.name.toLowerCase().includes(q)):monsterCache.slice(0,40);
-  if(!filtered.length){el.innerHTML=`<p class="text-dim">No monsters found.</p>`;return;}
-  el.innerHTML=`<div style="font-size:0.78rem;color:var(--text-dim);margin-bottom:0.5rem">${filtered.length} results</div>${filtered.slice(0,60).map(m=>`<div class="monster-row" onclick="loadMonsterStat('${m.index}','${esc(m.name)}')">${esc(m.name)}<span class="text-dim" style="font-size:0.78rem">&#9656;</span></div>`).join('')}`;
+
+function populateBookFilter() {
+  const sel = document.getElementById('monster-book-filter'); if (!sel) return;
+  const books = [...new Set(monsterCache.map(m => m.book))].sort();
+  sel.innerHTML = `<option value="all">All Books (${monsterCache.length})</option>`
+    + books.map(b => {
+      const count = monsterCache.filter(m => m.book === b).length;
+      const fullName = MONSTER_BOOK_NAMES[b] || b;
+      return `<option value="${b}"${monsterBookFilter===b?' selected':''}>${fullName} (${count})</option>`;
+    }).join('');
 }
-async function loadMonsterStat(index, name) {
-  const el=document.getElementById('monster-results'); if(el) el.innerHTML=`<p class="text-dim" style="text-align:center">Loading ${name}...</p>`;
-  try { const res=await fetch(`https://www.dnd5eapi.co/api/monsters/${index}`); const m=await res.json(); if(el) el.innerHTML=renderMonsterStatBlock(m); }
-  catch { if(el) el.innerHTML=`<p class="text-red">Failed to load monster stats.</p>`; }
+
+function searchMonsters(resetCount) {
+  if (resetCount !== false) monsterShowCount = 80;
+  const el = document.getElementById('monster-results'); if (!el || !monsterCache) return;
+  const q = (document.getElementById('monster-query')?.value || '').toLowerCase().trim();
+  const bookF = document.getElementById('monster-book-filter')?.value || 'all';
+  const crF = document.getElementById('monster-cr-filter')?.value || 'all';
+
+  let filtered = monsterCache;
+  if (q) filtered = filtered.filter(m => m.name.toLowerCase().includes(q));
+  if (bookF !== 'all') filtered = filtered.filter(m => m.book === bookF);
+  if (crF !== 'all') filtered = filtered.filter(m => m.cr_num === parseFloat(crF));
+
+  if (!filtered.length) { el.innerHTML = `<p class="text-dim">No monsters found.</p>`; return; }
+  const showing = filtered.slice(0, monsterShowCount);
+  const remaining = filtered.length - showing.length;
+  el.innerHTML = `<div style="font-size:0.78rem;color:var(--text-dim);margin-bottom:0.5rem">${filtered.length} results${remaining > 0 ? ` (showing ${showing.length})` : ''}</div>`
+    + showing.map(m => {
+      const color = MONSTER_BOOK_COLORS[m.book] || '#888';
+      const fullName = MONSTER_BOOK_NAMES[m.book] || m.book;
+      return `<div class="monster-row" onclick="loadMonsterStat(${m.i})">
+        <span>${esc(m.name)}</span>
+        <span class="monster-row-meta">
+          <span class="monster-cr-badge">CR ${m.cr}</span>
+          <span class="monster-book-badge" style="background:${color}">${esc(fullName)}</span>
+          <span class="text-dim" style="font-size:0.78rem">&#9656;</span>
+        </span>
+      </div>`;
+    }).join('')
+    + (remaining > 0 ? `<button class="btn btn-sm" style="width:100%;margin-top:0.5rem" onclick="monsterShowCount+=80;searchMonsters(false)">Show more (${remaining} remaining)</button>` : '');
 }
+function showMoreMonsters() { monsterShowCount += 80; searchMonsters(false); }
+
+async function loadMonsterStat(idx) {
+  const el = document.getElementById('monster-results');
+  if (el) el.innerHTML = `<p class="text-dim" style="text-align:center">Loading...</p>`;
+  try {
+    if (!monsterFullData) {
+      const res = await fetch('./data/monsters.json');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      monsterFullData = await res.json();
+    }
+    const m = monsterFullData[idx];
+    if (el) el.innerHTML = renderMonsterStatBlock(m);
+  } catch {
+    if (el) el.innerHTML = `<p class="text-red">Failed to load monster stats.</p>`;
+  }
+}
+
 let _pendingMonster = null;
 
 function renderMonsterStatBlock(m) {
   _pendingMonster = m;
-  const abilityMod=s=>{const mod=Math.floor((s-10)/2);return (mod>=0?'+':'')+mod;};
-  return `<button class="btn btn-sm" onclick="renderMonsterResults(document.getElementById('monster-query').value)" style="margin-bottom:0.8rem">&#8592; Back</button>
+  const abilityMod = s => { const v = Math.floor(((s||10)-10)/2); return (v>=0?'+':'')+v; };
+  const hasAbilities = m.str !== undefined;
+  const bookColor = MONSTER_BOOK_COLORS[m.book_short] || '#888';
+
+  let html = `<button class="btn btn-sm" onclick="searchMonsters()" style="margin-bottom:0.8rem">&#8592; Back</button>
     <div class="stat-block">
       <div class="stat-block-name">${esc(m.name)}</div>
-      <div class="stat-block-meta">${esc(m.size)} ${esc(m.type)}, ${esc(m.alignment)}</div>
-      <hr class="stat-block-divider">
-      <div><strong>AC</strong> ${m.armor_class?.[0]?.value||m.armor_class} &nbsp;<strong>HP</strong> ${m.hit_points} (${esc(m.hit_points_roll||'')}) &nbsp;<strong>Speed</strong> ${Object.entries(m.speed||{}).map(([k,v])=>`${k} ${v}`).join(', ')}</div>
+      <div class="stat-block-meta">${esc(m.size)} ${esc(m.type)}, ${esc(m.alignment)}
+        <span class="monster-book-badge" style="background:${bookColor};margin-left:0.5rem">${esc(m.book_short)}</span>
+      </div>
+      <hr class="stat-block-divider">`;
+
+  if (hasAbilities) {
+    // Structured stat block from properties
+    html += `<div><strong>AC</strong> ${m.ac} ${m.ac_note && m.ac_note!==String(m.ac) ? `<span class="text-dim">(${esc(m.ac_note)})</span>` : ''} &nbsp;<strong>HP</strong> ${m.hp} ${m.hp_note ? `<span class="text-dim">(${esc(m.hp_note)})</span>` : ''} &nbsp;<strong>Speed</strong> ${esc(m.speed)}</div>
       <hr class="stat-block-divider">
       <div class="ability-grid" style="margin:0.5rem 0">
-        ${['strength','dexterity','constitution','intelligence','wisdom','charisma'].map(a=>`<div class="ability-box"><div class="ability-name">${a.slice(0,3).toUpperCase()}</div><div style="font-size:1rem;font-weight:bold;color:var(--gold)">${m[a]}</div><div class="ability-mod">${abilityMod(m[a])}</div></div>`).join('')}
+        ${[['STR',m.str],['DEX',m.dex],['CON',m.con],['INT',m.int],['WIS',m.wis],['CHA',m.cha]].map(([n,v])=>`<div class="ability-box"><div class="ability-name">${n}</div><div style="font-size:1rem;font-weight:bold;color:var(--gold)">${v}</div><div class="ability-mod">${abilityMod(v)}</div></div>`).join('')}
       </div>
-      <hr class="stat-block-divider">
-      ${m.challenge_rating!==undefined?`<div><strong>CR</strong> ${m.challenge_rating} &nbsp;<strong>XP</strong> ${m.xp?.toLocaleString()||'—'}</div>`:''}
-      ${m.special_abilities?.length?`<div style="margin-top:0.5rem"><strong>Special:</strong> ${m.special_abilities.map(a=>esc(a.name)).join(', ')}</div>`:''}
-      ${m.actions?.length?`<div style="margin-top:0.3rem"><strong>Actions:</strong> ${m.actions.map(a=>esc(a.name)).join(', ')}</div>`:''}
-      <div class="form-actions" style="margin-top:1rem"><button class="btn btn-primary" onclick="addMonsterToCombat(_pendingMonster)">+ Add to Initiative</button></div>
-    </div>`;
-}
-function addMonsterToCombat(m) {
-  const init=getInitiative(), dexMod=Math.floor(((m.dexterity||10)-10)/2);
-  const initiative = Math.ceil(Math.random()*20)+dexMod;
-  init.combatants.push({
-    id:uid(), name:m.name, initiative,
-    ac:m.armor_class?.[0]?.value||m.armor_class||10,
-    hp:m.hit_points, maxHP:m.hit_points, type:'monster', conditions:[],
-    statBlock: {
-      size: m.size||'', type: m.type||'', alignment: m.alignment||'',
-      hit_points_roll: m.hit_points_roll||'',
-      speed: m.speed||{},
-      strength: m.strength||10, dexterity: m.dexterity||10, constitution: m.constitution||10,
-      intelligence: m.intelligence||10, wisdom: m.wisdom||10, charisma: m.charisma||10,
-      saving_throws: m.proficiencies?.filter(p=>p.proficiency?.index?.startsWith('saving-throw')).map(p=>({name:p.proficiency.name,value:p.value}))||[],
-      skills: m.proficiencies?.filter(p=>p.proficiency?.index?.startsWith('skill')).map(p=>({name:p.proficiency.name,value:p.value}))||[],
-      damage_immunities: m.damage_immunities||[],
-      damage_resistances: m.damage_resistances||[],
-      condition_immunities: m.condition_immunities?.map(c=>c.name||c)||[],
-      senses: m.senses||{},
-      languages: m.languages||'',
-      challenge_rating: m.challenge_rating, xp: m.xp||0,
-      special_abilities: m.special_abilities||[],
-      actions: m.actions||[],
-      reactions: m.reactions||[],
-      legendary_actions: m.legendary_actions||[]
+      <hr class="stat-block-divider">`;
+    if (m.saving_throws) html += `<div><strong>Saves</strong> ${esc(m.saving_throws)}</div>`;
+    if (m.skills) html += `<div><strong>Skills</strong> ${esc(m.skills)}</div>`;
+    if (m.resistances) html += `<div><strong>Resistances</strong> ${esc(m.resistances)}</div>`;
+    if (m.immunities) html += `<div><strong>Immunities</strong> ${esc(m.immunities)}</div>`;
+    if (m.condition_immunities) html += `<div><strong>Condition Immunities</strong> ${esc(m.condition_immunities)}</div>`;
+    if (m.vulnerabilities) html += `<div><strong>Vulnerabilities</strong> ${esc(m.vulnerabilities)}</div>`;
+    if (m.senses) html += `<div><strong>Senses</strong> ${esc(m.senses)}</div>`;
+    if (m.languages) html += `<div><strong>Languages</strong> ${esc(m.languages)}</div>`;
+    html += `<div><strong>CR</strong> ${esc(m.cr)} &nbsp;<strong>XP</strong> ${(m.xp||0).toLocaleString()}</div>`;
+
+    if (m.traits?.length) {
+      html += `<hr class="stat-block-divider"><div class="stat-section-title">Traits</div>`;
+      m.traits.forEach(t => { html += `<div class="stat-entry"><strong>${esc(t.name)}.</strong> ${esc(t.desc)}</div>`; });
     }
+    if (m.actions?.length) {
+      html += `<hr class="stat-block-divider"><div class="stat-section-title">Actions</div>`;
+      m.actions.forEach(t => { html += `<div class="stat-entry"><strong>${esc(t.name)}.</strong> ${esc(t.desc)}</div>`; });
+    }
+    if (m.reactions?.length) {
+      html += `<hr class="stat-block-divider"><div class="stat-section-title">Reactions</div>`;
+      m.reactions.forEach(t => { html += `<div class="stat-entry"><strong>${esc(t.name)}.</strong> ${esc(t.desc)}</div>`; });
+    }
+    if (m.legendary_actions?.length) {
+      html += `<hr class="stat-block-divider"><div class="stat-section-title">Legendary Actions</div>`;
+      m.legendary_actions.forEach(t => { html += `<div class="stat-entry"><strong>${esc(t.name)}.</strong> ${esc(t.desc)}</div>`; });
+    }
+  } else {
+    // Description-based stat block
+    html += `<div><strong>CR</strong> ${esc(m.cr)}</div>`;
+    const ds = m.desc_sections || {};
+    if (ds.traits) html += `<hr class="stat-block-divider"><div class="stat-section-title">Traits</div><div class="stat-entry">${esc(ds.traits)}</div>`;
+    if (ds.actions) html += `<hr class="stat-block-divider"><div class="stat-section-title">Actions</div><div class="stat-entry">${esc(ds.actions)}</div>`;
+    if (ds.reactions) html += `<hr class="stat-block-divider"><div class="stat-section-title">Reactions</div><div class="stat-entry">${esc(ds.reactions)}</div>`;
+    if (ds.legendary) html += `<hr class="stat-block-divider"><div class="stat-section-title">Legendary Actions</div><div class="stat-entry">${esc(ds.legendary)}</div>`;
+  }
+
+  html += `<div class="form-actions" style="margin-top:1rem"><button class="btn btn-primary" onclick="addMonsterToCombat(_pendingMonster)">+ Add to Initiative</button></div>
+    </div>`;
+  return html;
+}
+
+function addMonsterToCombat(m) {
+  const init = getInitiative();
+  const dexMod = Math.floor(((m.dex || m.dexterity || 10) - 10) / 2);
+  const initiative = Math.ceil(Math.random() * 20) + dexMod;
+  const ac = m.ac || 10;
+  const hp = m.hp || 10;
+
+  const statBlock = {
+    size: m.size || '', type: m.type || '', alignment: m.alignment || '',
+    hit_points_roll: m.hp_note || '',
+    speed: typeof m.speed === 'string' ? m.speed : Object.entries(m.speed||{}).map(([k,v])=>`${k} ${v}`).join(', '),
+    strength: m.str||10, dexterity: m.dex||10, constitution: m.con||10,
+    intelligence: m.int||10, wisdom: m.wis||10, charisma: m.cha||10,
+    saving_throws: m.saving_throws ? (typeof m.saving_throws==='string'?m.saving_throws.split(', ').map(s=>{const p=s.split(' ');return{name:p[0],value:parseInt(p[1])||0}}):[]) : [],
+    skills: m.skills ? (typeof m.skills==='string'?m.skills.split(', ').map(s=>{const p=s.split(' ');return{name:p.slice(0,-1).join(' '),value:parseInt(p[p.length-1])||0}}):[]) : [],
+    damage_immunities: m.immunities ? m.immunities.split(', ') : [],
+    damage_resistances: m.resistances ? m.resistances.split(', ') : [],
+    condition_immunities: m.condition_immunities ? m.condition_immunities.split(', ') : [],
+    senses: typeof m.senses === 'string' ? {passive_perception: parseInt((m.senses.match(/passive perception (\d+)/i)||[])[1])||10} : (m.senses||{}),
+    languages: m.languages || '',
+    challenge_rating: m.cr, xp: m.xp || 0,
+    special_abilities: m.traits || [],
+    actions: m.actions || [],
+    reactions: m.reactions || [],
+    legendary_actions: m.legendary_actions || [],
+    desc_sections: m.desc_sections || null,
+  };
+
+  init.combatants.push({
+    id: uid(), name: m.name, initiative, ac, hp, maxHP: hp,
+    type: 'monster', conditions: [], statBlock
   });
-  saveData(db); closeModal(); showCampaign(currentCampaignId,'initiative');
+  saveData(db); closeModal(); showCampaign(currentCampaignId, 'initiative');
 }
 
 function toggleStatBlock(i) {
@@ -877,6 +1021,42 @@ function passivePerception(ch, pb) {
   return 10 + skillBonus(ch, 'Perception', 'wis', pb);
 }
 
+function renderPortraitCard(ch) {
+  const icon = CLASS_ICONS[ch.class] || '⚔';
+  const hasPortrait = !!ch.portrait;
+  return `<div class="portrait-card">
+    <div class="portrait-frame" ${hasPortrait ? `style="background-image:url(${ch.portrait})"` : ''}>
+      ${hasPortrait ? '' : `<span class="portrait-icon">${icon}</span>`}
+    </div>
+    <div class="portrait-info">
+      <div class="portrait-name">${esc(ch.name)}</div>
+      <div class="portrait-meta">${esc(ch.race || '—')} ${esc(ch.class)} &bull; Lv ${ch.level}</div>
+    </div>
+    <div class="flex gap-1">
+      <label class="btn btn-sm portrait-upload-btn">
+        ${hasPortrait ? 'Change' : 'Upload Portrait'}
+        <input type="file" accept="image/*" onchange="uploadPortrait(event)" style="display:none">
+      </label>
+      ${hasPortrait ? '<button class="btn btn-sm portrait-upload-btn" onclick="removePortrait()">Remove</button>' : ''}
+    </div>
+  </div>`;
+}
+
+function uploadPortrait(event) {
+  const file = event.target.files[0]; if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    db.characters[currentCharId].portrait = e.target.result;
+    saveData(db); renderApp();
+  };
+  reader.readAsDataURL(file);
+}
+
+function removePortrait() {
+  delete db.characters[currentCharId].portrait;
+  saveData(db); renderApp();
+}
+
 function renderAbilityScores(ch) {
   return `<div class="sheet-panel">
     <div class="cs-section-label">Ability Scores</div>
@@ -942,6 +1122,10 @@ function renderSkillList(ch, pb) {
 function renderCombatSection(ch) {
   const hpPct=ch.combat.maxHP>0?Math.round((ch.combat.currentHP/ch.combat.maxHP)*100):100;
   const barClass=hpPct<=25?'low':hpPct<=50?'mid':'';
+  const hdSides = HIT_DICE[ch.class] || 8;
+  const hdTotal = ch.level || 1;
+  const hdUsed = ch.combat.hitDiceUsed || 0;
+  const hdRemaining = Math.max(0, hdTotal - hdUsed);
   return `<div class="sheet-panel">
     <div class="cs-section-label">Combat</div>
     <div class="cs-combat-trio">
@@ -949,26 +1133,45 @@ function renderCombatSection(ch) {
       <div class="stat-box"><div class="stat-label">Initiative</div><input type="number" value="${ch.combat.initiative}" oninput="combatField('initiative',+this.value)" style="width:100%;text-align:center;font-size:1.3rem;background:transparent;border:none;color:var(--gold);font-weight:bold"></div>
       <div class="stat-box"><div class="stat-label">Speed</div><input type="number" value="${ch.combat.speed}" oninput="combatField('speed',+this.value)" style="width:100%;text-align:center;font-size:1.3rem;background:transparent;border:none;color:var(--gold);font-weight:bold"></div>
     </div>
-    <div class="cs-combat-trio" style="margin-top:0.5rem">
-      <div class="stat-box"><div class="stat-label">Max HP</div><input type="number" value="${ch.combat.maxHP}" oninput="combatField('maxHP',+this.value)" style="width:100%;text-align:center;font-size:1.1rem;background:transparent;border:none;color:var(--gold);font-weight:bold"></div>
-      <div class="stat-box"><div class="stat-label">Current HP</div><input type="number" value="${ch.combat.currentHP}" oninput="combatField('currentHP',+this.value)" style="width:100%;text-align:center;font-size:1.1rem;background:transparent;border:none;color:var(--gold);font-weight:bold"></div>
-      <div class="stat-box"><div class="stat-label">Temp HP</div><input type="number" value="${ch.combat.tempHP}" oninput="combatField('tempHP',+this.value)" style="width:100%;text-align:center;font-size:1.1rem;background:transparent;border:none;color:var(--gold);font-weight:bold"></div>
+    <div class="hp-display" style="margin-top:0.6rem">
+      <div class="hp-duo">
+        <div class="hp-block" onclick="openEditHP('maxHP')"><div class="hp-block-label">Max HP</div><div class="hp-block-val">${ch.combat.maxHP}</div></div>
+        <div class="hp-block hp-current" id="hp-current-block"><div class="hp-block-label">Current HP</div><div class="hp-block-val" id="hp-current-val">${ch.combat.currentHP}</div></div>
+      </div>
+      <div class="hp-bar-wrap">
+        <div class="hp-bar ${barClass}" id="cs-hp-bar" style="width:${hpPct}%"></div>
+        ${ch.combat.tempHP > 0 ? `<div class="hp-bar-temp" id="cs-hp-temp-bar" style="width:${Math.min(100, Math.round(((ch.combat.currentHP + ch.combat.tempHP) / ch.combat.maxHP) * 100))}%"></div>` : ''}
+      </div>
+      <div class="temp-hp-row">
+        <span class="temp-hp-label">Temp HP</span>
+        <button class="btn btn-sm hd-adj-btn" onclick="adjustTempHP(-1)">&#8722;</button>
+        <input type="number" class="temp-hp-input" id="temp-hp-val" value="${ch.combat.tempHP}" min="0"
+          onchange="setTempHP(+this.value)" onkeydown="if(event.key==='Enter'){this.blur();}">
+        <button class="btn btn-sm hd-adj-btn" onclick="adjustTempHP(1)">+</button>
+      </div>
+      <div class="hp-btn-grid">
+        <button class="hp-grid-btn hp-dmg-btn" onclick="openDamagePrompt()"><span class="hp-grid-icon">&#8722;</span><span class="hp-grid-label">Damage</span></button>
+        <button class="hp-grid-btn hp-heal-btn" onclick="openHealPrompt()"><span class="hp-grid-icon">+</span><span class="hp-grid-label">Heal</span></button>
+        <button class="hp-grid-btn hp-long-btn" onclick="doLongRest()"><span class="hp-grid-icon">&#9789;</span><span class="hp-grid-label">Long Rest</span></button>
+        <button class="hp-grid-btn hp-short-btn" onclick="openShortRestDialog()"><span class="hp-grid-icon">&#10040;</span><span class="hp-grid-label">Short Rest</span></button>
+      </div>
     </div>
-    <div class="hp-bar-wrap"><div class="hp-bar ${barClass}" style="width:${hpPct}%"></div></div>
-    <div class="flex gap-2" style="margin-top:0.8rem">
-      <div style="flex:1">
-        <div class="cs-field-label">Hit Dice</div>
-        <input class="cs-field-underline" type="text" value="${esc(ch.combat.hitDice)}" placeholder="1d8" oninput="combatField('hitDice',this.value)">
-      </div>
-      <div>
-        <div class="cs-field-label">Death Saves</div>
-        <div class="flex gap-1" style="align-items:center;margin-top:0.3rem;font-size:0.75rem">
-          <span style="color:var(--green-lt)">S:</span>
-          ${[0,1,2].map(i=>`<input type="checkbox" ${(ch.deathSaves.successes||0)>i?'checked':''} onchange="updateDeathSave('successes',${i},this.checked)">`).join('')}
-          <span style="color:var(--red-lt);margin-left:0.3rem">F:</span>
-          ${[0,1,2].map(i=>`<input type="checkbox" ${(ch.deathSaves.failures||0)>i?'checked':''} onchange="updateDeathSave('failures',${i},this.checked)">`).join('')}
-        </div>
-      </div>
+    <div class="death-saves-row">
+      <span class="cs-field-label">Death Saves</span>
+      <span class="ds-group">
+        <span class="ds-label" style="color:var(--green-lt)">Success:</span>
+        ${[0,1,2].map(i=>`<input type="checkbox" ${(ch.deathSaves.successes||0)>i?'checked':''} onchange="updateDeathSave('successes',${i},this.checked)">`).join('')}
+      </span>
+      <span class="ds-group">
+        <span class="ds-label" style="color:var(--red-lt)">Fail:</span>
+        ${[0,1,2].map(i=>`<input type="checkbox" ${(ch.deathSaves.failures||0)>i?'checked':''} onchange="updateDeathSave('failures',${i},this.checked)">`).join('')}
+      </span>
+    </div>
+    <div class="hd-row">
+      <span class="cs-field-label">Hit Dice:</span>
+      <span class="hd-val">${hdRemaining}/${hdTotal}d${hdSides}</span>
+      <button class="btn btn-sm hd-adj-btn" onclick="adjustHitDice(-1)" title="Use a hit die">&#8722;</button>
+      <button class="btn btn-sm hd-adj-btn" onclick="adjustHitDice(1)" title="Restore a hit die">+</button>
     </div>
   </div>`;
 }
@@ -1458,15 +1661,7 @@ function renderSpellsSection(ch) {
       </div>
     </div>` : '';
 
-  // Session log
-  const log = (ch.sessionLog || []).slice(0, 8);
-  const logHtml = log.length ? `
-    <div class="spell-group" style="margin-top:0.6rem">
-      <div class="spell-group-heading">✿ Session Log</div>
-      ${log.map(e => `<div class="spell-log-entry">${esc(e.text)}<span class="spell-log-ts">${new Date(e.ts).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span></div>`).join('')}
-    </div>` : '';
-
-  return `<div class="sheet-panel" style="margin-top:0.6rem">
+  return `<div class="sheet-panel">
     <div class="cs-section-label">Spells</div>
     ${headerStats}
     ${slotsHtml}
@@ -1476,7 +1671,6 @@ function renderSpellsSection(ch) {
       <button class="spell-tab${spellViewTab==='prepared'?' active':''}" data-tab="prepared" onclick="switchSpellTab('prepared')">Prepared <span class="spell-count">${prepared}</span></button>
     </div>
     <div id="spell-tab-content"></div>
-    ${logHtml}
   </div>`;
 }
 
@@ -1512,10 +1706,226 @@ function renderPersonalitySection(ch) {
   </div>`;
 }
 
+// ── Class Features Lookup ────────────────────────────────────────────────────
+const CLASS_FEATURES = {
+  Barbarian: [
+    [1, 'Rage', 'Enter a rage as a bonus action. Advantage on STR checks and saving throws, bonus to melee damage, resistance to bludgeoning/piercing/slashing damage.'],
+    [1, 'Unarmored Defense', 'While not wearing armor, AC equals 10 + DEX modifier + CON modifier.'],
+    [2, 'Reckless Attack', 'When you make your first attack on your turn, you can decide to attack recklessly, gaining advantage but giving enemies advantage against you until your next turn.'],
+    [2, 'Danger Sense', 'Advantage on DEX saving throws against effects you can see, such as traps and spells, while not blinded, deafened, or incapacitated.'],
+    [3, 'Primal Path', 'Choose a subclass that shapes your rage.'],
+    [4, 'ASI', 'Ability Score Improvement or feat.'],
+    [5, 'Extra Attack', 'You can attack twice, instead of once, whenever you take the Attack action on your turn.'],
+    [5, 'Fast Movement', 'Your speed increases by 10 ft while not wearing heavy armor.'],
+    [6, 'Path Feature', 'Additional feature from your Primal Path.'],
+    [7, 'Feral Instinct', 'Advantage on initiative rolls. If surprised, you can still act normally on your first turn if you enter your rage before doing anything else.'],
+    [8, 'ASI', 'Ability Score Improvement or feat.'],
+    [9, 'Brutal Critical', 'Roll one additional weapon damage die when scoring a critical hit.'],
+    [10, 'Path Feature', 'Additional feature from your Primal Path.'],
+    [11, 'Relentless Rage', 'When you drop to 0 HP while raging, make a DC 10 CON save to drop to 1 HP instead. DC increases by 5 each time you use this feature until you finish a short or long rest.'],
+    [12, 'ASI', 'Ability Score Improvement or feat.'],
+  ],
+  Bard: [
+    [1, 'Bardic Inspiration', 'As a bonus action, grant a creature within 60 ft a Bardic Inspiration die (d6) to add to one ability check, attack roll, or saving throw within 10 minutes.'],
+    [1, 'Spellcasting', 'You can cast bard spells using CHA as your spellcasting ability.'],
+    [2, 'Jack of All Trades', 'Add half your proficiency bonus (rounded down) to ability checks you aren\'t proficient in.'],
+    [2, 'Song of Rest', 'If you perform during a short rest, friendly creatures regain extra HP when they spend Hit Dice (d6 extra).'],
+    [3, 'Bard College', 'Choose a Bard College subclass.'],
+    [3, 'Expertise', 'Choose two skill proficiencies to double your proficiency bonus with.'],
+    [4, 'ASI', 'Ability Score Improvement or feat.'],
+    [5, 'Bardic Inspiration (d8)', 'Your Bardic Inspiration die increases to d8.'],
+    [5, 'Font of Inspiration', 'You regain all uses of Bardic Inspiration when you finish a short or long rest.'],
+    [6, 'Countercharm', 'Use an action to perform music; friendly creatures within 30 ft have advantage on saving throws against being frightened or charmed until you stop.'],
+    [6, 'College Feature', 'Additional feature from your Bard College.'],
+    [8, 'ASI', 'Ability Score Improvement or feat.'],
+    [10, 'Bardic Inspiration (d10)', 'Your Bardic Inspiration die increases to d10.'],
+    [10, 'Expertise', 'Choose two more skill proficiencies to double your proficiency bonus with.'],
+    [10, 'Magical Secrets', 'Choose two spells from any class. They count as bard spells for you.'],
+    [12, 'ASI', 'Ability Score Improvement or feat.'],
+  ],
+  Cleric: [
+    [1, 'Spellcasting', 'You can cast cleric spells using WIS as your spellcasting ability.'],
+    [1, 'Divine Domain', 'Choose a divine domain subclass that grants you domain spells and features.'],
+    [2, 'Channel Divinity', 'Channel divine energy to fuel magical effects. You have one use, regained on short or long rest.'],
+    [2, 'Channel Divinity: Turn Undead', 'As an action, present your holy symbol; undead within 30 ft that can see or hear you must make a WIS save or be turned for 1 minute.'],
+    [4, 'ASI', 'Ability Score Improvement or feat.'],
+    [5, 'Destroy Undead (CR 1/2)', 'When undead fails its saving throw against your Turn Undead, it is instantly destroyed if its CR is at or below 1/2.'],
+    [6, 'Channel Divinity (2/rest)', 'You can use Channel Divinity twice between rests.'],
+    [6, 'Divine Domain Feature', 'Additional feature from your Divine Domain.'],
+    [8, 'ASI', 'Ability Score Improvement or feat.'],
+    [8, 'Destroy Undead (CR 1)', 'Your Destroy Undead now affects CR 1 or lower creatures.'],
+    [10, 'Divine Intervention', 'Implore your deity for aid. Roll d100; if you roll equal to or lower than your cleric level, your deity intervenes.'],
+    [11, 'Destroy Undead (CR 2)', 'Your Destroy Undead now affects CR 2 or lower creatures.'],
+    [12, 'ASI', 'Ability Score Improvement or feat.'],
+  ],
+  Druid: [
+    [1, 'Druidic', 'You know Druidic, the secret language of druids. You can speak and leave hidden messages in it.'],
+    [1, 'Spellcasting', 'You can cast druid spells using WIS as your spellcasting ability.'],
+    [2, 'Wild Shape', 'Use your action to magically assume the shape of a beast you have seen before (up to CR 1/4, no fly or swim speed at level 2).'],
+    [2, 'Druid Circle', 'Choose a Druid Circle subclass.'],
+    [4, 'Wild Shape Improvement', 'Can now assume the shape of beasts up to CR 1/2 with a swimming speed.'],
+    [4, 'ASI', 'Ability Score Improvement or feat.'],
+    [6, 'Druid Circle Feature', 'Additional feature from your Druid Circle.'],
+    [8, 'Wild Shape Improvement', 'Can now assume the shape of beasts up to CR 1 with a flying speed.'],
+    [8, 'ASI', 'Ability Score Improvement or feat.'],
+    [10, 'Druid Circle Feature', 'Additional feature from your Druid Circle.'],
+    [12, 'ASI', 'Ability Score Improvement or feat.'],
+  ],
+  Fighter: [
+    [1, 'Fighting Style', 'Adopt a particular style of fighting as your specialty.'],
+    [1, 'Second Wind', 'Use a bonus action to regain HP equal to 1d10 + your fighter level once per short or long rest.'],
+    [2, 'Action Surge', 'On your turn, take one additional action. Usable once per short or long rest (twice at level 17).'],
+    [3, 'Martial Archetype', 'Choose a Martial Archetype subclass.'],
+    [4, 'ASI', 'Ability Score Improvement or feat.'],
+    [5, 'Extra Attack', 'You can attack twice whenever you take the Attack action on your turn.'],
+    [6, 'ASI', 'Ability Score Improvement or feat.'],
+    [7, 'Martial Archetype Feature', 'Additional feature from your Martial Archetype.'],
+    [8, 'ASI', 'Ability Score Improvement or feat.'],
+    [9, 'Indomitable', 'Reroll a saving throw that you fail (once per long rest).'],
+    [10, 'Martial Archetype Feature', 'Additional feature from your Martial Archetype.'],
+    [11, 'Extra Attack (3)', 'You can attack three times whenever you take the Attack action.'],
+    [12, 'ASI', 'Ability Score Improvement or feat.'],
+  ],
+  Monk: [
+    [1, 'Unarmored Defense', 'While not wearing armor or wielding a shield, AC equals 10 + DEX modifier + WIS modifier.'],
+    [1, 'Martial Arts', 'Use DEX instead of STR for monk weapons and unarmed strikes. Roll a d4 for unarmed strike damage. Make one unarmed strike as a bonus action.'],
+    [2, 'Ki', 'You have ki points equal to your monk level. Regained on short or long rest.'],
+    [2, 'Flurry of Blows', 'Spend 1 ki point to make two unarmed strikes as a bonus action after taking the Attack action.'],
+    [2, 'Patient Defense', 'Spend 1 ki point to take the Dodge action as a bonus action.'],
+    [2, 'Step of the Wind', 'Spend 1 ki point to Dash or Disengage as a bonus action. Your jump distance is doubled.'],
+    [2, 'Unarmored Movement', 'Speed increases by 10 ft while not wearing armor or wielding a shield.'],
+    [3, 'Monastic Tradition', 'Choose a Monastic Tradition subclass.'],
+    [3, 'Deflect Missiles', 'Use your reaction to deflect or catch a ranged weapon attack, reducing damage by 1d10 + DEX + monk level.'],
+    [4, 'ASI', 'Ability Score Improvement or feat.'],
+    [4, 'Slow Fall', 'Reduce falling damage by 5 × monk level using your reaction.'],
+    [5, 'Extra Attack', 'You can attack twice whenever you take the Attack action.'],
+    [5, 'Stunning Strike', 'Spend 1 ki point when you hit with a melee attack; the target must succeed on a CON save or be stunned until end of your next turn.'],
+    [6, 'Ki-Empowered Strikes', 'Your unarmed strikes count as magical for overcoming resistance and immunity.'],
+    [6, 'Monastic Tradition Feature', 'Additional feature from your Monastic Tradition.'],
+    [7, 'Evasion', 'When subjected to a DEX save for half damage, you take no damage on a success and half on a failure.'],
+    [7, 'Stillness of Mind', 'Use an action to end the charmed or frightened condition on yourself.'],
+    [8, 'ASI', 'Ability Score Improvement or feat.'],
+  ],
+  Paladin: [
+    [1, 'Divine Sense', 'As an action, detect the presence of celestials, fiends, and undead within 60 ft until end of next turn. Uses equal to 1 + CHA modifier per long rest.'],
+    [1, 'Lay on Hands', 'Pool of healing equal to 5 × paladin level. Use an action to restore HP from the pool or expend 5 points to cure a disease or poison.'],
+    [2, 'Fighting Style', 'Adopt a particular style of fighting as your specialty.'],
+    [2, 'Spellcasting', 'You can cast paladin spells using CHA as your spellcasting ability.'],
+    [2, 'Divine Smite', 'When you hit with a melee weapon attack, expend a spell slot to deal extra radiant damage (2d8 + 1d8 per spell level above 1st).'],
+    [3, 'Divine Health', 'The divine magic flowing through you makes you immune to disease.'],
+    [3, 'Sacred Oath', 'Choose a Sacred Oath subclass.'],
+    [4, 'ASI', 'Ability Score Improvement or feat.'],
+    [5, 'Extra Attack', 'You can attack twice whenever you take the Attack action.'],
+    [6, 'Aura of Protection', 'Add your CHA modifier (min +1) to saving throws for you and friendly creatures within 10 ft while you are conscious.'],
+    [7, 'Sacred Oath Feature', 'Additional feature from your Sacred Oath.'],
+    [8, 'ASI', 'Ability Score Improvement or feat.'],
+    [10, 'Aura of Courage', 'Friendly creatures within 10 ft can\'t be frightened while you are conscious.'],
+    [11, 'Improved Divine Smite', 'Whenever you hit with a melee weapon, deal an extra 1d8 radiant damage.'],
+    [12, 'ASI', 'Ability Score Improvement or feat.'],
+  ],
+  Ranger: [
+    [1, 'Favored Enemy', 'Choose a type of favored enemy. Advantage on survival checks to track them, INT checks to recall info, learn one language of your favored enemies.'],
+    [1, 'Natural Explorer', 'Choose a favored terrain. Gain several exploration benefits in that terrain.'],
+    [2, 'Fighting Style', 'Adopt a particular style of fighting as your specialty.'],
+    [2, 'Spellcasting', 'You can cast ranger spells using WIS as your spellcasting ability.'],
+    [3, 'Ranger Archetype', 'Choose a Ranger Archetype subclass.'],
+    [3, 'Primeval Awareness', 'Expend a spell slot to sense the presence of certain creature types within 1 mile (6 miles in favored terrain) for 1 minute.'],
+    [4, 'ASI', 'Ability Score Improvement or feat.'],
+    [5, 'Extra Attack', 'You can attack twice whenever you take the Attack action.'],
+    [6, 'Favored Enemy Improvement', 'Choose one more favored enemy and one more language.'],
+    [6, 'Natural Explorer Improvement', 'Choose one more favored terrain.'],
+    [7, 'Ranger Archetype Feature', 'Additional feature from your Ranger Archetype.'],
+    [8, 'ASI', 'Ability Score Improvement or feat.'],
+    [8, 'Land\'s Stride', 'Moving through nonmagical difficult terrain costs no extra movement. Advantage on saves against plants that impede movement.'],
+    [10, 'Natural Explorer Improvement', 'Choose one more favored terrain.'],
+    [10, 'Hide in Plain Sight', 'Spend 1 minute camouflaging yourself, gaining +10 bonus to DEX (Stealth) while motionless.'],
+    [12, 'ASI', 'Ability Score Improvement or feat.'],
+  ],
+  Rogue: [
+    [1, 'Expertise', 'Double your proficiency bonus for two skill proficiencies of your choice.'],
+    [1, 'Sneak Attack', 'Deal extra 1d6 damage once per turn when you have advantage or an ally is adjacent to the target (increases by 1d6 every odd level).'],
+    [1, 'Thieves\' Cant', 'A secret mix of dialect, jargon, and code that allows you to hide messages in normal conversation.'],
+    [2, 'Cunning Action', 'Use a bonus action to Dash, Disengage, or Hide on each of your turns.'],
+    [3, 'Roguish Archetype', 'Choose a Roguish Archetype subclass.'],
+    [4, 'ASI', 'Ability Score Improvement or feat.'],
+    [5, 'Uncanny Dodge', 'When an attacker you can see hits you, use your reaction to halve the attack\'s damage.'],
+    [6, 'Expertise', 'Double your proficiency bonus for two more skill proficiencies.'],
+    [7, 'Evasion', 'When subjected to a DEX save for half damage, you take no damage on success and half on failure.'],
+    [8, 'ASI', 'Ability Score Improvement or feat.'],
+    [9, 'Roguish Archetype Feature', 'Additional feature from your Roguish Archetype.'],
+    [10, 'ASI', 'Ability Score Improvement or feat.'],
+    [11, 'Reliable Talent', 'Treat any d20 roll of 9 or lower as a 10 for ability checks you are proficient in.'],
+    [12, 'ASI', 'Ability Score Improvement or feat.'],
+  ],
+  Sorcerer: [
+    [1, 'Spellcasting', 'You can cast sorcerer spells using CHA as your spellcasting ability.'],
+    [1, 'Sorcerous Origin', 'Choose a Sorcerous Origin subclass that grants you features at levels 1, 6, 14, and 18.'],
+    [2, 'Font of Magic', 'You have sorcery points equal to your sorcerer level. Regained on long rest.'],
+    [2, 'Flexible Casting', 'Convert sorcery points to spell slots or convert spell slots to sorcery points.'],
+    [3, 'Metamagic', 'Choose two Metamagic options to twist your spells.'],
+    [4, 'ASI', 'Ability Score Improvement or feat.'],
+    [5, 'Sorcerous Origin Feature', 'Additional feature from your Sorcerous Origin.'],
+    [6, 'Sorcerous Origin Feature', 'Additional feature from your Sorcerous Origin.'],
+    [8, 'ASI', 'Ability Score Improvement or feat.'],
+    [10, 'Metamagic', 'Choose one more Metamagic option.'],
+    [12, 'ASI', 'Ability Score Improvement or feat.'],
+  ],
+  Warlock: [
+    [1, 'Otherworldly Patron', 'Choose an Otherworldly Patron subclass that grants you spells and features.'],
+    [1, 'Pact Magic', 'Your spells are cast at your highest available slot and all slots are regained on short or long rest. Use CHA as your spellcasting ability.'],
+    [2, 'Eldritch Invocations', 'Choose two Eldritch Invocations that grant you permanent magical abilities.'],
+    [3, 'Pact Boon', 'Choose a Pact Boon: Pact of the Chain, Blade, or Tome.'],
+    [3, 'Otherworldly Patron Feature', 'Additional feature from your Otherworldly Patron.'],
+    [4, 'ASI', 'Ability Score Improvement or feat.'],
+    [5, 'Eldritch Invocations', 'Choose one more Eldritch Invocation.'],
+    [6, 'Otherworldly Patron Feature', 'Additional feature from your Otherworldly Patron.'],
+    [7, 'Eldritch Invocations', 'Choose one more Eldritch Invocation.'],
+    [8, 'ASI', 'Ability Score Improvement or feat.'],
+    [9, 'Eldritch Invocations', 'Choose one more Eldritch Invocation.'],
+    [10, 'Otherworldly Patron Feature', 'Additional feature from your Otherworldly Patron.'],
+    [11, 'Mystic Arcanum (6th level)', 'Choose a 6th-level spell as your mystic arcanum. Cast it once per long rest without using a spell slot.'],
+    [12, 'ASI', 'Ability Score Improvement or feat.'],
+  ],
+  Wizard: [
+    [1, 'Spellcasting', 'You can cast wizard spells using INT as your spellcasting ability.'],
+    [1, 'Arcane Recovery', 'Once per day during a short rest, recover spell slots with combined level up to half your wizard level (rounded up).'],
+    [2, 'Arcane Tradition', 'Choose an Arcane Tradition subclass.'],
+    [4, 'ASI', 'Ability Score Improvement or feat.'],
+    [6, 'Arcane Tradition Feature', 'Additional feature from your Arcane Tradition.'],
+    [8, 'ASI', 'Ability Score Improvement or feat.'],
+    [10, 'Arcane Tradition Feature', 'Additional feature from your Arcane Tradition.'],
+    [12, 'ASI', 'Ability Score Improvement or feat.'],
+  ],
+};
+
+function getClassFeaturesUpToLevel(className, level) {
+  const list = CLASS_FEATURES[className] || [];
+  return list.filter(([lvl]) => lvl <= level).map(([lvl, name, desc]) => ({ name, desc }));
+}
+
 function renderFeaturesSection(ch) {
+  const features = ch.featuresList || [];
+  const rows = features.map((f, i) => `
+    <div class="feature-row" id="feat-row-${i}">
+      <div class="feature-row-content">
+        <input class="feature-name-input" value="${esc(f.name)}" placeholder="Feature name"
+          oninput="updateFeatureField(${i},'name',this.value)" onblur="saveData(db)">
+        <span class="feature-sep">—</span>
+        <input class="feature-desc-input" value="${esc(f.desc)}" placeholder="Description"
+          oninput="updateFeatureField(${i},'desc',this.value)" onblur="saveData(db)">
+      </div>
+      <button class="feature-del-btn" onclick="removeFeature(${i})" title="Remove">&times;</button>
+    </div>`).join('');
+
   return `<div class="sheet-panel" style="margin-top:0.6rem">
     <div class="cs-section-label">Features &amp; Traits</div>
-    <textarea class="sheet-textarea" rows="8" placeholder="Class features, racial traits, feats..." oninput="ch_field('features',this.value)">${esc(ch.features||'')}</textarea>
+    <div id="features-list">
+      ${rows || '<div class="feature-empty">No features yet.</div>'}
+    </div>
+    <div class="feature-add-row">
+      <button class="btn btn-sm feature-add-btn" onclick="addFeatureInline()">+ Add Feature</button>
+      ${features.length === 0 && (CLASS_FEATURES[ch.class] || CLASS_FEATURES[ch.className]) ? `<button class="btn btn-sm" onclick="populateClassFeatures()" style="margin-left:0.4rem">Import Class Features</button>` : ''}
+    </div>
   </div>`;
 }
 
@@ -1533,6 +1943,167 @@ function renderNotesSection(ch) {
   return `<div class="sheet-panel" style="margin-top:0.6rem">
     <div class="cs-section-label">Notes</div>
     <textarea class="sheet-textarea" rows="6" placeholder="Session notes, quest logs, NPC info..." oninput="ch_field('notes',this.value)">${esc(ch.notes||'')}</textarea>
+  </div>`;
+}
+
+// ── Sheet Tab System ─────────────────────────────────────────────────────────
+function switchSheetTab(tab) {
+  sheetTab = tab;
+  const content = document.getElementById('mid-tab-content');
+  if (content) {
+    const ch = db.characters[currentCharId];
+    if (ch) content.innerHTML = renderMidTabContent(ch);
+  }
+  document.querySelectorAll('.sheet-mid-tab').forEach(el =>
+    el.classList.toggle('active', el.dataset.tab === tab)
+  );
+  // Re-trigger spell tab content if on spells tab
+  if (tab === 'spells') renderSpellTabContent();
+}
+
+function renderMidTabContent(ch) {
+  switch (sheetTab) {
+    case 'combat':   return renderCombatSection(ch) + renderAttacksSection(ch);
+    case 'spells':   return renderSpellsSection(ch);
+    case 'inventory': return renderInventoryTab(ch);
+    case 'features':  return renderFeaturesTab(ch);
+    case 'notes':     return renderNotesTab(ch);
+    default:          return '';
+  }
+}
+
+function renderInventoryTab(ch) {
+  const strScore = ch.abilities?.str || 10;
+  const maxCarry = strScore * 15;
+  const items = ch.equipment || [];
+  const encumbrance = renderEncumbrance(ch, maxCarry);
+  return `${renderEquipmentCurrency(ch)}
+    ${encumbrance}`;
+}
+
+function renderEncumbrance(ch, maxCarry) {
+  const totalWeight = (ch.carryWeight || 0);
+  const pct = maxCarry > 0 ? Math.min(100, Math.round((totalWeight / maxCarry) * 100)) : 0;
+  const barClass = pct >= 100 ? 'low' : pct >= 66 ? 'mid' : '';
+  return `<div class="sheet-panel" style="margin-top:0.6rem">
+    <div class="cs-section-label">Encumbrance</div>
+    <div class="flex gap-2" style="align-items:center;margin-bottom:0.4rem">
+      <input type="number" min="0" value="${totalWeight}" oninput="ch_field('carryWeight',+this.value)" style="width:60px;text-align:center;background:transparent;border:none;border-bottom:1px solid var(--border);color:var(--gold);font-weight:bold;font-size:1rem" title="Current carry weight">
+      <span class="text-dim" style="font-size:0.8rem">/ ${maxCarry} lbs (STR ${ch.abilities?.str || 10} &times; 15)</span>
+    </div>
+    <div class="hp-bar-wrap"><div class="hp-bar ${barClass}" style="width:${pct}%"></div></div>
+  </div>`;
+}
+
+function renderFeaturesTab(ch) {
+  const features = ch.featuresList || [];
+  const featureCards = features.length ? features.map((f, i) => `
+    <div class="feature-card">
+      <div class="feature-card-header" onclick="toggleFeatureDesc('feature-desc-${i}')">
+        <span class="feature-card-name">${esc(f.name)}</span>
+        <span class="feature-card-toggle">&#9662;</span>
+      </div>
+      <div class="feature-card-body hidden" id="feature-desc-${i}">
+        <textarea class="sheet-textarea" rows="3" placeholder="Description..." oninput="updateFeatureField(${i},'desc',this.value)">${esc(f.desc || '')}</textarea>
+      </div>
+    </div>`).join('') : '';
+
+  return `<div class="sheet-panel">
+    <div class="cs-section-label">Features &amp; Traits</div>
+    ${featureCards}
+    <div class="flex gap-1" style="margin-top:0.5rem">
+      <input type="text" id="feature-name-input" placeholder="Feature name..." style="flex:1" onkeydown="if(event.key==='Enter')addFeature()">
+      <button class="btn btn-sm" onclick="addFeature()">+ Add</button>
+    </div>
+    <div style="margin-top:0.8rem">
+      <div class="cs-field-label" style="margin-bottom:0.2rem;color:var(--text-dim)">Legacy (freeform)</div>
+      <textarea class="sheet-textarea" rows="4" placeholder="Class features, racial traits, feats..." oninput="ch_field('features',this.value)">${esc(ch.features || '')}</textarea>
+    </div>
+  </div>
+  ${renderProficienciesLanguages(ch)}`;
+}
+
+function renderNotesTab(ch) {
+  const log = (ch.sessionLog || []).slice(0, 20);
+  const logHtml = log.length ? `
+    <div class="sheet-panel" style="margin-top:0.6rem">
+      <div class="cs-section-label">Session Log</div>
+      ${log.map(e => `<div class="spell-log-entry">${esc(e.text)}<span class="spell-log-ts">${new Date(e.ts).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</span></div>`).join('')}
+    </div>` : '';
+  return `<div class="sheet-panel">
+    <div class="cs-section-label">Notes</div>
+    <textarea class="sheet-textarea" rows="14" placeholder="Session notes, quest logs, NPC info..." oninput="ch_field('notes',this.value)">${esc(ch.notes || '')}</textarea>
+  </div>
+  ${logHtml}`;
+}
+
+function toggleFeatureDesc(id) { document.getElementById(id)?.classList.toggle('hidden'); }
+function addFeatureInline() {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  ch.featuresList = ch.featuresList || [];
+  ch.featuresList.push({ name: '', desc: '' });
+  saveData(db); renderApp();
+  // Focus the new name input
+  setTimeout(() => {
+    const inputs = document.querySelectorAll('.feature-name-input');
+    if (inputs.length) inputs[inputs.length - 1].focus();
+  }, 50);
+}
+function addFeature() {
+  const input = document.getElementById('feature-name-input');
+  const val = input?.value?.trim(); if (!val) return;
+  const ch = db.characters[currentCharId];
+  ch.featuresList = ch.featuresList || [];
+  ch.featuresList.push({ name: val, desc: '' });
+  input.value = '';
+  saveData(db); renderApp();
+}
+function removeFeature(i) {
+  db.characters[currentCharId].featuresList.splice(i, 1);
+  saveData(db); renderApp();
+}
+function updateFeatureField(i, field, value) {
+  const ch = db.characters[currentCharId];
+  if (ch.featuresList && ch.featuresList[i]) ch.featuresList[i][field] = value;
+}
+function populateClassFeatures() {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  const cls = ch.class || ch.className || '';
+  const lvl = parseInt(ch.level) || 1;
+  const feats = getClassFeaturesUpToLevel(cls, lvl);
+  if (!feats.length) return;
+  ch.featuresList = [...(ch.featuresList || []), ...feats];
+  saveData(db); renderApp();
+}
+
+function renderDefensesSection(ch) {
+  const fields = [
+    ['Resistances',         'resistances',        'Fire, cold, bludgeoning...'],
+    ['Vulnerabilities',     'vulnerabilities',    'Lightning, poison...'],
+    ['Immunities',          'damageImmunities',   'Poison, psychic...'],
+    ['Condition Immunities','conditionImmunities','Charmed, frightened...'],
+  ];
+  return `<div class="sheet-panel" style="margin-top:0.6rem">
+    <div class="cs-section-label">Defenses</div>
+    ${fields.map(([label, field, ph]) => `
+      <div class="cs-field-label" style="margin-bottom:0.2rem">${label}</div>
+      <textarea class="sheet-textarea" rows="2" placeholder="${ph}" oninput="ch_field('${field}',this.value)">${esc(ch[field] || '')}</textarea>`).join('')}
+  </div>`;
+}
+
+function renderSensesSection(ch, pb) {
+  const passPerc = 10 + skillBonus(ch, 'Perception',   'wis', pb);
+  const passInv  = 10 + skillBonus(ch, 'Investigation','int', pb);
+  const passIns  = 10 + skillBonus(ch, 'Insight',      'wis', pb);
+  return `<div class="sheet-panel" style="margin-top:0.6rem">
+    <div class="cs-section-label">Senses</div>
+    <div class="senses-passive-grid">
+      <div class="senses-passive-row"><span class="cs-field-label">Passive Perception</span><span class="senses-val">${passPerc}</span></div>
+      <div class="senses-passive-row"><span class="cs-field-label">Passive Investigation</span><span class="senses-val">${passInv}</span></div>
+      <div class="senses-passive-row"><span class="cs-field-label">Passive Insight</span><span class="senses-val">${passIns}</span></div>
+    </div>
+    <div class="cs-field-label" style="margin:0.6rem 0 0.2rem">Other Senses</div>
+    <textarea class="sheet-textarea" rows="2" placeholder="Darkvision 60 ft., Tremorsense 30 ft...." oninput="ch_field('otherSenses',this.value)">${esc(ch.otherSenses || '')}</textarea>
   </div>`;
 }
 
@@ -1591,6 +2162,7 @@ function renderCharacterSheet() {
     <!-- 3-Column Body -->
     <div class="cs-page">
       <div class="cs-col-left">
+        ${renderPortraitCard(ch)}
         ${renderAbilityScores(ch)}
         ${renderCoreStats(ch, pb)}
         ${renderSavingThrows(ch, pb)}
@@ -1665,6 +2237,178 @@ function updateDeathSave(type, index, checked) {
   db.characters[currentCharId].deathSaves[type] = checked?index+1:index;
   saveData(db);
 }
+
+function updateHPDisplay() {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  const pct = ch.combat.maxHP > 0 ? Math.round((ch.combat.currentHP / ch.combat.maxHP) * 100) : 100;
+  const bar = document.getElementById('cs-hp-bar');
+  if (bar) {
+    bar.style.width = pct + '%';
+    bar.className = 'hp-bar ' + (pct <= 25 ? 'low' : pct <= 50 ? 'mid' : '');
+  }
+  const valEl = document.getElementById('hp-current-val');
+  if (valEl) valEl.textContent = ch.combat.currentHP;
+  saveData(db);
+}
+
+function openDamagePrompt() {
+  openModal(`<h2>&#8722; Take Damage</h2>
+    <div class="form-group"><label>Damage Amount</label><input type="number" id="dmg-amount" min="1" value="1" autofocus></div>
+    <div class="form-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-danger" onclick="applyDamage()">Apply Damage</button>
+    </div>`);
+  setTimeout(() => document.getElementById('dmg-amount')?.focus(), 50);
+}
+
+function applyDamage() {
+  const amount = parseInt(document.getElementById('dmg-amount')?.value) || 0;
+  if (amount <= 0) { closeModal(); return; }
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  let remaining = amount;
+  // Temp HP absorbs first
+  if (ch.combat.tempHP > 0) {
+    const absorbed = Math.min(ch.combat.tempHP, remaining);
+    ch.combat.tempHP -= absorbed;
+    remaining -= absorbed;
+  }
+  ch.combat.currentHP = Math.max(0, ch.combat.currentHP - remaining);
+  closeModal(); saveData(db); renderApp();
+}
+
+function openHealPrompt() {
+  openModal(`<h2>+ Heal</h2>
+    <div class="form-group"><label>Heal Amount</label><input type="number" id="heal-amount" min="1" value="1" autofocus></div>
+    <div class="form-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="applyHeal()">Apply Healing</button>
+    </div>`);
+  setTimeout(() => document.getElementById('heal-amount')?.focus(), 50);
+}
+
+function applyHeal() {
+  const amount = parseInt(document.getElementById('heal-amount')?.value) || 0;
+  if (amount <= 0) { closeModal(); return; }
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  ch.combat.currentHP = Math.min(ch.combat.maxHP, ch.combat.currentHP + amount);
+  closeModal(); saveData(db); renderApp();
+}
+
+function adjustTempHP(delta) {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  ch.combat.tempHP = Math.max(0, (ch.combat.tempHP || 0) + delta);
+  saveData(db); renderApp();
+}
+
+function setTempHP(val) {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  ch.combat.tempHP = Math.max(0, Math.floor(val) || 0);
+  saveData(db); renderApp();
+}
+
+function openEditHP(field) {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  const label = field === 'maxHP' ? 'Max HP' : 'Temp HP';
+  const val = ch.combat[field] || 0;
+  openModal(`<h2>Edit ${label}</h2>
+    <div class="form-group"><label>${label}</label><input type="number" id="edit-hp-val" min="0" value="${val}" autofocus></div>
+    <div class="form-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="combatField('${field}',+document.getElementById('edit-hp-val').value);closeModal();saveData(db);renderApp()">Save</button>
+    </div>`);
+  setTimeout(() => document.getElementById('edit-hp-val')?.focus(), 50);
+}
+
+function doLongRest() {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  ch.combat.currentHP = ch.combat.maxHP;
+  ch.combat.tempHP = 0;
+  // Restore half hit dice (minimum 1)
+  const hdTotal = ch.level || 1;
+  const restore = Math.max(1, Math.floor(hdTotal / 2));
+  ch.combat.hitDiceUsed = Math.max(0, (ch.combat.hitDiceUsed || 0) - restore);
+  // Restore all spell slots
+  if (ch.spells?.slotsMax) {
+    for (let lvl = 1; lvl <= 9; lvl++) {
+      ch.spells.slots[lvl] = ch.spells.slotsMax[lvl] || 0;
+    }
+  }
+  // Reset death saves
+  ch.deathSaves = { successes: 0, failures: 0 };
+  saveData(db); renderApp();
+}
+
+function openShortRestDialog() {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  const hdSides = HIT_DICE[ch.class] || 8;
+  const hdTotal = ch.level || 1;
+  const hdUsed = ch.combat.hitDiceUsed || 0;
+  const hdRemaining = Math.max(0, hdTotal - hdUsed);
+  const conMod = mod(ch.abilities?.con || 10);
+
+  openModal(`<h2>&#9788; Short Rest</h2>
+    <p style="font-size:0.85rem;color:var(--text-dim);margin-bottom:0.8rem">Spend hit dice to recover HP. Each die rolls 1d${hdSides} + ${conMod >= 0 ? '+' : ''}${conMod} (CON).</p>
+    <div style="font-size:0.9rem;margin-bottom:0.6rem"><strong>Hit Dice Remaining:</strong> <span id="sr-hd-remaining">${hdRemaining}</span> / ${hdTotal}d${hdSides}</div>
+    <div style="font-size:0.9rem;margin-bottom:0.6rem"><strong>Current HP:</strong> <span id="sr-hp-current">${ch.combat.currentHP}</span> / ${ch.combat.maxHP}</div>
+    <div id="sr-roll-log" style="max-height:120px;overflow-y:auto;margin-bottom:0.8rem"></div>
+    <div class="form-actions">
+      <button class="btn" id="sr-roll-btn" onclick="shortRestRollHD()" ${hdRemaining <= 0 || ch.combat.currentHP >= ch.combat.maxHP ? 'disabled' : ''}>Roll Hit Die</button>
+      <button class="btn btn-primary" onclick="closeModal()">Done</button>
+    </div>`);
+}
+
+function shortRestRollHD() {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  const hdSides = HIT_DICE[ch.class] || 8;
+  const hdTotal = ch.level || 1;
+  const hdUsed = ch.combat.hitDiceUsed || 0;
+  const hdRemaining = hdTotal - hdUsed;
+  if (hdRemaining <= 0 || ch.combat.currentHP >= ch.combat.maxHP) return;
+
+  const conMod = mod(ch.abilities?.con || 10);
+  const roll = Math.ceil(Math.random() * hdSides);
+  const healed = Math.max(1, roll + conMod);
+  ch.combat.currentHP = Math.min(ch.combat.maxHP, ch.combat.currentHP + healed);
+  ch.combat.hitDiceUsed = (ch.combat.hitDiceUsed || 0) + 1;
+  saveData(db);
+
+  // Update dialog
+  const log = document.getElementById('sr-roll-log');
+  if (log) {
+    log.innerHTML += `<div style="font-size:0.82rem;padding:0.2rem 0;border-bottom:1px solid var(--border)">Rolled <strong>1d${hdSides} = ${roll}</strong> + ${conMod} CON = <span style="color:var(--green-lt);font-weight:bold">+${healed} HP</span></div>`;
+    log.scrollTop = log.scrollHeight;
+  }
+  const remEl = document.getElementById('sr-hd-remaining');
+  if (remEl) remEl.textContent = hdTotal - ch.combat.hitDiceUsed;
+  const hpEl = document.getElementById('sr-hp-current');
+  if (hpEl) hpEl.textContent = ch.combat.currentHP;
+
+  // Disable button if no more dice or full HP
+  const btn = document.getElementById('sr-roll-btn');
+  if (btn && (hdTotal - ch.combat.hitDiceUsed <= 0 || ch.combat.currentHP >= ch.combat.maxHP)) {
+    btn.disabled = true;
+  }
+
+  // Update bar behind modal
+  updateHPDisplay();
+}
+
+function adjustHitDice(delta) {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  const hdTotal = ch.level || 1;
+  const used = ch.combat.hitDiceUsed || 0;
+  if (delta < 0) {
+    // Use a die (increase used)
+    if (used >= hdTotal) return;
+    ch.combat.hitDiceUsed = used + 1;
+  } else {
+    // Restore a die (decrease used)
+    if (used <= 0) return;
+    ch.combat.hitDiceUsed = used - 1;
+  }
+  saveData(db); renderApp();
+}
+
 function addAttack() {
   const ch = db.characters[currentCharId];
   ch.attacks = ch.attacks||[];
