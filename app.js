@@ -1258,6 +1258,7 @@ let customSpells  = null; // [{...}, ...]  user-created
 let spellViewTab  = 'all'; // 'all' | 'known' | 'prepared'
 let spellFilters  = { q:'', level:'all', school:'all', cls:'all', source:'all', conc:false, ritual:false };
 let spellFetching = false;
+let spellShowCount = 100;
 
 function loadAllSpells() {
   if (allSpellsDb) return;
@@ -1314,6 +1315,7 @@ function setSpellStatus(msg, isErr) {
 
 function switchSpellTab(tab) {
   spellViewTab = tab;
+  spellShowCount = 100;  // Reset to initial count when switching tabs
   renderSpellTabContent();
   document.querySelectorAll('.spell-tab').forEach(el => el.classList.toggle('active', el.dataset.tab === tab));
 }
@@ -1321,6 +1323,7 @@ function switchSpellTab(tab) {
 function applySpellFilter(key, value) {
   if (typeof spellFilters[key] === 'boolean') spellFilters[key] = !spellFilters[key];
   else spellFilters[key] = value;
+  spellShowCount = 100;  // Reset to initial count when filters change
   renderSpellTabContent();
 }
 
@@ -1413,11 +1416,12 @@ function renderAllSpellsView(ch) {
   }
 
   const filtered = getFilteredAllSpells(ch);
-  const show = filtered.slice(0, 100);
+  const show = filtered.slice(0, spellShowCount);
+  const remaining = Math.max(0, filtered.length - spellShowCount);
 
   return `${renderFilterBar()}
     <div style="display:flex;align-items:center;justify-content:space-between;margin:0.3rem 0 0.4rem;font-size:0.7rem;color:var(--text-dim)">
-      <span>${filtered.length} spells${filtered.length > 100 ? ' (showing 100)' : ''}</span>
+      <span>${filtered.length} spells${filtered.length > spellShowCount ? ` (showing ${spellShowCount})` : ''}</span>
       <div class="flex gap-1">
         <button class="btn btn-sm" onclick="openCustomSpellModal()">+ Custom Spell</button>
         <button class="btn btn-sm" onclick="fetchAllSpells()" title="Reload spells from local file">↻</button>
@@ -1451,7 +1455,8 @@ function renderAllSpellsView(ch) {
           </div>
           <div class="spell-desc hidden" id="sd-all-${esc(sp.name).replace(/\s/g,'-')}" style="margin:0 0 0.3rem 0.5rem;border-top:none;padding-top:0.2rem">${esc(sp.desc||'No description.')}</div>`;
         }).join('')}
-    </div>`;
+    </div>
+    ${remaining > 0 ? `<button class="btn btn-sm" style="width:100%;margin-top:0.5rem" onclick="spellShowCount+=100;renderSpellTabContent()">Show more (${remaining} remaining)</button>` : ''}`;
 }
 
 function renderKnownView(ch) {
