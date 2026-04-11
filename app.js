@@ -72,7 +72,7 @@ let currentNpcId = null;
 let currentTab = 'core'; // still used by campaign tabs
 let monsterCache = null;
 let charPanelOpen = false;
-let sheetTab = 'combat'; // 'combat' | 'spells' | 'inventory' | 'features' | 'notes'
+let sheetTab = 'combat';
 let wizardData = {};
 
 // ── Routing & Breadcrumb ───────────────────────────────────────────────────────
@@ -1977,19 +1977,24 @@ function renderFeaturesSection(ch) {
       </div>`;
   }).join('');
 
-  // Custom feature rows (editable inline)
+  // Custom feature cards (styled like subclass cards but editable)
   const customRows = customFeatures.map(f => {
     const i = allFeatures.indexOf(f);
+    const idKey = `cf-desc-${i}`;
     return `
-      <div class="feature-row" id="feat-row-${i}">
-        <div class="feature-row-content">
-          <input class="feature-name-input" value="${esc(f.name)}" placeholder="Feature name"
-            oninput="updateFeatureField(${i},'name',this.value)" onblur="saveData(db)">
-          <span class="feature-sep">—</span>
-          <input class="feature-desc-input" value="${esc(f.desc || '')}" placeholder="Description"
-            oninput="updateFeatureField(${i},'desc',this.value)" onblur="saveData(db)">
+      <div class="sf-card cf-card" id="feat-row-${i}">
+        <div class="sf-card-header cf-card-header" onclick="toggleSfCard('${idKey}', this)">
+          <span class="cf-custom-badge">Custom</span>
+          <input class="cf-name-input" value="${esc(f.name)}" placeholder="Feature name"
+            oninput="updateFeatureField(${i},'name',this.value)" onblur="saveData(db)"
+            onclick="event.stopPropagation()">
+          <span class="sf-toggle">▼</span>
+          <button class="feature-del-btn cf-del-btn" onclick="event.stopPropagation();removeFeature(${i})" title="Remove">&times;</button>
         </div>
-        <button class="feature-del-btn" onclick="removeFeature(${i})" title="Remove">&times;</button>
+        <div class="sf-card-body hidden" id="${idKey}">
+          <textarea class="cf-desc-input sheet-textarea" rows="3" placeholder="Describe this feature..."
+            oninput="updateFeatureField(${i},'desc',this.value)" onblur="saveData(db)">${esc(f.desc || '')}</textarea>
+        </div>
       </div>`;
   }).join('');
 
@@ -2041,30 +2046,6 @@ function renderNotesSection(ch) {
 }
 
 // ── Sheet Tab System ─────────────────────────────────────────────────────────
-function switchSheetTab(tab) {
-  sheetTab = tab;
-  const content = document.getElementById('mid-tab-content');
-  if (content) {
-    const ch = db.characters[currentCharId];
-    if (ch) content.innerHTML = renderMidTabContent(ch);
-  }
-  document.querySelectorAll('.sheet-mid-tab').forEach(el =>
-    el.classList.toggle('active', el.dataset.tab === tab)
-  );
-  // Re-trigger spell tab content if on spells tab
-  if (tab === 'spells') renderSpellTabContent();
-}
-
-function renderMidTabContent(ch) {
-  switch (sheetTab) {
-    case 'combat':   return renderCombatSection(ch) + renderAttacksSection(ch);
-    case 'spells':   return renderSpellsSection(ch);
-    case 'inventory': return renderInventoryTab(ch);
-    case 'features':  return renderFeaturesTab(ch);
-    case 'notes':     return renderNotesTab(ch);
-    default:          return '';
-  }
-}
 
 function renderInventoryTab(ch) {
   const strScore = ch.abilities?.str || 10;
