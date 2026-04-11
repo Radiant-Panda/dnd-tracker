@@ -423,6 +423,7 @@ main {
   margin-bottom: 0.35rem;
   overflow: hidden;
   background: rgba(155,109,255,0.04);
+  transition: opacity 0.15s ease;
 }
 .sf-card-header {
   display: flex;
@@ -585,11 +586,15 @@ main {
   align-items: center;
   gap: 0.4rem;
 }
+.subclass-wrap select {
+  transition: border-color 0.2s ease;
+}
 .subclass-source-badge {
   font-size: 0.6rem;
   font-weight: 600;
   letter-spacing: 0.5px;
   text-transform: uppercase;
+  transition: transform 0.2s ease, opacity 0.15s ease;
   color: var(--gold);
   background: rgba(232,213,100,0.1);
   border: 1px solid rgba(232,213,100,0.25);
@@ -643,7 +648,25 @@ main {
 }
 
 /* Resources panel */
-.res-panel { margin-top: 0.6rem; }
+.res-panel {
+  margin-top: 0.6rem;
+  transition: opacity 0.15s ease;
+}
+
+/* Panel refresh fade */
+@keyframes panel-refresh {
+  from {
+    opacity: 0.35;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.panel-refreshing {
+  animation: panel-refresh 0.22s ease-out;
+}
 .res-group-label {
   font-size: 0.62rem;
   font-weight: 700;

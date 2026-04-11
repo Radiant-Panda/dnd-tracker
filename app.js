@@ -2013,7 +2013,7 @@ function renderFeaturesSection(ch) {
       <button class="btn btn-sm feature-add-btn" onclick="addFeatureInline()">+ Add Feature</button>
     </div>`;
 
-  return `<div class="sheet-panel" style="margin-top:0.6rem">
+  return `<div class="sheet-panel features-panel" style="margin-top:0.6rem">
     <div class="cs-section-label">Features &amp; Traits</div>
     ${subSection}
     ${customSection}
@@ -2522,11 +2522,11 @@ function applySubclass(charId, className, subclassName) {
 
   ch.subclass = subclassName;
 
-  if (!subclassName) { saveData(db); renderApp(); return; }
+  if (!subclassName) { renderApp(); refreshPanels(); setTimeout(() => saveData(db), 0); return; }
 
   const subclassData = (typeof SUBCLASS_DATA !== 'undefined') &&
     SUBCLASS_DATA[className] && SUBCLASS_DATA[className][subclassName];
-  if (!subclassData) { saveData(db); renderApp(); return; }
+  if (!subclassData) { renderApp(); refreshPanels(); setTimeout(() => saveData(db), 0); return; }
 
   const level = ch.level || 1;
 
@@ -2561,8 +2561,22 @@ function applySubclass(charId, className, subclassName) {
     }
   });
 
-  saveData(db);
   renderApp();
+  // Fade in the affected panels after browser paints initial state
+  refreshPanels();
+  setTimeout(() => saveData(db), 0);
+}
+
+function refreshPanels() {
+  requestAnimationFrame(() => {
+    const panels = document.querySelectorAll('.res-panel, .features-panel');
+    panels.forEach(el => {
+      el.classList.add('panel-refreshing');
+    });
+    setTimeout(() => {
+      document.querySelectorAll('.panel-refreshing').forEach(el => el.classList.remove('panel-refreshing'));
+    }, 300);
+  });
 }
 
 function renderCharacterSheet() {
@@ -2646,13 +2660,33 @@ function renderCharacterSheet() {
 }
 
 // ── Character Field Update Functions ──────────────────────────────────────────
-function ch_field(field, value) { db.characters[currentCharId][field] = value; }
+function ch_field(field, value) {
+  const ch = db.characters[currentCharId];
+  ch[field] = value;
+  if (field === 'class') {
+    ch.subclass = '';
+    const wrap = document.querySelector('.subclass-wrap') || document.querySelector('.cs-header-field:has(label)');
+    const container = document.querySelector('.cs-header-field:nth-child(3)');
+    if (container) {
+      const label = container.querySelector('label');
+      container.innerHTML = '';
+      if (label) container.appendChild(label);
+      container.insertAdjacentHTML('beforeend', renderSubclassField(ch));
+    }
+  }
+}
+let _levelDebounce = null;
 function ch_field_level(value) {
   const ch = db.characters[currentCharId];
   ch.level = Math.min(20, Math.max(1, parseInt(value)||1));
   ch.proficiencyBonus = profBonus(ch.level);
-  syncSubclassFeatures(currentCharId);
-  saveData(db); renderApp();
+  if (_levelDebounce) clearTimeout(_levelDebounce);
+  _levelDebounce = setTimeout(() => {
+    syncSubclassFeatures(currentCharId);
+    renderApp();
+    refreshPanels();
+    setTimeout(() => saveData(db), 0);
+  }, 400);
 }
 function combatField(field, value) {
   db.characters[currentCharId].combat[field] = value;
