@@ -1338,6 +1338,14 @@ function renderSpellTabContent() {
   if      (spellViewTab === 'all')      el.innerHTML = renderAllSpellsView(ch);
   else if (spellViewTab === 'known')    el.innerHTML = renderKnownView(ch);
   else if (spellViewTab === 'prepared') el.innerHTML = renderPreparedView(ch);
+  // Keep tab count badges in sync
+  document.querySelectorAll('.spell-tab').forEach(btn => {
+    const tab = btn.dataset.tab;
+    const badge = btn.querySelector('.spell-count');
+    if (!badge) return;
+    if (tab === 'known')    badge.textContent = (ch.spells.known    || []).length;
+    if (tab === 'prepared') badge.textContent = (ch.spells.prepared || []).length;
+  });
 }
 
 function getFilteredAllSpells(ch) {
