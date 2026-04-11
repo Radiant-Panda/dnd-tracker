@@ -1327,6 +1327,11 @@ function applySpellFilter(key, value) {
 function renderSpellTabContent() {
   const el = document.getElementById('spell-tab-content'); if (!el) return;
   const ch = db.characters[currentCharId]; if (!ch) return;
+  // Auto-fetch spells if not loaded yet and not already fetching
+  if (spellViewTab === 'all' && !allSpellsDb && !spellFetching) {
+    fetchAllSpells();
+    return;
+  }
   if      (spellViewTab === 'all')      el.innerHTML = renderAllSpellsView(ch);
   else if (spellViewTab === 'known')    el.innerHTML = renderKnownView(ch);
   else if (spellViewTab === 'prepared') el.innerHTML = renderPreparedView(ch);
@@ -1402,9 +1407,8 @@ function renderAllSpellsView(ch) {
 
   if (!allSpellsDb) {
     return `${renderFilterBar()}
-      <div class="spell-loading">
-        No spell data loaded. <button class="btn btn-sm btn-primary" onclick="fetchAllSpells()">✾ Load All Spells</button>
-        <span id="spell-status" style="margin-left:0.5rem;font-size:0.75rem"></span>
+      <div class="spell-loading" style="padding:1rem;text-align:center">
+        <span id="spell-status" style="font-size:0.75rem;color:var(--text-dim)">✾ Loading spells…</span>
       </div>`;
   }
 
