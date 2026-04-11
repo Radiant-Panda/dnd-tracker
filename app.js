@@ -1528,7 +1528,7 @@ function renderSpellResultsHtml(ch) {
               ${sp._custom?`<span style="font-size:0.6rem;color:#c084fc;border:1px solid rgba(192,132,252,0.4);border-radius:3px;padding:0 3px;flex-shrink:0">✏</span>`:''}
               <span class="spell-name" style="font-size:0.82rem">${esc(sp.name)}</span>
               <span class="spell-badge" style="border-color:${sc};color:${sc};font-size:0.58rem">${esc(lvlLabel)}${lvlLabel&&school?' · ':''}${esc(school)}</span>
-              <span class="spell-source-badge" style="background:${srcInfo.color}">${srcInfo.abbr}</span>
+              ${srcInfo.abbr !== '?' ? `<span class="spell-source-badge" style="background:${srcInfo.color}">${srcInfo.abbr}</span>` : ''}
               ${sp.concentration==='yes'?`<span class="spell-tag conc">C</span>`:''}
               ${sp.ritual==='yes'?`<span class="spell-tag ritual">R</span>`:''}
             </div>
@@ -1710,7 +1710,7 @@ function confirmCast(spellName, slotLevel) {
   closeModal();
   renderSpellTabContent();
   // Flash the slot grid
-  const slotEl = document.querySelector(`.spell-slot-col:nth-child(${slotLevel}) .spell-slot-bubbles`);
+  const slotEl = document.querySelector(`.spell-slot-row:nth-child(${slotLevel}) .spell-slot-bubbles`);
   if (slotEl) { slotEl.style.transition='opacity 0.1s'; slotEl.style.opacity='0.3'; setTimeout(()=>slotEl.style.opacity='1', 200); }
 }
 
@@ -1809,16 +1809,16 @@ function renderSpellsSection(ch) {
         ${[1,2,3,4,5,6,7,8,9].map(lvl => {
           const cur = (ch.spells.slots||{})[lvl] || 0;
           const max = (ch.spells.slotsMax||{})[lvl] || 0;
-          if (max === 0) return '';
-          return `<div class="spell-slot-col">
-            <div class="spell-slot-level">${lvl}</div>
+          const ordinal = ['','1st','2nd','3rd','4th','5th','6th','7th','8th','9th'][lvl];
+          return `<div class="spell-slot-row${max === 0 ? ' spell-slot-row-empty' : ''}">
+            <span class="spell-slot-lbl">${ordinal}</span>
             <div class="spell-slot-bubbles">
-              ${Array.from({length:max},(_,i)=>`<div class="spell-bubble ${i<cur?'filled':''}" onclick="toggleSpellBubble(${lvl},${i})" title="Slot ${i+1}"></div>`).join('')}
+              ${Array.from({length:Math.max(max,0)},(_,i)=>`<div class="spell-bubble ${i<cur?'filled':''}" onclick="toggleSpellBubble(${lvl},${i})" title="Click to use/restore slot ${i+1}"></div>`).join('')}
             </div>
-            <div class="spell-slot-inputs">
-              <input type="number" min="0" max="9" value="${cur}" title="Current" oninput="updateSpellSlot(${lvl},+this.value)" class="spell-slot-num">
-              <span class="spell-slot-sep">/</span>
-              <input type="number" min="0" max="9" value="${max}" title="Max" oninput="updateSpellSlotMax(${lvl},+this.value)" class="spell-slot-num">
+            <div class="slot-max-ctrl">
+              <button class="slot-adj-btn" onclick="slotMaxAdj(${lvl},-1)">−</button>
+              <span class="slot-max-val">${max}</span>
+              <button class="slot-adj-btn" onclick="slotMaxAdj(${lvl},1)">+</button>
             </div>
           </div>`;
         }).join('')}
@@ -1883,6 +1883,15 @@ function updateSpellSlotMax(level, value) {
   ch.spells.slotsMax = ch.spells.slotsMax || {};
   ch.spells.slotsMax[level] = Math.max(0, parseInt(value) || 0);
   if ((ch.spells.slots[level] || 0) > ch.spells.slotsMax[level]) ch.spells.slots[level] = ch.spells.slotsMax[level];
+  saveData(db); renderApp();
+}
+
+function slotMaxAdj(level, delta) {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  ch.spells.slotsMax = ch.spells.slotsMax || {};
+  const newMax = Math.min(9, Math.max(0, (ch.spells.slotsMax[level] || 0) + delta));
+  ch.spells.slotsMax[level] = newMax;
+  if ((ch.spells.slots[level] || 0) > newMax) ch.spells.slots[level] = newMax;
   saveData(db); renderApp();
 }
 
