@@ -1448,7 +1448,8 @@ function renderAllSpellsView(ch) {
           const inK = known.has(sp.name), inP = prepared.has(sp.name);
           const sourceMap = { "Player's Handbook (2024)": {abbr:'PHB24',color:'#c084fc'}, "Xanathar's Guide to Everything": {abbr:'XGE',color:'#3b82f6'}, "Tasha's Cauldron of Everything": {abbr:'TCE',color:'#14b8a6'}, "Explorer's Guide to Wildemount": {abbr:'EGW',color:'#f59e0b'}, "Free Basic Rules (2024)": {abbr:'BR24',color:'#9b6dff'}, "Free Basic Rules (2014)": {abbr:'BR14',color:'#9b6dff'}, "Player's Handbook": {abbr:'PHB14',color:'#6d7b9b'} };
           const srcInfo = sourceMap[sp.source] || {abbr:'?',color:'#7b6d8d'};
-          const safeData = encodeURIComponent(JSON.stringify({name:sp.name,level_int:sp.level_int||0,school:sp.school||'',casting_time:sp.casting_time||'',range:sp.range||'',components:sp.components||'',concentration:sp.concentration||'no',ritual:sp.ritual||'no',desc:sp.desc||'',dnd_class:sp.dnd_class||'',_custom:sp._custom||false}));
+          // desc omitted — fullSpellData() looks it up from allSpellsDb at render time
+          const safeData = encodeURIComponent(JSON.stringify({name:sp.name,level_int:sp.level_int||0,school:sp.school||'',casting_time:sp.casting_time||'',range:sp.range||'',components:sp.components||'',concentration:sp.concentration||'no',ritual:sp.ritual||'no',dnd_class:sp.dnd_class||'',_custom:sp._custom||false}));
           return `<div class="spell-browser-row">
             <div class="spell-browser-left">
               ${sp._custom?`<span style="font-size:0.6rem;color:#c084fc;border:1px solid rgba(192,132,252,0.4);border-radius:3px;padding:0 3px;flex-shrink:0">✏</span>`:''}
@@ -1478,63 +1479,90 @@ function fullSpellData(sp) {
   return fromDb ? { ...fromDb, ...(typeof sp === 'object' ? sp : {}), desc: fromDb.desc || (typeof sp === 'object' ? sp.desc : '') } : sp;
 }
 
+function groupSpellsByLevel(spells) {
+  const levelLabel = lvl => lvl === 0 ? 'Cantrips' : `${['','1st','2nd','3rd','4th','5th','6th','7th','8th','9th'][lvl] || lvl+'th'} Level`;
+  const groups = {};
+  const order = [];
+  spells.forEach(entry => {
+    const lvl = typeof entry.full === 'object' ? (entry.full.level_int ?? 99) : 99;
+    const key = levelLabel(lvl);
+    if (!groups[key]) { groups[key] = []; order.push({ key, lvl }); }
+    groups[key].push(entry);
+  });
+  order.sort((a, b) => a.lvl - b.lvl);
+  return order.map(({ key }) => ({ label: key, spells: groups[key] }));
+}
+
 function renderKnownView(ch) {
   const known    = ch.spells.known    || [];
   const prepared = new Set((ch.spells.prepared||[]).map(s=>typeof s==='object'?s.name:s));
   if (known.length === 0) return `<p class="spell-empty" style="padding:1rem 0">No known spells. Add some from All Spells ↑</p>`;
-  return `<div>${known.map((sp,i) => {
-    sp = fullSpellData(sp);
-    const isObj = typeof sp === 'object';
-    const name = isObj ? sp.name : sp;
-    const inPrep = prepared.has(name);
-    const sc = SCHOOL_COLORS[isObj?sp.school:''] || '#7b6d8d';
-    const lvlLabel = isObj ? (sp.level_int===0?'Cantrip':sp.level_int?`Lv ${sp.level_int}`:'') : '';
-    const id = `sd-known-${i}`;
-    return `<div class="spell-card" style="border-left-color:${sc}">
-      <div class="spell-card-top">
-        <div class="spell-card-left">
-          <span class="spell-name">${esc(name)}</span>
-          ${lvlLabel||isObj&&sp.school?`<span class="spell-badge" style="border-color:${sc};color:${sc}">${lvlLabel}${lvlLabel&&isObj&&sp.school?' · ':''}${esc(isObj?sp.school||'':'')}</span>`:''}
-          ${isObj&&sp.concentration==='yes'?`<span class="spell-tag conc">C</span>`:''}
-          ${isObj&&sp.ritual==='yes'?`<span class="spell-tag ritual">R</span>`:''}
-        </div>
-        <div class="spell-card-right">
-          <button class="btn btn-sm${inPrep?' btn-primary':''}" onclick="togglePrepareFromKnown(${i})" title="${inPrep?'Remove from Prepared':'Add to Prepared'}">${inPrep?'✓ Prep':'Prepare'}</button>
-          <button class="btn btn-icon btn-danger" onclick="removeSpellEntry('known',${i})">&times;</button>
-        </div>
-      </div>
-      ${isObj&&(sp.casting_time||sp.range||sp.components)?`<div class="spell-meta">${[sp.casting_time,sp.range,sp.components].filter(Boolean).map(esc).join(' · ')}</div>`:''}
-      ${isObj?`<div class="spell-desc">${esc(sp.desc||'No description available.')}</div>`:''}
-    </div>`;
-  }).join('')}</div>`;
+  const entries = known.map((sp, i) => ({ full: fullSpellData(sp), i }));
+  const grouped = groupSpellsByLevel(entries);
+  return `<div>${grouped.map(({ label, spells }) => `
+    <div class="spell-group">
+      <div class="spell-group-heading">${label} <span class="spell-count">${spells.length}</span></div>
+      ${spells.map(({ full: sp, i }) => {
+        const isObj = typeof sp === 'object';
+        const name = isObj ? sp.name : sp;
+        const inPrep = prepared.has(name);
+        const sc = SCHOOL_COLORS[isObj?sp.school:''] || '#7b6d8d';
+        const lvlLabel = isObj ? (sp.level_int===0?'Cantrip':sp.level_int?`Lv ${sp.level_int}`:'') : '';
+        const id = `sd-known-${i}`;
+        return `<div class="spell-card" style="border-left-color:${sc}">
+          <div class="spell-card-top">
+            <div class="spell-card-left">
+              <span class="spell-name">${esc(name)}</span>
+              ${lvlLabel||isObj&&sp.school?`<span class="spell-badge" style="border-color:${sc};color:${sc}">${lvlLabel}${lvlLabel&&isObj&&sp.school?' · ':''}${esc(isObj?sp.school||'':'')}</span>`:''}
+              ${isObj&&sp.concentration==='yes'?`<span class="spell-tag conc">C</span>`:''}
+              ${isObj&&sp.ritual==='yes'?`<span class="spell-tag ritual">R</span>`:''}
+            </div>
+            <div class="spell-card-right">
+              <button class="btn btn-sm${inPrep?' btn-primary':''}" onclick="togglePrepareFromKnown(${i})" title="${inPrep?'Remove from Prepared':'Add to Prepared'}">${inPrep?'✓ Prep':'Prepare'}</button>
+              <button class="btn btn-sm" onclick="toggleSpellCard('${id}',this)" title="Toggle description">▴</button>
+              <button class="btn btn-icon btn-danger" onclick="removeSpellEntry('known',${i})">&times;</button>
+            </div>
+          </div>
+          ${isObj&&(sp.casting_time||sp.range||sp.components)?`<div class="spell-meta">${[sp.casting_time,sp.range,sp.components].filter(Boolean).map(esc).join(' · ')}</div>`:''}
+          ${isObj?`<div class="spell-desc" id="${id}">${esc(sp.desc||'No description available.')}</div>`:''}
+        </div>`;
+      }).join('')}
+    </div>`).join('')}</div>`;
 }
 
 function renderPreparedView(ch) {
   const prepared = ch.spells.prepared || [];
   if (prepared.length === 0) return `<p class="spell-empty" style="padding:1rem 0">No prepared spells. Mark spells as Prepared from Known ↑ or All Spells.</p>`;
-  return `<div>${prepared.map((sp,i) => {
-    sp = fullSpellData(sp);
-    const isObj = typeof sp === 'object';
-    const name = isObj ? sp.name : sp;
-    const sc = SCHOOL_COLORS[isObj?sp.school:''] || '#7b6d8d';
-    const lvlLabel = isObj ? (sp.level_int===0?'Cantrip':sp.level_int?`Lv ${sp.level_int}`:'') : '';
-    return `<div class="spell-card" style="border-left-color:${sc}">
-      <div class="spell-card-top">
-        <div class="spell-card-left">
-          <span class="spell-name">${esc(name)}</span>
-          ${lvlLabel||isObj&&sp.school?`<span class="spell-badge" style="border-color:${sc};color:${sc}">${lvlLabel}${lvlLabel&&isObj&&sp.school?' · ':''}${esc(isObj?sp.school||'':'')}</span>`:''}
-          ${isObj&&sp.concentration==='yes'?`<span class="spell-tag conc">C</span>`:''}
-          ${isObj&&sp.ritual==='yes'?`<span class="spell-tag ritual">R</span>`:''}
-        </div>
-        <div class="spell-card-right">
-          <button class="btn btn-sm btn-primary btn-cast" onclick="spellCastFx(this);openCastModal('${esc(name)}',${isObj?sp.level_int||0:0})">Cast</button>
-          <button class="btn btn-icon btn-danger" onclick="removeSpellEntry('prepared',${i})">&times;</button>
-        </div>
-      </div>
-      ${isObj&&(sp.casting_time||sp.range||sp.components)?`<div class="spell-meta">${[sp.casting_time,sp.range,sp.components].filter(Boolean).map(esc).join(' · ')}</div>`:''}
-      ${isObj?`<div class="spell-desc">${esc(sp.desc||'No description available.')}</div>`:''}
-    </div>`;
-  }).join('')}</div>`;
+  const entries = prepared.map((sp, i) => ({ full: fullSpellData(sp), i }));
+  const grouped = groupSpellsByLevel(entries);
+  return `<div>${grouped.map(({ label, spells }) => `
+    <div class="spell-group">
+      <div class="spell-group-heading">${label} <span class="spell-count">${spells.length}</span></div>
+      ${spells.map(({ full: sp, i }) => {
+        const isObj = typeof sp === 'object';
+        const name = isObj ? sp.name : sp;
+        const sc = SCHOOL_COLORS[isObj?sp.school:''] || '#7b6d8d';
+        const lvlLabel = isObj ? (sp.level_int===0?'Cantrip':sp.level_int?`Lv ${sp.level_int}`:'') : '';
+        const id = `sd-prep-${i}`;
+        return `<div class="spell-card" style="border-left-color:${sc}">
+          <div class="spell-card-top">
+            <div class="spell-card-left">
+              <span class="spell-name">${esc(name)}</span>
+              ${lvlLabel||isObj&&sp.school?`<span class="spell-badge" style="border-color:${sc};color:${sc}">${lvlLabel}${lvlLabel&&isObj&&sp.school?' · ':''}${esc(isObj?sp.school||'':'')}</span>`:''}
+              ${isObj&&sp.concentration==='yes'?`<span class="spell-tag conc">C</span>`:''}
+              ${isObj&&sp.ritual==='yes'?`<span class="spell-tag ritual">R</span>`:''}
+            </div>
+            <div class="spell-card-right">
+              <button class="btn btn-sm btn-primary btn-cast" onclick="spellCastFx(this);openCastModal('${esc(name)}',${isObj?sp.level_int||0:0})">Cast</button>
+              <button class="btn btn-sm" onclick="toggleSpellCard('${id}',this)" title="Toggle description">▴</button>
+              <button class="btn btn-icon btn-danger" onclick="removeSpellEntry('prepared',${i})">&times;</button>
+            </div>
+          </div>
+          ${isObj&&(sp.casting_time||sp.range||sp.components)?`<div class="spell-meta">${[sp.casting_time,sp.range,sp.components].filter(Boolean).map(esc).join(' · ')}</div>`:''}
+          ${isObj?`<div class="spell-desc" id="${id}">${esc(sp.desc||'No description available.')}</div>`:''}
+        </div>`;
+      }).join('')}
+    </div>`).join('')}</div>`;
 }
 
 function spellAddFromEncoded(listType, encoded) {
@@ -1726,6 +1754,13 @@ function renderSpellsSection(ch) {
 }
 
 function toggleSpellDesc(id) { document.getElementById(id)?.classList.toggle('hidden'); }
+
+function toggleSpellCard(descId, btn) {
+  const el = document.getElementById(descId);
+  if (!el) return;
+  const nowHidden = el.classList.toggle('hidden');
+  if (btn) btn.textContent = nowHidden ? '▾' : '▴';
+}
 
 function spellCastFx(el) {
   const rect = el.getBoundingClientRect();
