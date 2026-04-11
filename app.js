@@ -1678,10 +1678,11 @@ function renderSpellsSection(ch) {
         ${[1,2,3,4,5,6,7,8,9].map(lvl => {
           const cur = (ch.spells.slots||{})[lvl] || 0;
           const max = (ch.spells.slotsMax||{})[lvl] || 0;
+          if (max === 0) return '';
           return `<div class="spell-slot-col">
             <div class="spell-slot-level">${lvl}</div>
             <div class="spell-slot-bubbles">
-              ${Array.from({length:Math.max(cur,max,1)},(_,i)=>`<div class="spell-bubble ${i<cur?'filled':''}" onclick="toggleSpellBubble(${lvl},${i})" title="Slot ${i+1}"></div>`).join('')}
+              ${Array.from({length:max},(_,i)=>`<div class="spell-bubble ${i<cur?'filled':''}" onclick="toggleSpellBubble(${lvl},${i})" title="Slot ${i+1}"></div>`).join('')}
             </div>
             <div class="spell-slot-inputs">
               <input type="number" min="0" max="9" value="${cur}" title="Current" oninput="updateSpellSlot(${lvl},+this.value)" class="spell-slot-num">
