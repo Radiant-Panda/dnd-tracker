@@ -1553,7 +1553,7 @@ function renderPreparedView(ch) {
               ${isObj&&sp.ritual==='yes'?`<span class="spell-tag ritual">R</span>`:''}
             </div>
             <div class="spell-card-right">
-              <button class="btn btn-sm btn-primary btn-cast" onclick="spellCastFx(this);openCastModal('${esc(name)}',${isObj?sp.level_int||0:0})">Cast</button>
+              <button class="btn btn-sm btn-primary btn-cast" onclick="spellCastFx(this);openCastModal(${JSON.stringify(name)},${isObj?sp.level_int||0:0})">Cast</button>
               <button class="btn btn-sm" onclick="toggleSpellCard('${id}',this)" title="Toggle description">▴</button>
               <button class="btn btn-icon btn-danger" onclick="removeSpellEntry('prepared',${i})">&times;</button>
             </div>
