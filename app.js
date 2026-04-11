@@ -1488,7 +1488,7 @@ function renderKnownView(ch) {
         </div>
       </div>
       ${isObj&&(sp.casting_time||sp.range||sp.components)?`<div class="spell-meta">${[sp.casting_time,sp.range,sp.components].filter(Boolean).map(esc).join(' · ')}</div>`:''}
-      ${isObj?`<div class="spell-desc hidden" id="${id}">${esc(sp.desc||'')}</div>`:''}
+      ${isObj?`<div class="spell-desc" id="${id}">${esc(sp.desc||'')}</div>`:''}
     </div>`;
   }).join('')}</div>`;
 }
@@ -1517,7 +1517,7 @@ function renderPreparedView(ch) {
         </div>
       </div>
       ${isObj&&(sp.casting_time||sp.range||sp.components)?`<div class="spell-meta">${[sp.casting_time,sp.range,sp.components].filter(Boolean).map(esc).join(' · ')}</div>`:''}
-      ${isObj?`<div class="spell-desc hidden" id="${id}">${esc(sp.desc||'')}</div>`:''}
+      ${isObj?`<div class="spell-desc" id="${id}">${esc(sp.desc||'')}</div>`:''}
     </div>`;
   }).join('')}</div>`;
 }
