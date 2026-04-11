@@ -1375,8 +1375,11 @@ function renderFilterBar() {
     {val:'basic2014',label:'Basic Rules 2014'},
   ];
   return `<div class="spell-filter-bar">
-    <input type="text" class="spell-filter-input" placeholder="Search spells…" value="${esc(spellFilters.q)}"
-      oninput="spellFilters.q=this.value;renderSpellTabContent()">
+    <div class="spell-search-wrap">
+      <span class="spell-search-icon">✾</span>
+      <input type="text" class="spell-filter-input" placeholder="Search spells…" value="${esc(spellFilters.q)}"
+        oninput="spellFilters.q=this.value;renderSpellTabContent()">
+    </div>
     <select class="spell-filter-select" onchange="applySpellFilter('level',this.value)">
       <option value="all"${spellFilters.level==='all'?' selected':''}>All Levels</option>
       <option value="0"${spellFilters.level==='0'?' selected':''}>Cantrip</option>
@@ -1470,7 +1473,7 @@ function renderKnownView(ch) {
     const sc = SCHOOL_COLORS[isObj?sp.school:''] || '#7b6d8d';
     const lvlLabel = isObj ? (sp.level_int===0?'Cantrip':sp.level_int?`Lv ${sp.level_int}`:'') : '';
     const id = `sd-known-${i}`;
-    return `<div class="spell-card">
+    return `<div class="spell-card" style="border-left-color:${sc}">
       <div class="spell-card-top">
         <div class="spell-card-left">
           <span class="spell-name">${esc(name)}</span>
@@ -1499,7 +1502,7 @@ function renderPreparedView(ch) {
     const sc = SCHOOL_COLORS[isObj?sp.school:''] || '#7b6d8d';
     const lvlLabel = isObj ? (sp.level_int===0?'Cantrip':sp.level_int?`Lv ${sp.level_int}`:'') : '';
     const id = `sd-prep-${i}`;
-    return `<div class="spell-card">
+    return `<div class="spell-card" style="border-left-color:${sc}">
       <div class="spell-card-top">
         <div class="spell-card-left">
           <span class="spell-name">${esc(name)}</span>
@@ -1508,7 +1511,7 @@ function renderPreparedView(ch) {
           ${isObj&&sp.ritual==='yes'?`<span class="spell-tag ritual">R</span>`:''}
         </div>
         <div class="spell-card-right">
-          <button class="btn btn-sm btn-primary" onclick="openCastModal('${esc(name)}',${isObj?sp.level_int||0:0})">Cast</button>
+          <button class="btn btn-sm btn-primary btn-cast" onclick="spellCastFx(this);openCastModal('${esc(name)}',${isObj?sp.level_int||0:0})">Cast</button>
           ${isObj?`<button class="btn btn-sm" onclick="toggleSpellDesc('${id}')">▾</button>`:''}
           <button class="btn btn-icon btn-danger" onclick="removeSpellEntry('prepared',${i})">&times;</button>
         </div>
@@ -1708,6 +1711,24 @@ function renderSpellsSection(ch) {
 }
 
 function toggleSpellDesc(id) { document.getElementById(id)?.classList.toggle('hidden'); }
+
+function spellCastFx(el) {
+  const rect = el.getBoundingClientRect();
+  const fx = document.createElement('div');
+  fx.className = 'spell-cast-fx';
+  fx.style.cssText = `left:${rect.left + rect.width / 2}px;top:${rect.top + 4}px;`;
+  const symbols = ['✦','✦','✦','✦'];
+  const cfg = [{s:'0.65rem',l:'-14px',d:'0ms'},{s:'0.5rem',l:'6px',d:'90ms'},{s:'0.45rem',l:'-4px',d:'40ms'},{s:'0.6rem',l:'12px',d:'150ms'}];
+  cfg.forEach((c, i) => {
+    const p = document.createElement('span');
+    p.className = 'particle';
+    p.textContent = symbols[i];
+    p.style.cssText = `font-size:${c.s};left:${c.l};animation-delay:${c.d};`;
+    fx.appendChild(p);
+  });
+  document.body.appendChild(fx);
+  setTimeout(() => fx.remove(), 1000);
+}
 
 function removeSpellEntry(listType, idx) {
   const ch = db.characters[currentCharId]; if (!ch) return;
