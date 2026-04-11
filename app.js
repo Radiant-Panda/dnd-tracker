@@ -36,6 +36,8 @@ function migrateCharacter(ch) {
     if (r.desc === undefined) r.desc = '';
   });
   if (!ch.skillProficiencies) ch.skillProficiencies = [];
+  // Inject base class resources inline (deduplicates by name)
+  _injectBaseClassResourcesForCh(ch);
   return ch;
 }
 
@@ -251,6 +253,7 @@ function createCharacter() {
   const level = parseInt(document.getElementById('ch-level').value)||1;
   const ch = newCharacter(name, document.getElementById('ch-race').value.trim(), document.getElementById('ch-class').value, level);
   db.characters[ch.id] = ch;
+  injectBaseClassResources(ch.id);
   const campaign = db.campaigns.find(c => c.id === currentCampaignId);
   (campaign.characters = campaign.characters||[]).push(ch.id);
   saveData(db); closeModal(); renderApp();
@@ -1159,9 +1162,19 @@ function renderCombatSection(ch) {
           onchange="setTempHP(+this.value)" onkeydown="if(event.key==='Enter'){this.blur();}">
         <button class="btn btn-sm hd-adj-btn" onclick="adjustTempHP(1)">+</button>
       </div>
-      <div class="hp-btn-grid">
-        <button class="hp-grid-btn hp-dmg-btn" onclick="openDamagePrompt()"><span class="hp-grid-icon">&#8722;</span><span class="hp-grid-label">Damage</span></button>
-        <button class="hp-grid-btn hp-heal-btn" onclick="openHealPrompt()"><span class="hp-grid-icon">+</span><span class="hp-grid-label">Heal</span></button>
+      <div class="hp-inline-controls">
+        <div class="hp-inline-row hp-dmg-row">
+          <input type="number" id="dmg-inline" class="hp-inline-input" min="0" value="" placeholder="0"
+            onkeydown="if(event.key==='Enter')applyDamageInline()">
+          <button class="hp-inline-btn hp-dmg-btn" onclick="applyDamageInline()">&#8722; Damage</button>
+        </div>
+        <div class="hp-inline-row hp-heal-row">
+          <input type="number" id="heal-inline" class="hp-inline-input" min="0" value="" placeholder="0"
+            onkeydown="if(event.key==='Enter')applyHealInline()">
+          <button class="hp-inline-btn hp-heal-btn" onclick="applyHealInline()">+ Heal</button>
+        </div>
+      </div>
+      <div class="hp-rest-row">
         <button class="hp-grid-btn hp-long-btn" onclick="doLongRest()"><span class="hp-grid-icon">&#9789;</span><span class="hp-grid-label">Long Rest</span></button>
         <button class="hp-grid-btn hp-short-btn" onclick="openShortRestDialog()"><span class="hp-grid-icon">&#10040;</span><span class="hp-grid-label">Short Rest</span></button>
       </div>
@@ -1972,6 +1985,7 @@ function renderFeaturesSection(ch) {
           <span class="sf-toggle">▼</span>
         </div>
         <div class="sf-card-body hidden" id="${idKey}">
+          <div class="sf-body-name">${esc(f.name)}</div>
           <p class="sf-desc">${esc(f.desc || 'No description.')}</p>
         </div>
       </div>`;
@@ -2353,8 +2367,9 @@ function restoreResources(rechargeType, charId) {
 // ── Die Scaling Rules ─────────────────────────────────────────────────────────
 // Maps resource name → [[minLevel, die], ...] sorted ascending
 const RESOURCE_DIE_SCALE = {
-  'Bardic Inspiration': [[1,'d6'],[5,'d8'],[10,'d10'],[15,'d12']],
-  'Superiority Dice':   [[3,'d8'],[10,'d10'],[18,'d12']],
+  'Bardic Inspiration':   [[1,'d6'],[5,'d8'],[10,'d10'],[15,'d12']],
+  'Superiority Dice':     [[3,'d8'],[10,'d10'],[18,'d12']],
+  'Psionic Energy Dice':  [[3,'d6'],[5,'d8'],[11,'d10'],[17,'d12']],
 };
 
 function scaledDie(resourceName, level) {
@@ -2466,6 +2481,33 @@ function syncSubclassFeatures(charId) {
     }).join('<br>');
     showToast(`<div class="toast-title">✦ Level ${level} unlocked:</div>${lines}`);
   }
+
+  // Sync base class resource maxes for level-scaling resources
+  (ch.resources || []).forEach(r => {
+    if (!r._baseClass) return;
+    const newMax = resolveMaxFormula(r.maxFormula, ch);
+    if (r.max !== newMax) {
+      r.current = Math.min(r.current || 0, newMax);
+      r.max = newMax;
+    }
+    // Sync die scaling (Bardic Inspiration)
+    const scaledDieVal = scaledDie(r.name, level);
+    if (scaledDieVal) r.die = scaledDieVal;
+    // Bardic Inspiration recharge changes at level 5
+    if (r.name === 'Bardic Inspiration') {
+      r.recharge = level >= 5 ? 'short' : 'long';
+    }
+    // Action Surge gets 2 uses at level 17
+    if (r.name === 'Action Surge') {
+      const newMax2 = level >= 17 ? 2 : 1;
+      if (r.max !== newMax2) { r.max = newMax2; r.current = Math.min(r.current, newMax2); }
+    }
+    // Warlock gets 2 pact slots at level 2
+    if (r.name === 'Pact Magic Slots') {
+      const newMax3 = level >= 2 ? 2 : 1;
+      if (r.max !== newMax3) { r.max = newMax3; r.current = Math.min(r.current, newMax3); }
+    }
+  });
 }
 
 function renderSubclassField(ch) {
@@ -2481,8 +2523,19 @@ function renderSubclassField(ch) {
       oninput="ch_field('subclass',this.value)" onblur="saveData(db)">`;
   }
 
-  const opts = `<option value="">Choose subclass...</option>` +
-    subclasses.map(s => `<option value="${esc(s)}"${current===s?' selected':''}>${esc(s)}</option>`).join('');
+  const currentInList = subclasses.includes(current);
+  function editionSuffix(subclassName) {
+    const src = SUBCLASS_DATA?.[cls]?.[subclassName]?.source || '';
+    if (src.includes('2024')) return ' (2024)';
+    if (src.includes('2014') || src === 'PHB') return ' (2014)';
+    if (src) return ` (${src})`;
+    return '';
+  }
+  let opts = `<option value="">Choose subclass...</option>`;
+  if (current && !currentInList) {
+    opts += `<option value="${esc(current)}" selected>${esc(current)}</option>`;
+  }
+  opts += subclasses.map(s => `<option value="${esc(s)}"${current===s?' selected':''}>${esc(s)}${editionSuffix(s)}</option>`).join('');
 
   return `<div class="subclass-wrap">
     <select onchange="applySubclass('${ch.id}','${esc(cls)}',this.value)"
@@ -2493,18 +2546,108 @@ function renderSubclassField(ch) {
   </div>`;
 }
 
+// ── Base Class Resources ──────────────────────────────────────────────────────
+const BASE_CLASS_RESOURCES = {
+  Barbarian: ch => [
+    { name: 'Rage', maxFormula: 'rage_uses', die: null, recharge: 'long', type: 'pips',
+      desc: 'Enter a rage as a Bonus Action. Lasts 1 minute.' },
+  ],
+  Bard: ch => [
+    { name: 'Bardic Inspiration', maxFormula: 'cha_mod',
+      die: scaledDie('Bardic Inspiration', ch.level || 1) || 'd6',
+      recharge: (ch.level || 1) >= 5 ? 'short' : 'long', type: 'pips',
+      desc: 'Give a creature a Bardic Inspiration die as a Bonus Action.' },
+  ],
+  Cleric: ch => [
+    { name: 'Channel Divinity', maxFormula: 'channel_divinity', die: null, recharge: 'short', type: 'pips',
+      desc: 'Channel divine energy to fuel special abilities.' },
+  ],
+  Druid: ch => [
+    { name: 'Wild Shape', maxFormula: 2, die: null, recharge: 'short', type: 'pips',
+      desc: 'Magically assume the shape of a beast.' },
+  ],
+  Fighter: ch => [
+    { name: 'Second Wind', maxFormula: 1, die: 'd10', recharge: 'short', type: 'pips',
+      desc: 'Regain 1d10 + Fighter level HP as a Bonus Action.' },
+    { name: 'Action Surge', maxFormula: (ch.level || 1) >= 17 ? 2 : 1, die: null, recharge: 'short', type: 'pips',
+      desc: 'Take one additional action on your turn.' },
+  ],
+  Monk: ch => [
+    { name: 'Ki Points', maxFormula: 'level', die: null, recharge: 'short', type: 'pips',
+      desc: 'Fuel special monk abilities like Flurry of Blows and Patient Defense.' },
+  ],
+  Paladin: ch => [
+    { name: 'Lay on Hands', maxFormula: 'level_x5', die: null, recharge: 'long', type: 'pool',
+      desc: 'Restore HP by touch. Pool of HP equal to 5× Paladin level.' },
+    { name: 'Channel Divinity', maxFormula: 2, die: null, recharge: 'short', type: 'pips',
+      desc: 'Channel divine energy through your sacred oath.' },
+  ],
+  Sorcerer: ch => [
+    { name: 'Sorcery Points', maxFormula: 'level', die: null, recharge: 'long', type: 'pips',
+      desc: 'Points that fuel Metamagic and other sorcerous effects.' },
+  ],
+  Warlock: ch => [
+    { name: 'Pact Magic Slots', maxFormula: (ch.level || 1) >= 2 ? 2 : 1, die: null, recharge: 'short', type: 'pips',
+      desc: 'Spell slots that recharge on a Short or Long Rest.' },
+  ],
+  Wizard: ch => [
+    { name: 'Arcane Recovery', maxFormula: 1, die: null, recharge: 'long', type: 'pips',
+      desc: 'Recover expended spell slots during a Short Rest (once per Long Rest).' },
+  ],
+  Artificer: ch => [
+    { name: 'Infuse Item', maxFormula: 'proficiency', die: null, recharge: 'long', type: 'pips',
+      desc: 'Infuse mundane items with magical power.' },
+  ],
+};
+
+function _injectBaseClassResourcesForCh(ch) {
+  if (!ch) return;
+  const factory = BASE_CLASS_RESOURCES[ch.class];
+  if (!factory) return;
+  if (!ch.resources) ch.resources = [];
+  const toAdd = factory(ch);
+  const existingNames = new Set(ch.resources.map(r => r.name));
+  toAdd.forEach(def => {
+    if (existingNames.has(def.name)) return;
+    const max = resolveMaxFormula(def.maxFormula, ch);
+    ch.resources.push({
+      id: `res_${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
+      name: def.name,
+      type: def.type,
+      current: max,
+      max,
+      maxFormula: def.maxFormula,
+      die: def.die || null,
+      recharge: def.recharge,
+      source: ch.class,
+      desc: def.desc,
+      custom: false,
+      _baseClass: true,
+    });
+    existingNames.add(def.name);
+  });
+}
+
+function injectBaseClassResources(charId) {
+  _injectBaseClassResourcesForCh(db.characters[charId]);
+}
+
 // ── Subclass System ───────────────────────────────────────────────────────────
 function resolveMaxFormula(formula, ch) {
   if (typeof formula === 'number') return formula;
   const abilityMod = s => Math.floor(((ch.abilities?.[s] || 10) - 10) / 2);
+  const lv = ch.level || 1;
   switch (formula) {
     case 'cha_mod':    return Math.max(1, abilityMod('cha'));
     case 'int_mod':    return Math.max(1, abilityMod('int'));
     case 'wis_mod':    return Math.max(1, abilityMod('wis'));
-    case 'proficiency': return profBonus(ch.level || 1);
-    case 'level':      return ch.level || 1;
-    case 'level_div_2': return Math.max(1, Math.floor((ch.level || 1) / 2));
-    default:           return 1;
+    case 'proficiency': return profBonus(lv);
+    case 'level':      return lv;
+    case 'level_div_2': return Math.max(1, Math.floor(lv / 2));
+    case 'level_x5':   return lv * 5;
+    case 'rage_uses':  return lv >= 17 ? 6 : lv >= 12 ? 5 : lv >= 6 ? 4 : lv >= 3 ? 3 : 2;
+    case 'channel_divinity': return lv >= 18 ? 3 : lv >= 6 ? 2 : 1;
+    default:           return parseInt(formula) || 1;
   }
 }
 
@@ -2644,7 +2787,7 @@ function renderCharacterSheet() {
           <select onchange="ch_field('class',this.value)" style="flex:1;font-size:0.85rem;padding:0.1rem 0;background:transparent;border:none;border-bottom:1px solid var(--border);border-radius:0;color:var(--text)">
             ${['Barbarian','Bard','Cleric','Druid','Fighter','Monk','Paladin','Ranger','Rogue','Sorcerer','Warlock','Wizard','Artificer','Blood Hunter'].map(c=>`<option${cls===c?' selected':''}>${c}</option>`).join('')}
           </select>
-          <input type="number" value="${ch.level}" min="1" max="20" oninput="ch_field_level(+this.value)" style="width:36px;text-align:center;background:transparent;border:none;border-bottom:1px solid var(--border);color:var(--gold);font-weight:bold;font-size:1rem">
+          <input type="number" value="${ch.level}" min="1" max="20" oninput="ch_field_level(+this.value)" class="level-input">
         </div>
       </div>
       <div class="cs-header-field">
@@ -2702,13 +2845,16 @@ function ch_field(field, value) {
   ch[field] = value;
   if (field === 'class') {
     ch.subclass = '';
+    // Clear base class and subclass resources, reinject for new class
+    ch.resources = (ch.resources || []).filter(r => !r._baseClass && !r._subclass);
+    ch.featuresList = (ch.featuresList || []).filter(f => !f._subclass);
+    injectBaseClassResources(currentCharId);
     const container = document.querySelector('.cs-header-field:nth-child(3)');
     if (container) {
       const label = container.querySelector('label');
       container.innerHTML = '';
       if (label) container.appendChild(label);
       container.insertAdjacentHTML('beforeend', renderSubclassField(ch));
-      // Flash the select border purple briefly
       const sel = container.querySelector('select');
       if (sel) {
         sel.style.borderBottomColor = '#9b6dff';
@@ -2716,6 +2862,8 @@ function ch_field(field, value) {
         setTimeout(() => { sel.style.borderBottomColor = ''; }, 300);
       }
     }
+    refreshPanels();
+    setTimeout(() => saveData(db), 0);
   }
 }
 let _levelDebounce = null;
@@ -2817,7 +2965,6 @@ function applyDamage() {
   if (amount <= 0) { closeModal(); return; }
   const ch = db.characters[currentCharId]; if (!ch) return;
   let remaining = amount;
-  // Temp HP absorbs first
   if (ch.combat.tempHP > 0) {
     const absorbed = Math.min(ch.combat.tempHP, remaining);
     ch.combat.tempHP -= absorbed;
@@ -2825,6 +2972,30 @@ function applyDamage() {
   }
   ch.combat.currentHP = Math.max(0, ch.combat.currentHP - remaining);
   closeModal(); saveData(db); renderApp();
+}
+
+function applyDamageInline() {
+  const input = document.getElementById('dmg-inline');
+  const amount = parseInt(input?.value) || 0;
+  if (amount <= 0) return;
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  let remaining = amount;
+  if (ch.combat.tempHP > 0) {
+    const absorbed = Math.min(ch.combat.tempHP, remaining);
+    ch.combat.tempHP -= absorbed;
+    remaining -= absorbed;
+  }
+  ch.combat.currentHP = Math.max(0, ch.combat.currentHP - remaining);
+  saveData(db); renderApp();
+}
+
+function applyHealInline() {
+  const input = document.getElementById('heal-inline');
+  const amount = parseInt(input?.value) || 0;
+  if (amount <= 0) return;
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  ch.combat.currentHP = Math.min(ch.combat.maxHP, ch.combat.currentHP + amount);
+  saveData(db); renderApp();
 }
 
 function openHealPrompt() {
@@ -3279,6 +3450,7 @@ function wizardFinish() {
   ch.combat.currentHP = wizardData.maxHP;
   ch.proficiencyBonus = profBonus(wizardData.level);
   db.characters[ch.id] = ch;
+  injectBaseClassResources(ch.id);
   const c = db.campaigns.find(c => c.id === currentCampaignId);
   (c.characters = c.characters || []).push(ch.id);
   if (!c.activeCharId) c.activeCharId = ch.id;

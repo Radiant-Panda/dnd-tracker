@@ -212,6 +212,20 @@ main {
 .cs-header-field input:focus,
 .cs-header-field select:focus { outline: none; border-bottom-color: var(--gold); }
 .cs-header-field select option { background: var(--surface); }
+.level-input {
+  width: 44px !important;
+  min-width: 44px;
+  text-align: center;
+  color: var(--gold) !important;
+  font-weight: bold;
+  font-size: 1.05rem !important;
+  -moz-appearance: textfield;
+}
+.level-input::-webkit-outer-spin-button,
+.level-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
 .cs-header-name input {
   font-size: 1.3rem;
   color: var(--gold-lt);
@@ -428,11 +442,10 @@ main {
 .sf-card-header {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: 0.35rem;
   padding: 0.4rem 0.55rem;
   cursor: pointer;
   transition: background 0.15s;
-  flex-wrap: wrap;
 }
 .sf-card-header:hover { background: rgba(155,109,255,0.08); }
 .sf-source-badge {
@@ -454,6 +467,9 @@ main {
   color: #e8d5ff;
   flex: 1;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .sf-level {
   font-size: 0.65rem;
@@ -471,6 +487,12 @@ main {
   border-top: 1px solid rgba(155,109,255,0.12);
 }
 .sf-card-body.hidden { display: none; }
+.sf-body-name {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #e8d5ff;
+  margin-bottom: 0.3rem;
+}
 .sf-desc {
   font-size: 0.78rem;
   color: var(--text-dim);
@@ -549,6 +571,7 @@ main {
   align-items: center;
   gap: 0.18rem;
   margin-left: 0.1rem;
+  flex-shrink: 0;
 }
 .feat-res-pip {
   display: inline-block;
@@ -588,6 +611,8 @@ main {
 }
 .subclass-wrap select {
   transition: border-color 0.2s ease;
+  min-width: 70px;
+  flex: 1;
 }
 .subclass-source-badge {
   font-size: 0.6rem;
@@ -597,6 +622,9 @@ main {
   transition: transform 0.2s ease, opacity 0.15s ease;
   color: var(--gold);
   background: rgba(232,213,100,0.1);
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   border: 1px solid rgba(232,213,100,0.25);
   border-radius: 3px;
   padding: 0.1rem 0.3rem;
@@ -1165,11 +1193,67 @@ main {
   border-color: rgba(80,160,255,0.6);
   background: rgba(80,160,255,0.14);
 }
-.hp-btn-grid {
+/* Inline damage/heal controls */
+.hp-inline-controls {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0.4rem;
   margin-top: 0.6rem;
+}
+.hp-inline-row {
+  display: flex;
+  align-items: stretch;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid;
+}
+.hp-dmg-row { border-color: rgba(220,80,80,0.35); }
+.hp-heal-row { border-color: rgba(80,200,120,0.35); }
+.hp-inline-input {
+  width: 50px;
+  min-width: 40px;
+  text-align: center;
+  background: rgba(0,0,0,0.3);
+  border: none;
+  color: var(--gold);
+  font-weight: bold;
+  font-size: 1rem;
+  font-family: inherit;
+  padding: 0.4rem 0.2rem;
+  -moz-appearance: textfield;
+}
+.hp-inline-input::-webkit-outer-spin-button,
+.hp-inline-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.hp-inline-input:focus { outline: none; background: rgba(0,0,0,0.45); }
+.hp-inline-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  padding: 0.45rem 0.3rem;
+  background: rgba(0,0,0,0.2);
+  border: none;
+  border-left: 1px solid rgba(255,255,255,0.08);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  transition: background 0.15s;
+}
+.hp-inline-btn.hp-dmg-btn { color: #e87070; }
+.hp-inline-btn.hp-dmg-btn:hover { background: rgba(220,80,80,0.15); }
+.hp-inline-btn.hp-heal-btn { color: #50c878; }
+.hp-inline-btn.hp-heal-btn:hover { background: rgba(80,200,120,0.15); }
+
+/* Rest buttons */
+.hp-rest-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
 }
 .hp-grid-btn {
   display: flex;
@@ -1189,10 +1273,6 @@ main {
 .hp-grid-btn:active { transform: scale(0.97); }
 .hp-grid-icon { font-size: 1.3rem; line-height: 1; }
 .hp-grid-label { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 1px; }
-.hp-dmg-btn { border-color: rgba(220,80,80,0.35); color: #e87070; }
-.hp-dmg-btn:hover { background: rgba(220,80,80,0.12); }
-.hp-heal-btn { border-color: rgba(80,200,120,0.35); color: #50c878; }
-.hp-heal-btn:hover { background: rgba(80,200,120,0.12); }
 .hp-long-btn { border-color: rgba(100,140,255,0.35); color: #648cff; }
 .hp-long-btn:hover { background: rgba(100,140,255,0.12); }
 .hp-short-btn { border-color: rgba(240,180,60,0.35); color: #f0b43c; }
