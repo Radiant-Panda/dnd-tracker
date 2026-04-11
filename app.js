@@ -36,6 +36,10 @@ function migrateCharacter(ch) {
     if (r.desc === undefined) r.desc = '';
   });
   if (!ch.skillProficiencies) ch.skillProficiencies = [];
+  // v3: multiclass support
+  if (!ch.classes) {
+    ch.classes = [{ class: ch.class || 'Fighter', subclass: ch.subclass || '', level: ch.level || 1 }];
+  }
   // Inject base class resources inline (deduplicates by name)
   _injectBaseClassResourcesForCh(ch);
   return ch;
@@ -222,7 +226,7 @@ function renderCharacterCards(campaign) {
     const pct = ch.combat.maxHP>0?Math.round((ch.combat.currentHP/ch.combat.maxHP)*100):100;
     return `<div class="card" onclick="showCharacter('${ch.id}')">
       <div class="card-title">${esc(ch.name||'Unnamed')}</div>
-      <div class="card-sub">Level ${ch.level} ${esc(ch.race)} ${esc(ch.class)}</div>
+      <div class="card-sub">Level ${ch.level} ${esc(ch.race)} ${formatClassLine(ch)}</div>
       <div style="margin-top:0.6rem;font-size:0.8rem;color:var(--text-dim)">HP ${ch.combat.currentHP}/${ch.combat.maxHP}</div>
       <div class="hp-bar-wrap"><div class="hp-bar ${pct<=25?'low':pct<=50?'mid':''}" style="width:${pct}%"></div></div>
       <div class="card-actions" onclick="event.stopPropagation()">
@@ -876,10 +880,25 @@ function renderCombatantStatBlock(sb, combatantIdx) {
 }
 
 // ── Character Data Model ──────────────────────────────────────────────────────
+function syncClassFields(ch) {
+  if (!ch.classes || !ch.classes.length) return;
+  ch.class = ch.classes[0].class;
+  ch.subclass = ch.classes[0].subclass;
+  const total = ch.classes.reduce((sum, c) => sum + (c.level || 1), 0);
+  ch.level = Math.min(total, 20);
+  ch.proficiencyBonus = profBonus(ch.level);
+}
+
+function formatClassLine(ch) {
+  if (!ch.classes || ch.classes.length <= 1) return esc(ch.class || 'Fighter');
+  return ch.classes.map(c => `${esc(c.class)} ${c.level}`).join(' / ');
+}
+
 function newCharacter(name, race, cls, level) {
   return {
     id: uid(),
     name, race: race||'', class: cls||'Fighter', subclass: '', level: level||1,
+    classes: [{ class: cls||'Fighter', subclass: '', level: level||1 }],
     background: '', alignment: 'True Neutral', xp: 0,
     proficiencyBonus: profBonus(level),
     inspiration: false,
@@ -1022,11 +1041,48 @@ const HIT_DICE = {
   Barbarian:12, Bard:8, Cleric:8, Druid:8, Fighter:10, Monk:8, Paladin:10,
   Ranger:10, Rogue:8, Sorcerer:6, Warlock:8, Wizard:6, Artificer:8, 'Blood Hunter':10
 };
+// Saving throw proficiencies granted at class level 1
+const CLASS_SAVE_PROFS = {
+  Barbarian:['str','con'], Bard:['dex','cha'], Cleric:['wis','cha'],
+  Druid:['int','wis'], Fighter:['str','con'], Monk:['str','dex'],
+  Paladin:['wis','cha'], Ranger:['str','dex'], Rogue:['dex','int'],
+  Sorcerer:['con','cha'], Warlock:['wis','cha'], Wizard:['int','wis'],
+  Artificer:['con','int'], 'Blood Hunter':['dex','int']
+};
+// Proficiencies gained when multiclassing INTO a class (5e rules)
+const CLASS_MC_PROFS = {
+  Barbarian: 'Shields, simple weapons, martial weapons',
+  Bard: 'Light armor, one skill of your choice, one instrument',
+  Cleric: 'Light armor, medium armor, shields',
+  Druid: 'Light armor, medium armor, shields',
+  Fighter: 'Light armor, medium armor, shields, simple weapons, martial weapons',
+  Monk: 'Simple weapons, shortswords',
+  Paladin: 'Light armor, medium armor, shields, simple weapons, martial weapons',
+  Ranger: 'Light armor, medium armor, shields, simple weapons, martial weapons, one skill from the Ranger list',
+  Rogue: 'Light armor, one skill of your choice, thieves\' tools',
+  Sorcerer: '—',
+  Warlock: 'Light armor, simple weapons',
+  Wizard: '—',
+  Artificer: 'Light armor, medium armor, shields, thieves\' tools, tinker\'s tools',
+  'Blood Hunter': 'Medium armor, martial weapons'
+};
+// Short accent color per class for badges
+const CLASS_BADGE_COLORS = {
+  Barbarian:'#ef4444', Bard:'#f59e0b', Cleric:'#fbbf24', Druid:'#22c55e',
+  Fighter:'#64748b', Monk:'#06b6d4', Paladin:'#c084fc', Ranger:'#4ade80',
+  Rogue:'#94a3b8', Sorcerer:'#f97316', Warlock:'#a855f7', Wizard:'#3b82f6',
+  Artificer:'#14b8a6', 'Blood Hunter':'#dc2626'
+};
+
+// Returns the skill name from a skillProficiencies entry (string or {name,_class} object)
+function skillProfName(entry) { return typeof entry === 'object' ? entry.name : entry; }
+// Returns the source class from an entry, or null
+function skillProfClass(entry) { return typeof entry === 'object' ? (entry._class || null) : null; }
 
 function mod(score) { return Math.floor((score-10)/2); }
 function modStr(score) { const m=mod(score); return (m>=0?'+':'')+m; }
 function skillBonus(ch, skillName, abilityKey, pb) {
-  const prof=(ch.skillProficiencies||[]).includes(skillName);
+  const prof=(ch.skillProficiencies||[]).some(e=>skillProfName(e)===skillName);
   const exp=(ch.skillExpertise||[]).includes(skillName);
   return mod(ch.abilities[abilityKey])+(prof?pb:0)+(exp?pb:0);
 }
@@ -1043,7 +1099,7 @@ function renderPortraitCard(ch) {
     </div>
     <div class="portrait-info">
       <div class="portrait-name">${esc(ch.name)}</div>
-      <div class="portrait-meta">${esc(ch.race || '—')} ${esc(ch.class)} &bull; Lv ${ch.level}</div>
+      <div class="portrait-meta">${esc(ch.race || '—')} ${formatClassLine(ch)} &bull; Lv ${ch.level}</div>
     </div>
     <div class="flex gap-1">
       <label class="btn btn-sm portrait-upload-btn">
@@ -1096,15 +1152,31 @@ function renderCoreStats(ch, pb) {
 }
 
 function renderSavingThrows(ch, pb) {
+  // Build a map: ability → [classNames] that grant it
+  const classGrants = {};
+  (ch.classes || []).forEach(entry => {
+    const saves = CLASS_SAVE_PROFS[entry.class] || [];
+    saves.forEach(a => {
+      if (!classGrants[a]) classGrants[a] = [];
+      if (!classGrants[a].includes(entry.class)) classGrants[a].push(entry.class);
+    });
+  });
+  // Union: manually toggled OR granted by any class
+  const allProfs = new Set([...(ch.saveProficiencies||[]), ...Object.keys(classGrants)]);
   return `<div class="sheet-panel" style="margin-top:0.6rem">
     <div class="cs-section-label">Saving Throws</div>
     <ul class="skill-list">
       ${ABILITIES.map(a=>{
-        const prof=(ch.saveProficiencies||[]).includes(a);
-        const total=mod(ch.abilities[a])+(prof?pb:0);
+        const prof = allProfs.has(a);
+        const total = mod(ch.abilities[a])+(prof?pb:0);
+        const grantedBy = classGrants[a] || [];
+        const badges = grantedBy.length > 1
+          ? grantedBy.map(cls => `<span class="class-save-badge" style="background:${CLASS_BADGE_COLORS[cls]||'#9b6dff'}">${cls.slice(0,3).toUpperCase()}</span>`).join('')
+          : (grantedBy.length === 1 ? `<span class="class-save-badge" style="background:${CLASS_BADGE_COLORS[grantedBy[0]]||'#9b6dff'}">${CLASS_ICONS[grantedBy[0]]||''}</span>` : '');
         return `<li>
           <span class="prof-dot ${prof?'proficient':''}" onclick="toggleSaveProf('${a}')" title="Toggle proficiency"></span>
           <span style="font-size:0.8rem">${ABILITY_NAMES[a]}</span>
+          ${badges}
           <span class="skill-mod">${total>=0?'+':''}${total}</span>
         </li>`;
       }).join('')}
@@ -1113,17 +1185,24 @@ function renderSavingThrows(ch, pb) {
 }
 
 function renderSkillList(ch, pb) {
+  const profEntries = ch.skillProficiencies || [];
   return `<div class="sheet-panel" style="margin-top:0.6rem">
     <div class="cs-section-label">Skills <span style="font-size:0.65rem;letter-spacing:0;color:var(--text-dim);text-transform:none">(click ● = prof, ◉ = expertise)</span></div>
     <ul class="skill-list">
       ${SKILLS.map(s=>{
-        const prof=(ch.skillProficiencies||[]).includes(s.name);
-        const exp=(ch.skillExpertise||[]).includes(s.name);
-        const dotClass=exp?'expert':prof?'proficient':'';
-        const total=skillBonus(ch,s.name,s.ability,pb);
+        const entry = profEntries.find(e => skillProfName(e) === s.name);
+        const prof = !!entry;
+        const exp  = (ch.skillExpertise||[]).includes(s.name);
+        const dotClass = exp?'expert':prof?'proficient':'';
+        const total = skillBonus(ch,s.name,s.ability,pb);
+        const srcClass = prof ? skillProfClass(entry) : null;
+        const badge = srcClass
+          ? `<span class="class-skill-badge" style="background:${CLASS_BADGE_COLORS[srcClass]||'#9b6dff'}" title="Granted by ${srcClass}">${CLASS_ICONS[srcClass]||srcClass.slice(0,2)}</span>`
+          : '';
         return `<li>
           <span class="prof-dot ${dotClass}" onclick="toggleSkillProf('${s.name}')" title="${exp?'Expert':prof?'Proficient':'Not proficient'} — click to cycle"></span>
           <span style="font-size:0.8rem">${s.name}</span>
+          ${badge}
           <span class="text-dim" style="font-size:0.7rem">(${ABILITY_SHORT[s.ability]})</span>
           <span class="skill-mod">${total>=0?'+':''}${total}</span>
         </li>`;
@@ -2130,10 +2209,25 @@ function toggleSfCard(id, headerEl) {
 }
 
 function renderProficienciesLanguages(ch) {
+  const extraClasses = (ch.classes || []).slice(1);
+  const mcNote = extraClasses.length > 0 ? `
+    <div class="cs-field-label" style="margin:0.6rem 0 0.25rem">Multiclass Proficiencies</div>
+    <div class="mc-prof-list">
+      ${extraClasses.map(entry => {
+        const cls = entry.class;
+        const color = CLASS_BADGE_COLORS[cls] || '#9b6dff';
+        const profs = CLASS_MC_PROFS[cls] || '—';
+        return `<div class="mc-prof-entry">
+          <span class="mc-prof-badge" style="background:${color}">${CLASS_ICONS[cls]||''} ${cls}</span>
+          <span class="mc-prof-text">${esc(profs)}</span>
+        </div>`;
+      }).join('')}
+    </div>` : '';
   return `<div class="sheet-panel" style="margin-top:0.6rem">
     <div class="cs-section-label">Proficiencies &amp; Languages</div>
     <div class="cs-field-label" style="margin-bottom:0.3rem">Proficiencies</div>
     <textarea class="sheet-textarea" rows="3" placeholder="Weapons, armor, tools..." oninput="ch_field('proficiencies',this.value)">${esc(ch.proficiencies||'')}</textarea>
+    ${mcNote}
     <div class="cs-field-label" style="margin:0.6rem 0 0.3rem">Languages</div>
     <textarea class="sheet-textarea" rows="2" placeholder="Common, Elvish, Dwarvish..." oninput="ch_field('languages',this.value)">${esc(ch.languages||'')}</textarea>
   </div>`;
@@ -2868,18 +2962,20 @@ function renderCharacterSheet() {
         <label>Character Name</label>
         <input type="text" value="${esc(ch.name)}" oninput="ch_field('name',this.value)">
       </div>
-      <div class="cs-header-field">
-        <label>Class &amp; Level</label>
-        <div class="flex gap-1">
-          <select onchange="ch_field('class',this.value)" style="flex:1;font-size:0.85rem;padding:0.1rem 0;background:transparent;border:none;border-bottom:1px solid var(--border);border-radius:0;color:var(--text)">
-            ${['Barbarian','Bard','Cleric','Druid','Fighter','Monk','Paladin','Ranger','Rogue','Sorcerer','Warlock','Wizard','Artificer','Blood Hunter'].map(c=>`<option${cls===c?' selected':''}>${c}</option>`).join('')}
-          </select>
-          <input type="number" value="${ch.level}" min="1" max="20" oninput="ch_field_level(+this.value)" class="level-input">
+      <div class="cs-header-field cs-header-classes">
+        <label>Classes</label>
+        <div class="mc-pills">
+          ${(ch.classes||[]).map((entry, i) => {
+            const icon = CLASS_ICONS[entry.class] || '⚔';
+            return `<div class="mc-pill${mcEditIdx===i?' active':''}" onclick="toggleClassEditor(${i})">
+              <span class="mc-pill-icon">${icon}</span>
+              <span>${esc(entry.class)} ${entry.level}</span>
+            </div>`;
+          }).join('')}
+          <div class="mc-pill mc-pill-add" onclick="addCharClass()">+ Add Class</div>
         </div>
-      </div>
-      <div class="cs-header-field">
-        <label>Subclass</label>
-        ${renderSubclassField(ch)}
+        <div id="mc-editor-slot">${mcEditIdx !== null ? renderClassEditor(ch, mcEditIdx) : ''}</div>
+        <div class="mc-total">Total Level ${ch.level} · PB +${pb}</div>
       </div>
       <div class="cs-header-field">
         <label>Background</label>
@@ -2932,32 +3028,179 @@ function ch_field(field, value) {
   ch[field] = value;
   if (field === 'class') {
     ch.subclass = '';
+    ch.classes[0].class = value;
+    ch.classes[0].subclass = '';
     // Clear base class and subclass resources, reinject for new class
     ch.resources = (ch.resources || []).filter(r => !r._baseClass && !r._subclass);
     ch.featuresList = (ch.featuresList || []).filter(f => !f._subclass);
     injectBaseClassResources(currentCharId);
-    const container = document.querySelector('.cs-header-field:nth-child(3)');
-    if (container) {
-      const label = container.querySelector('label');
-      container.innerHTML = '';
-      if (label) container.appendChild(label);
-      container.insertAdjacentHTML('beforeend', renderSubclassField(ch));
-      const sel = container.querySelector('select');
-      if (sel) {
-        sel.style.borderBottomColor = '#9b6dff';
-        sel.style.transition = 'border-color 0.3s ease';
-        setTimeout(() => { sel.style.borderBottomColor = ''; }, 300);
-      }
-    }
+    renderApp();
     refreshPanels();
     setTimeout(() => saveData(db), 0);
   }
 }
+
+let mcEditIdx = null;
+
+function toggleClassEditor(idx) {
+  mcEditIdx = mcEditIdx === idx ? null : idx;
+  const slot = document.getElementById('mc-editor-slot');
+  const ch = db.characters[currentCharId];
+  if (slot && ch) {
+    slot.innerHTML = mcEditIdx !== null ? renderClassEditor(ch, mcEditIdx) : '';
+  }
+  document.querySelectorAll('.mc-pill:not(.mc-pill-add)').forEach((pill, i) => {
+    pill.classList.toggle('active', i === mcEditIdx);
+  });
+}
+
+function renderClassEditor(ch, idx) {
+  const entry = ch.classes[idx]; if (!entry) return '';
+  const eClass = entry.class || 'Fighter';
+  const eSub = entry.subclass || '';
+  const eSubclasses = (typeof SUBCLASS_DATA !== 'undefined' && SUBCLASS_DATA[eClass]) ? Object.keys(SUBCLASS_DATA[eClass]) : [];
+  function eSuffix(sn) { const src = SUBCLASS_DATA?.[eClass]?.[sn]?.source||''; if(src.includes('2024')) return ' (2024)'; if(src.includes('2014')||src==='PHB') return ' (2014)'; if(src) return ` (${src})`; return ''; }
+  const ALL_CLASSES = ['Barbarian','Bard','Cleric','Druid','Fighter','Monk','Paladin','Ranger','Rogue','Sorcerer','Warlock','Wizard','Artificer','Blood Hunter'];
+  return `<div class="mc-editor">
+    <select onchange="chClassField(${idx},'class',this.value)">
+      ${ALL_CLASSES.map(c=>`<option${eClass===c?' selected':''}>${c}</option>`).join('')}
+    </select>
+    ${eSubclasses.length ? `<select onchange="chClassField(${idx},'subclass',this.value)" title="Subclass">
+      <option value="">Subclass...</option>
+      ${eSubclasses.map(s=>`<option value="${esc(s)}"${eSub===s?' selected':''}>${esc(s)}${eSuffix(s)}</option>`).join('')}
+    </select>` : `<input type="text" value="${esc(eSub)}" placeholder="Subclass..." style="max-width:120px;font-size:0.82rem;background:transparent;border:none;border-bottom:1px solid var(--border);color:var(--text);padding:0.15rem 0" oninput="chClassField(${idx},'subclass',this.value)">`}
+    <div class="mc-level-stepper">
+      <button onclick="chClassField(${idx},'level',${entry.level - 1})">−</button>
+      <span>${entry.level}</span>
+      <button onclick="chClassField(${idx},'level',${entry.level + 1})">+</button>
+    </div>
+    ${ch.classes.length > 1 ? `<button class="btn btn-sm btn-danger" onclick="removeCharClass(${idx})" style="font-size:0.65rem;padding:0.15rem 0.4rem">Remove</button>` : ''}
+  </div>`;
+}
+
+function _injectResourcesForClass(ch, className) {
+  const factory = BASE_CLASS_RESOURCES[className];
+  if (!factory) return;
+  if (!ch.resources) ch.resources = [];
+  const toAdd = factory(ch);
+  const existingNames = new Set(ch.resources.map(r => r.name));
+  toAdd.forEach(def => {
+    if (existingNames.has(def.name)) return;
+    const max = resolveMaxFormula(def.maxFormula, ch);
+    ch.resources.push({
+      id: `res_${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
+      name: def.name, type: def.type, current: max, max,
+      maxFormula: def.maxFormula, die: def.die || null,
+      recharge: def.recharge, source: className,
+      desc: def.desc, custom: false, _baseClass: true, _forClass: className,
+    });
+    existingNames.add(def.name);
+  });
+}
+
+function applySubclassForClass(charId, idx, className, subclassName) {
+  const ch = db.characters[charId]; if (!ch) return;
+  // Remove old subclass features/resources for this class
+  ch.featuresList = (ch.featuresList || []).filter(f => f._forClass !== className);
+  ch.resources = (ch.resources || []).filter(r => !(r._subclass && r._forClass === className));
+  // Backward compat: keep ch.subclass synced with primary
+  if (idx === 0) ch.subclass = subclassName;
+  if (!subclassName) return;
+  const subclassData = (typeof SUBCLASS_DATA !== 'undefined') && SUBCLASS_DATA[className]?.[subclassName];
+  if (!subclassData) return;
+  const features = subclassData.features || [];
+  if (!features.length) {
+    ch.featuresList.push({ name: subclassName, desc: '<em class="no-features-note">No features data yet.</em>', _subclass: subclassName, _forClass: className, _placeholder: true });
+  }
+  const level = ch.level || 1;
+  const injectedResources = new Set();
+  features.forEach(feat => {
+    if (feat.level > level) return;
+    ch.featuresList.push({ name: feat.name, desc: feat.description, _subclass: subclassName, _forClass: className });
+    if (feat.resource && !injectedResources.has(feat.resource.name)) {
+      injectedResources.add(feat.resource.name);
+      const max = resolveMaxFormula(feat.resource.maxFormula, ch);
+      ch.resources.push({
+        id: `res_${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
+        name: feat.resource.name,
+        type: (feat.resource.maxFormula === 'level_x5' || feat.resource.name.includes('Hands') || feat.resource.name.includes('Pool')) ? 'pool' : 'pips',
+        current: max, max, maxFormula: feat.resource.maxFormula,
+        die: feat.resource.die || null, recharge: feat.resource.recharge || 'long',
+        source: subclassName, desc: feat.description || '',
+        custom: false, _subclass: subclassName, _forClass: className,
+      });
+    }
+  });
+}
+
+function chClassField(idx, field, value) {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  if (!ch.classes[idx]) return;
+  const oldClass = ch.classes[idx].class;
+  if (field === 'class') {
+    // Remove old class resources/features
+    ch.resources = (ch.resources || []).filter(r => r._forClass !== oldClass && r.source !== oldClass);
+    ch.featuresList = (ch.featuresList || []).filter(f => f._forClass !== oldClass);
+    ch.classes[idx].class = value;
+    ch.classes[idx].subclass = '';
+    syncClassFields(ch);
+    _injectResourcesForClass(ch, value);
+  } else if (field === 'level') {
+    const newLvl = Math.min(20, Math.max(1, parseInt(value)||1));
+    const otherSum = ch.classes.reduce((s, c, i) => i === idx ? s : s + c.level, 0);
+    ch.classes[idx].level = Math.min(newLvl, 20 - otherSum);
+    syncClassFields(ch);
+  } else if (field === 'subclass') {
+    ch.classes[idx].subclass = value;
+    syncClassFields(ch);
+    applySubclassForClass(currentCharId, idx, ch.classes[idx].class, value);
+  }
+  saveData(db);
+  renderApp();
+  refreshPanels();
+}
+
+function addCharClass() {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  if (ch.level >= 20) return;
+  ch.classes.push({ class: 'Fighter', subclass: '', level: 1 });
+  syncClassFields(ch);
+  _injectResourcesForClass(ch, 'Fighter');
+  saveData(db);
+  mcEditIdx = ch.classes.length - 1;
+  renderApp();
+  refreshPanels();
+}
+
+function removeCharClass(idx) {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  if (ch.classes.length <= 1) return;
+  const removed = ch.classes[idx];
+  // Remove resources/features tagged with the removed class
+  ch.resources = (ch.resources || []).filter(r => r._forClass !== removed.class && r.source !== removed.class);
+  ch.featuresList = (ch.featuresList || []).filter(f => f._forClass !== removed.class);
+  if (removed.subclass) {
+    ch.resources = ch.resources.filter(r => r._subclass !== removed.subclass || r._forClass !== removed.class);
+    ch.featuresList = ch.featuresList.filter(f => f._subclass !== removed.subclass || f._forClass !== removed.class);
+  }
+  ch.classes.splice(idx, 1);
+  syncClassFields(ch);
+  mcEditIdx = null;
+  // Re-inject primary class resources if primary changed
+  if (idx === 0) {
+    _injectResourcesForClass(ch, ch.classes[0].class);
+    if (ch.classes[0].subclass) applySubclassForClass(currentCharId, 0, ch.classes[0].class, ch.classes[0].subclass);
+  }
+  saveData(db);
+  renderApp();
+  refreshPanels();
+}
+
 let _levelDebounce = null;
 function ch_field_level(value) {
   const ch = db.characters[currentCharId];
-  ch.level = Math.min(20, Math.max(1, parseInt(value)||1));
-  ch.proficiencyBonus = profBonus(ch.level);
+  ch.classes[0].level = Math.min(20, Math.max(1, parseInt(value)||1));
+  syncClassFields(ch);
   if (_levelDebounce) clearTimeout(_levelDebounce);
   _levelDebounce = setTimeout(() => {
     syncSubclassFeatures(currentCharId);
@@ -3007,14 +3250,14 @@ function toggleSkillProf(skillName) {
   const ch = db.characters[currentCharId];
   ch.skillProficiencies = ch.skillProficiencies||[];
   ch.skillExpertise = ch.skillExpertise||[];
-  const prof = ch.skillProficiencies.includes(skillName);
+  const prof = ch.skillProficiencies.some(e => skillProfName(e) === skillName);
   const exp  = ch.skillExpertise.includes(skillName);
   if (!prof && !exp) {
     ch.skillProficiencies.push(skillName);
   } else if (prof && !exp) {
     ch.skillExpertise.push(skillName);
   } else {
-    ch.skillProficiencies = ch.skillProficiencies.filter(s=>s!==skillName);
+    ch.skillProficiencies = ch.skillProficiencies.filter(e => skillProfName(e) !== skillName);
     ch.skillExpertise = ch.skillExpertise.filter(s=>s!==skillName);
   }
   saveData(db); renderApp();
@@ -3260,17 +3503,87 @@ function saveCharSheet() {
   if (btn) { const o=btn.textContent; btn.textContent='Saved!'; setTimeout(()=>btn.textContent=o,1000); }
 }
 function openLevelModal() {
-  const ch = db.characters[currentCharId];
-  openModal(`<h2>Character Level</h2>
-    <div class="form-group"><label>Current Level</label><input type="number" id="level-input" value="${ch.level}" min="1" max="20"></div>
-    <div class="form-actions"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="setLevel()">Set Level</button></div>`);
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  if (ch.level >= 20) {
+    openModal(`<h2>Level Up</h2><p style="color:var(--text-dim);margin:0.5rem 0 1rem">Total level is already 20 — the maximum.</p><div class="form-actions"><button class="btn btn-primary" onclick="closeModal()">OK</button></div>`);
+    return;
+  }
+  if (!ch.classes || ch.classes.length <= 1) {
+    _openLevelUpHPModal(ch, 0);
+  } else {
+    const opts = ch.classes.map((c, i) => `<option value="${i}">${esc(c.class)} (currently Lv ${c.level})</option>`).join('');
+    openModal(`<h2>Level Up</h2>
+      <p style="font-size:0.85rem;color:var(--text-dim);margin-bottom:0.75rem">Total Level ${ch.level} → ${ch.level + 1} &nbsp;·&nbsp; PB +${profBonus(ch.level + 1)}</p>
+      <div class="form-group">
+        <label>Which class is gaining a level?</label>
+        <select id="levelup-class-idx" style="width:100%;margin-top:0.3rem;padding:0.4rem;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text)">
+          ${opts}
+        </select>
+      </div>
+      <div class="form-actions">
+        <button class="btn" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="_levelUpPickedClass()">Next →</button>
+      </div>`);
+  }
 }
-function setLevel() {
-  const val = parseInt(document.getElementById('level-input').value)||1;
-  const ch = db.characters[currentCharId];
-  ch.level = Math.min(20,Math.max(1,val)); ch.proficiencyBonus = profBonus(ch.level);
+
+function _levelUpPickedClass() {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  const idx = parseInt(document.getElementById('levelup-class-idx').value) || 0;
+  _openLevelUpHPModal(ch, idx);
+}
+
+function _openLevelUpHPModal(ch, classIdx) {
+  const entry = ch.classes[classIdx];
+  const className = entry ? entry.class : ch.class;
+  const hd = HIT_DICE[className] || 8;
+  const avg = Math.floor(hd / 2) + 1;
+  const conMod = Math.floor(((ch.abilities?.con || 10) - 10) / 2);
+  const conStr = conMod >= 0 ? `+${conMod}` : `${conMod}`;
+  openModal(`<h2>Level Up — ${esc(className)}</h2>
+    <p style="font-size:0.82rem;color:var(--text-dim);margin-bottom:0.75rem">
+      Hit Die: d${hd} &nbsp;·&nbsp; CON modifier: ${conStr} &nbsp;·&nbsp; New total level: ${ch.level + 1}
+    </p>
+    <div class="form-group" style="display:flex;flex-direction:column;gap:0.5rem">
+      <button class="btn btn-primary" onclick="_levelUpGainHP(${classIdx}, ${Math.floor(Math.random()*hd)+1} + ${conMod})">
+        Roll d${hd} (you'll see the result)
+      </button>
+      <button class="btn" onclick="_levelUpGainHP(${classIdx}, ${avg + conMod})">
+        Take Average — ${avg}${conMod >= 0 ? '+' : ''}${conMod} = <strong>${Math.max(1, avg + conMod)} HP</strong>
+      </button>
+    </div>
+    <div class="form-group" style="margin-top:0.75rem">
+      <label style="font-size:0.75rem;text-transform:uppercase;letter-spacing:1px;color:var(--text-dim)">Or enter manually</label>
+      <div class="flex gap-1" style="margin-top:0.3rem">
+        <input type="number" id="levelup-hp-manual" min="1" value="${Math.max(1, avg + conMod)}" style="flex:1;padding:0.35rem;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text)">
+        <button class="btn btn-sm" onclick="_levelUpGainHP(${classIdx}, +document.getElementById('levelup-hp-manual').value)">Apply</button>
+      </div>
+    </div>
+    <div class="form-actions" style="margin-top:0.5rem">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+    </div>
+    <p id="levelup-result" style="margin-top:0.5rem;font-size:0.85rem;color:var(--gold-lt);min-height:1.2em"></p>`);
+}
+
+function _levelUpGainHP(classIdx, hpGain) {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  if (ch.level >= 20) { closeModal(); return; }
+  const gained = Math.max(1, Math.round(hpGain));
+  const entry = ch.classes[classIdx];
+  if (entry) {
+    const otherSum = ch.classes.reduce((s, c, i) => i === classIdx ? s : s + c.level, 0);
+    entry.level = Math.min(entry.level + 1, 20 - otherSum);
+  }
+  syncClassFields(ch);
+  ch.combat.maxHP = (ch.combat.maxHP || 0) + gained;
+  ch.combat.currentHP = Math.min(ch.combat.currentHP + gained, ch.combat.maxHP);
   syncSubclassFeatures(currentCharId);
-  saveData(db); closeModal(); renderApp();
+  saveData(db);
+  const result = document.getElementById('levelup-result');
+  if (result) {
+    result.textContent = `+${gained} HP · Now Level ${ch.level} · Max HP ${ch.combat.maxHP}`;
+  }
+  setTimeout(() => { closeModal(); renderApp(); refreshPanels(); }, 900);
 }
 
 // ── Character Selector ────────────────────────────────────────────────────────
@@ -3283,7 +3596,7 @@ function renderCharSelector() {
   const ch = campaign.activeCharId ? db.characters[campaign.activeCharId] : null;
   const icon = ch ? (CLASS_ICONS[ch.class] || '⚔') : '✾';
   const name = ch ? esc(ch.name || 'Unnamed') : 'No Character';
-  const meta = ch ? `Lv ${ch.level} ${esc(ch.class)}` : 'Select a character';
+  const meta = ch ? `Lv ${ch.level} ${formatClassLine(ch)}` : 'Select a character';
   wrap.innerHTML = `
     <button class="char-selector-btn${charPanelOpen ? ' open' : ''}" id="char-selector-btn" onclick="toggleCharPanel()">
       <span class="char-selector-icon">${icon}</span>
@@ -3346,7 +3659,7 @@ function renderCharPanelCard(ch, isActive) {
       <span class="char-panel-name">${esc(ch.name || 'Unnamed')}</span>
       <span class="char-panel-level">Lv ${ch.level}</span>
     </div>
-    <div class="char-panel-sub">${esc(ch.race || '—')} ${esc(ch.class)}</div>
+    <div class="char-panel-sub">${esc(ch.race || '—')} ${formatClassLine(ch)}</div>
     <div style="font-size:0.7rem;color:var(--text-dim);margin-bottom:0.25rem">HP ${ch.combat.currentHP}/${ch.combat.maxHP}</div>
     <div class="hp-bar-wrap" style="height:6px;margin-bottom:0.4rem"><div class="hp-bar ${bar}" style="width:${pct}%"></div></div>
     <div class="char-panel-actions">

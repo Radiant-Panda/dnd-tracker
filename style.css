@@ -232,6 +232,95 @@ main {
   font-weight: bold;
   letter-spacing: 0.5px;
 }
+.cs-header-classes { grid-column: span 2; }
+.mc-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+.mc-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.65rem;
+  border-radius: 99px;
+  border: 1px solid var(--border);
+  background: rgba(30,19,50,0.5);
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--text);
+  transition: border-color 0.2s, box-shadow 0.2s;
+  user-select: none;
+}
+.mc-pill:hover { border-color: rgba(155,109,255,0.5); }
+.mc-pill.active {
+  border-color: var(--gold);
+  box-shadow: 0 0 8px rgba(155,109,255,0.3);
+  background: rgba(50,30,80,0.5);
+}
+.mc-pill-icon { font-size: 0.75rem; opacity: 0.8; }
+.mc-pill-add {
+  border-style: dashed;
+  color: var(--text-dim);
+  font-size: 0.72rem;
+}
+.mc-pill-add:hover { color: var(--gold-lt); border-color: var(--gold); }
+.mc-editor {
+  background: rgba(30,19,50,0.6);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.5rem 0.6rem;
+  margin-top: 0.35rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.mc-editor select {
+  font-size: 0.82rem;
+  padding: 0.15rem 0.2rem;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  color: var(--text);
+  max-width: 140px;
+}
+.mc-editor select:focus { outline: none; border-bottom-color: var(--gold); }
+.mc-editor select option { background: var(--surface); }
+.mc-level-stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.mc-level-stepper button {
+  background: rgba(155,109,255,0.1);
+  border: none;
+  color: var(--gold);
+  font-size: 0.8rem;
+  padding: 0.15rem 0.45rem;
+  cursor: pointer;
+  line-height: 1;
+}
+.mc-level-stepper button:hover { background: rgba(155,109,255,0.25); }
+.mc-level-stepper span {
+  font-size: 0.85rem;
+  font-weight: bold;
+  color: var(--gold);
+  min-width: 1.5rem;
+  text-align: center;
+  padding: 0.1rem 0;
+}
+.mc-total {
+  font-size: 0.82rem;
+  color: var(--gold-lt);
+  margin-top: 0.3rem;
+  letter-spacing: 0.5px;
+}
 
 .cs-inspiration-toggle {
   width: 34px; height: 34px;
@@ -1343,6 +1432,28 @@ main {
   box-shadow: inset 0 0 0 3px var(--gold-lt), 0 0 6px rgba(192,132,252,0.5);
 }
 .skill-list .skill-mod { margin-left: auto; color: var(--gold); font-weight: bold; min-width: 28px; text-align: right; }
+.class-save-badge, .class-skill-badge {
+  font-size: 0.55rem;
+  font-weight: 700;
+  border-radius: 3px;
+  padding: 1px 3px;
+  color: #fff;
+  opacity: 0.85;
+  flex-shrink: 0;
+  line-height: 1.2;
+}
+.mc-prof-list { display: flex; flex-direction: column; gap: 0.3rem; }
+.mc-prof-entry { display: flex; align-items: baseline; gap: 0.5rem; font-size: 0.78rem; }
+.mc-prof-badge {
+  font-size: 0.65rem;
+  font-weight: 700;
+  border-radius: 4px;
+  padding: 1px 5px;
+  color: #fff;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.mc-prof-text { color: var(--text-dim); line-height: 1.4; }
 
 /* Notes / text areas */
 .sheet-textarea {
