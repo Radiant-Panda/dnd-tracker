@@ -1462,11 +1462,20 @@ function renderAllSpellsView(ch) {
     ${remaining > 0 ? `<button class="btn btn-sm" style="width:100%;margin-top:0.5rem" onclick="spellShowCount+=100;renderSpellTabContent()">Show more (${remaining} remaining)</button>` : ''}`;
 }
 
+function fullSpellData(sp) {
+  // Merge stored spell with full entry from allSpellsDb so desc is never truncated
+  const name = typeof sp === 'object' ? sp.name : sp;
+  const fromDb = (allSpellsDb || []).find(s => s.name === name)
+              || (customSpells || []).find(s => s.name === name);
+  return fromDb ? { ...fromDb, ...(typeof sp === 'object' ? sp : {}), desc: fromDb.desc || (typeof sp === 'object' ? sp.desc : '') } : sp;
+}
+
 function renderKnownView(ch) {
   const known    = ch.spells.known    || [];
   const prepared = new Set((ch.spells.prepared||[]).map(s=>typeof s==='object'?s.name:s));
   if (known.length === 0) return `<p class="spell-empty" style="padding:1rem 0">No known spells. Add some from All Spells ↑</p>`;
   return `<div>${known.map((sp,i) => {
+    sp = fullSpellData(sp);
     const isObj = typeof sp === 'object';
     const name = isObj ? sp.name : sp;
     const inPrep = prepared.has(name);
@@ -1483,12 +1492,11 @@ function renderKnownView(ch) {
         </div>
         <div class="spell-card-right">
           <button class="btn btn-sm${inPrep?' btn-primary':''}" onclick="togglePrepareFromKnown(${i})" title="${inPrep?'Remove from Prepared':'Add to Prepared'}">${inPrep?'✓ Prep':'Prepare'}</button>
-          ${isObj?`<button class="btn btn-sm" onclick="toggleSpellDesc('${id}')">▾</button>`:''}
           <button class="btn btn-icon btn-danger" onclick="removeSpellEntry('known',${i})">&times;</button>
         </div>
       </div>
       ${isObj&&(sp.casting_time||sp.range||sp.components)?`<div class="spell-meta">${[sp.casting_time,sp.range,sp.components].filter(Boolean).map(esc).join(' · ')}</div>`:''}
-      ${isObj?`<div class="spell-desc" id="${id}">${esc(sp.desc||'')}</div>`:''}
+      ${isObj?`<div class="spell-desc">${esc(sp.desc||'No description available.')}</div>`:''}
     </div>`;
   }).join('')}</div>`;
 }
@@ -1497,11 +1505,11 @@ function renderPreparedView(ch) {
   const prepared = ch.spells.prepared || [];
   if (prepared.length === 0) return `<p class="spell-empty" style="padding:1rem 0">No prepared spells. Mark spells as Prepared from Known ↑ or All Spells.</p>`;
   return `<div>${prepared.map((sp,i) => {
+    sp = fullSpellData(sp);
     const isObj = typeof sp === 'object';
     const name = isObj ? sp.name : sp;
     const sc = SCHOOL_COLORS[isObj?sp.school:''] || '#7b6d8d';
     const lvlLabel = isObj ? (sp.level_int===0?'Cantrip':sp.level_int?`Lv ${sp.level_int}`:'') : '';
-    const id = `sd-prep-${i}`;
     return `<div class="spell-card" style="border-left-color:${sc}">
       <div class="spell-card-top">
         <div class="spell-card-left">
@@ -1512,12 +1520,11 @@ function renderPreparedView(ch) {
         </div>
         <div class="spell-card-right">
           <button class="btn btn-sm btn-primary btn-cast" onclick="spellCastFx(this);openCastModal('${esc(name)}',${isObj?sp.level_int||0:0})">Cast</button>
-          ${isObj?`<button class="btn btn-sm" onclick="toggleSpellDesc('${id}')">▾</button>`:''}
           <button class="btn btn-icon btn-danger" onclick="removeSpellEntry('prepared',${i})">&times;</button>
         </div>
       </div>
       ${isObj&&(sp.casting_time||sp.range||sp.components)?`<div class="spell-meta">${[sp.casting_time,sp.range,sp.components].filter(Boolean).map(esc).join(' · ')}</div>`:''}
-      ${isObj?`<div class="spell-desc" id="${id}">${esc(sp.desc||'')}</div>`:''}
+      ${isObj?`<div class="spell-desc">${esc(sp.desc||'No description available.')}</div>`:''}
     </div>`;
   }).join('')}</div>`;
 }
