@@ -2512,27 +2512,55 @@ function applySubclass(charId, className, subclassName) {
   const ch = db.characters[charId];
   if (!ch) return;
 
-  const oldSubclass = ch.subclass || '';
+  // Show spinner next to subclass field
+  const subWrap = document.querySelector('.subclass-wrap');
+  let spinner = null;
+  if (subWrap) {
+    spinner = document.createElement('span');
+    spinner.className = 'subclass-spinner';
+    spinner.textContent = '✾';
+    subWrap.appendChild(spinner);
+  }
 
-  // Remove features injected by any previous subclass
+  // Remove features/resources injected by previous subclass
   ch.featuresList = (ch.featuresList || []).filter(f => !f._subclass);
-
-  // Remove resources injected by any previous subclass
   ch.resources = (ch.resources || []).filter(r => !r._subclass);
 
   ch.subclass = subclassName;
 
-  if (!subclassName) { renderApp(); refreshPanels(); setTimeout(() => saveData(db), 0); return; }
+  const removeSpinner = () => { if (spinner && spinner.parentNode) spinner.parentNode.removeChild(spinner); };
+
+  if (!subclassName) {
+    renderApp(); refreshPanels();
+    setTimeout(() => saveData(db), 0);
+    return;
+  }
 
   const subclassData = (typeof SUBCLASS_DATA !== 'undefined') &&
     SUBCLASS_DATA[className] && SUBCLASS_DATA[className][subclassName];
-  if (!subclassData) { renderApp(); refreshPanels(); setTimeout(() => saveData(db), 0); return; }
+  if (!subclassData) {
+    renderApp(); refreshPanels();
+    setTimeout(() => saveData(db), 0);
+    return;
+  }
+
+  // Check for empty/missing features — inject a placeholder note
+  const features = subclassData.features || [];
+  const hasFeatures = features.length > 0;
+  if (!hasFeatures) {
+    ch.featuresList.push({
+      name: subclassName,
+      desc: '<em class="no-features-note">No features data yet.</em>',
+      _subclass: subclassName,
+      _placeholder: true,
+    });
+  }
 
   const level = ch.level || 1;
 
   // Inject features up to current level, deduplicating resources (one per resource name)
   const injectedResources = new Set();
-  (subclassData.features || []).forEach(feat => {
+  features.forEach(feat => {
     if (feat.level > level) return;
 
     ch.featuresList.push({
@@ -2562,8 +2590,17 @@ function applySubclass(charId, className, subclassName) {
   });
 
   renderApp();
-  // Fade in the affected panels after browser paints initial state
   refreshPanels();
+
+  // Animate source badge pop
+  requestAnimationFrame(() => {
+    const badge = document.querySelector('.subclass-source-badge');
+    if (badge) {
+      badge.classList.add('badge-pop');
+      setTimeout(() => badge.classList.remove('badge-pop'), 250);
+    }
+  });
+
   setTimeout(() => saveData(db), 0);
 }
 
@@ -2665,13 +2702,19 @@ function ch_field(field, value) {
   ch[field] = value;
   if (field === 'class') {
     ch.subclass = '';
-    const wrap = document.querySelector('.subclass-wrap') || document.querySelector('.cs-header-field:has(label)');
     const container = document.querySelector('.cs-header-field:nth-child(3)');
     if (container) {
       const label = container.querySelector('label');
       container.innerHTML = '';
       if (label) container.appendChild(label);
       container.insertAdjacentHTML('beforeend', renderSubclassField(ch));
+      // Flash the select border purple briefly
+      const sel = container.querySelector('select');
+      if (sel) {
+        sel.style.borderBottomColor = '#9b6dff';
+        sel.style.transition = 'border-color 0.3s ease';
+        setTimeout(() => { sel.style.borderBottomColor = ''; }, 300);
+      }
     }
   }
 }

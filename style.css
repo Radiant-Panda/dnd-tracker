@@ -603,6 +603,36 @@ main {
   white-space: nowrap;
 }
 
+/* Subclass source badge pop animation */
+@keyframes badge-pop {
+  0%   { transform: scale(1); }
+  50%  { transform: scale(1.15); }
+  100% { transform: scale(1); }
+}
+.badge-pop {
+  animation: badge-pop 0.2s ease-out;
+}
+
+/* Subclass spinner */
+@keyframes spin-pulse {
+  0%, 100% { opacity: 1; transform: rotate(0deg); }
+  50%       { opacity: 0.4; transform: rotate(180deg); }
+}
+.subclass-spinner {
+  font-size: 0.75rem;
+  color: var(--accent);
+  animation: spin-pulse 0.6s ease-in-out infinite;
+  display: inline-block;
+  margin-left: 0.25rem;
+}
+
+/* No-features placeholder note */
+.no-features-note {
+  color: rgba(255,255,255,0.35);
+  font-style: italic;
+  font-size: 0.82rem;
+}
+
 /* Subclass-injected feature indicator */
 .feature-subclass-tag {
   font-size: 0.6rem;
