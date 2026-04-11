@@ -1323,8 +1323,9 @@ function switchSpellTab(tab) {
 function applySpellFilter(key, value) {
   if (typeof spellFilters[key] === 'boolean') spellFilters[key] = !spellFilters[key];
   else spellFilters[key] = value;
-  spellShowCount = 100;  // Reset to initial count when filters change
-  renderSpellTabContent();
+  spellShowCount = 100;
+  if (spellViewTab === 'all') updateSpellResults();
+  else renderSpellTabContent();
 }
 
 function renderSpellTabContent() {
@@ -1386,7 +1387,7 @@ function renderFilterBar() {
     <div class="spell-search-wrap">
       <span class="spell-search-icon">✾</span>
       <input type="text" class="spell-filter-input" placeholder="Search spells…" value="${esc(spellFilters.q)}"
-        oninput="spellFilters.q=this.value;renderSpellTabContent()">
+        oninput="spellFilters.q=this.value;updateSpellResults()">
     </div>
     <select class="spell-filter-select" onchange="applySpellFilter('level',this.value)">
       <option value="all"${spellFilters.level==='all'?' selected':''}>All Levels</option>
@@ -1414,24 +1415,18 @@ function renderFilterBar() {
   </div>`;
 }
 
-function renderAllSpellsView(ch) {
-  loadAllSpells(); loadCustomSpells();
+function renderSpellResultsHtml(ch) {
+  if (!allSpellsDb) {
+    return `<div class="spell-loading" style="padding:1rem;text-align:center">
+      <span id="spell-status" style="font-size:0.75rem;color:var(--text-dim)">✾ Loading spells…</span>
+    </div>`;
+  }
   const known    = new Set((ch.spells.known    ||[]).map(s=>typeof s==='object'?s.name:s));
   const prepared = new Set((ch.spells.prepared ||[]).map(s=>typeof s==='object'?s.name:s));
-
-  if (!allSpellsDb) {
-    return `${renderFilterBar()}
-      <div class="spell-loading" style="padding:1rem;text-align:center">
-        <span id="spell-status" style="font-size:0.75rem;color:var(--text-dim)">✾ Loading spells…</span>
-      </div>`;
-  }
-
   const filtered = getFilteredAllSpells(ch);
   const show = filtered.slice(0, spellShowCount);
   const remaining = Math.max(0, filtered.length - spellShowCount);
-
-  return `${renderFilterBar()}
-    <div style="display:flex;align-items:center;justify-content:space-between;margin:0.3rem 0 0.4rem;font-size:0.7rem;color:var(--text-dim)">
+  return `<div style="display:flex;align-items:center;justify-content:space-between;margin:0.3rem 0 0.4rem;font-size:0.7rem;color:var(--text-dim)">
       <span>${filtered.length} spells${filtered.length > spellShowCount ? ` (showing ${spellShowCount})` : ''}</span>
       <div class="flex gap-1">
         <button class="btn btn-sm" onclick="openCustomSpellModal()">+ Custom Spell</button>
@@ -1448,7 +1443,6 @@ function renderAllSpellsView(ch) {
           const inK = known.has(sp.name), inP = prepared.has(sp.name);
           const sourceMap = { "Player's Handbook (2024)": {abbr:'PHB24',color:'#c084fc'}, "Xanathar's Guide to Everything": {abbr:'XGE',color:'#3b82f6'}, "Tasha's Cauldron of Everything": {abbr:'TCE',color:'#14b8a6'}, "Explorer's Guide to Wildemount": {abbr:'EGW',color:'#f59e0b'}, "Free Basic Rules (2024)": {abbr:'BR24',color:'#9b6dff'}, "Free Basic Rules (2014)": {abbr:'BR14',color:'#9b6dff'}, "Player's Handbook": {abbr:'PHB14',color:'#6d7b9b'} };
           const srcInfo = sourceMap[sp.source] || {abbr:'?',color:'#7b6d8d'};
-          // desc omitted — fullSpellData() looks it up from allSpellsDb at render time
           const safeData = encodeURIComponent(JSON.stringify({name:sp.name,level_int:sp.level_int||0,school:sp.school||'',casting_time:sp.casting_time||'',range:sp.range||'',components:sp.components||'',concentration:sp.concentration||'no',ritual:sp.ritual||'no',dnd_class:sp.dnd_class||'',_custom:sp._custom||false}));
           return `<div class="spell-browser-row">
             <div class="spell-browser-left">
@@ -1468,7 +1462,19 @@ function renderAllSpellsView(ch) {
           <div class="spell-desc hidden" id="sd-all-${esc(sp.name).replace(/\s/g,'-')}" style="margin:0 0 0.3rem 0.5rem;border-top:none;padding-top:0.2rem">${esc(sp.desc||'No description.')}</div>`;
         }).join('')}
     </div>
-    ${remaining > 0 ? `<button class="btn btn-sm" style="width:100%;margin-top:0.5rem" onclick="spellShowCount+=100;renderSpellTabContent()">Show more (${remaining} remaining)</button>` : ''}`;
+    ${remaining > 0 ? `<button class="btn btn-sm" style="width:100%;margin-top:0.5rem" onclick="spellShowCount+=100;updateSpellResults()">Show more (${remaining} remaining)</button>` : ''}`;
+}
+
+function updateSpellResults() {
+  const el = document.getElementById('spell-results');
+  const ch = db.characters[currentCharId];
+  if (!el || !ch) return;
+  el.innerHTML = renderSpellResultsHtml(ch);
+}
+
+function renderAllSpellsView(ch) {
+  loadAllSpells(); loadCustomSpells();
+  return `${renderFilterBar()}<div id="spell-results">${renderSpellResultsHtml(ch)}</div>`;
 }
 
 function fullSpellData(sp) {
