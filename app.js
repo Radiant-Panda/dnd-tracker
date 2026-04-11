@@ -28,6 +28,13 @@ function migrateCharacter(ch) {
   if (ch.otherSenses        === undefined) ch.otherSenses        = '';
   if (!ch.deathSaves)      ch.deathSaves = {successes:0,failures:0};
   if (!ch.saveProficiencies)  ch.saveProficiencies = [];
+  if (!ch.resources)       ch.resources = [];
+  ch.resources.forEach(r => {
+    if (r.type === undefined) r.type = (r.maxFormula === 'level_x5' || r.name.includes('Hands') || r.name.includes('Pool')) ? 'pool' : 'pips';
+    if (r.custom === undefined) r.custom = !r._subclass;
+    if (r.source === undefined) r.source = r._subclass || '';
+    if (r.desc === undefined) r.desc = '';
+  });
   if (!ch.skillProficiencies) ch.skillProficiencies = [];
   return ch;
 }
@@ -822,7 +829,10 @@ function renderCombatantStatBlock(sb, combatantIdx) {
 
   html += `<div class="stat-block-meta">${esc(sb.size)} ${esc(sb.type)}, ${esc(sb.alignment)}</div>`;
   html += `<hr class="stat-block-divider">`;
-  html += `<div><strong>Speed</strong> ${Object.entries(sb.speed).map(([k,v])=>`${k} ${v}`).join(', ')}</div>`;
+  const speedStr = typeof sb.speed === 'string'
+    ? esc(sb.speed)
+    : Object.entries(sb.speed||{}).map(([k,v])=>`${k} ${v}`).join(', ');
+  html += `<div><strong>Speed</strong> ${speedStr}</div>`;
   html += `<hr class="stat-block-divider">`;
   html += `<div class="ability-grid" style="margin:0.5rem 0">`;
   ['strength','dexterity','constitution','intelligence','wisdom','charisma'].forEach(a => {
@@ -1904,29 +1914,113 @@ function getClassFeaturesUpToLevel(className, level) {
 }
 
 function renderFeaturesSection(ch) {
-  const features = ch.featuresList || [];
-  const rows = features.map((f, i) => `
-    <div class="feature-row" id="feat-row-${i}">
-      <div class="feature-row-content">
-        <input class="feature-name-input" value="${esc(f.name)}" placeholder="Feature name"
-          oninput="updateFeatureField(${i},'name',this.value)" onblur="saveData(db)">
-        <span class="feature-sep">—</span>
-        <input class="feature-desc-input" value="${esc(f.desc)}" placeholder="Description"
-          oninput="updateFeatureField(${i},'desc',this.value)" onblur="saveData(db)">
-      </div>
-      <button class="feature-del-btn" onclick="removeFeature(${i})" title="Remove">&times;</button>
-    </div>`).join('');
+  const allFeatures = ch.featuresList || [];
+  const subFeatures = allFeatures.filter(f => f._subclass);
+  const customFeatures = allFeatures.filter(f => !f._subclass);
 
-  return `<div class="sheet-panel" style="margin-top:0.6rem">
-    <div class="cs-section-label">Features &amp; Traits</div>
+  // Build a map from resource name → resource object for quick lookup
+  const resourceMap = {};
+  (ch.resources || []).forEach(r => { resourceMap[r.name] = r; });
+
+  // Look up the level a subclass feature was gained at
+  function featLevel(f) {
+    const sd = typeof SUBCLASS_DATA !== 'undefined' &&
+      SUBCLASS_DATA[ch.class]?.[f._subclass]?.features;
+    if (!sd) return null;
+    const match = sd.find(s => s.name === f.name);
+    return match ? match.level : null;
+  }
+
+  // Look up a linked resource for a subclass feature
+  function linkedResource(f) {
+    const sd = typeof SUBCLASS_DATA !== 'undefined' &&
+      SUBCLASS_DATA[ch.class]?.[f._subclass]?.features;
+    if (!sd) return null;
+    const match = sd.find(s => s.name === f.name);
+    if (!match?.resource) return null;
+    return resourceMap[match.resource.name] || null;
+  }
+
+  function renderResourceMini(r) {
+    if (!r) return '';
+    const max = resolveMaxFormula(r.max, ch);
+    const current = Math.min(r.current || 0, max);
+    if (max >= 20) {
+      return `<span class="feat-res-mini feat-res-pool">${current}/${max}</span>`;
+    }
+    const pips = Array.from({length: Math.min(max, 10)}, (_, p) =>
+      `<span class="feat-res-pip${p < current ? ' feat-res-pip-on' : ''}"></span>`
+    ).join('');
+    const overflow = max > 10 ? `<span class="feat-res-overflow">+${max-10}</span>` : '';
+    return `<span class="feat-res-mini">${pips}${overflow}</span>`;
+  }
+
+  // Subclass feature cards
+  const subCards = subFeatures.map((f, rawI) => {
+    const i = allFeatures.indexOf(f);
+    const lvl = featLevel(f);
+    const res = linkedResource(f);
+    const resMini = renderResourceMini(res);
+    const idKey = `sf-desc-${i}`;
+    return `
+      <div class="sf-card" id="sf-card-${i}">
+        <div class="sf-card-header" onclick="toggleSfCard('${idKey}', this)">
+          <span class="sf-source-badge">${esc(f._subclass)}</span>
+          <span class="sf-name">${esc(f.name)}</span>
+          ${lvl ? `<span class="sf-level">Lv ${lvl}</span>` : ''}
+          ${resMini}
+          <span class="sf-toggle">▼</span>
+        </div>
+        <div class="sf-card-body hidden" id="${idKey}">
+          <p class="sf-desc">${esc(f.desc || 'No description.')}</p>
+        </div>
+      </div>`;
+  }).join('');
+
+  // Custom feature rows (editable inline)
+  const customRows = customFeatures.map(f => {
+    const i = allFeatures.indexOf(f);
+    return `
+      <div class="feature-row" id="feat-row-${i}">
+        <div class="feature-row-content">
+          <input class="feature-name-input" value="${esc(f.name)}" placeholder="Feature name"
+            oninput="updateFeatureField(${i},'name',this.value)" onblur="saveData(db)">
+          <span class="feature-sep">—</span>
+          <input class="feature-desc-input" value="${esc(f.desc || '')}" placeholder="Description"
+            oninput="updateFeatureField(${i},'desc',this.value)" onblur="saveData(db)">
+        </div>
+        <button class="feature-del-btn" onclick="removeFeature(${i})" title="Remove">&times;</button>
+      </div>`;
+  }).join('');
+
+  const subSection = subFeatures.length ? `
+    <div class="feat-section-label">✦ Class &amp; Subclass Features</div>
+    ${subCards}` : '';
+
+  const customSection = `
+    <div class="feat-section-divider${subFeatures.length ? '' : ' feat-section-first'}">
+      <span>Custom Features</span>
+    </div>
     <div id="features-list">
-      ${rows || '<div class="feature-empty">No features yet.</div>'}
+      ${customRows || '<div class="feature-empty">No custom features yet.</div>'}
     </div>
     <div class="feature-add-row">
       <button class="btn btn-sm feature-add-btn" onclick="addFeatureInline()">+ Add Feature</button>
-      ${features.length === 0 && (CLASS_FEATURES[ch.class] || CLASS_FEATURES[ch.className]) ? `<button class="btn btn-sm" onclick="populateClassFeatures()" style="margin-left:0.4rem">Import Class Features</button>` : ''}
-    </div>
+    </div>`;
+
+  return `<div class="sheet-panel" style="margin-top:0.6rem">
+    <div class="cs-section-label">Features &amp; Traits</div>
+    ${subSection}
+    ${customSection}
   </div>`;
+}
+
+function toggleSfCard(id, headerEl) {
+  const body = document.getElementById(id);
+  if (!body) return;
+  const hidden = body.classList.toggle('hidden');
+  const toggle = headerEl.querySelector('.sf-toggle');
+  if (toggle) toggle.textContent = hidden ? '▼' : '▲';
 }
 
 function renderProficienciesLanguages(ch) {
@@ -2108,6 +2202,388 @@ function renderSensesSection(ch, pb) {
 }
 
 // ── Character Sheet — Main Render ──────────────────────────────────────────────
+// ── Resources Panel ───────────────────────────────────────────────────────────
+// ── Resources Panel ───────────────────────────────────────────────────────────
+function renderResourceCard(r, i, ch) {
+  const max = resolveMaxFormula(r.max, ch);
+  const current = Math.min(r.current || 0, max);
+  const rechargeLabel = { short: 'Short Rest', long: 'Long Rest', dawn: 'Dawn', manual: 'Manual' }[r.recharge] || 'Long Rest';
+  const dieBadge = r.die ? `<span class="res-die-badge">${r.die}</span>` : '';
+  const controls = r.type === 'pool'
+    ? `<div class="res-pool-controls">
+        <button class="res-pool-btn" onclick="adjustResource(${i},-1)">−</button>
+        <input type="number" class="res-pool-input" value="${current}" min="0" max="${max}"
+          onchange="setResourceCurrent(${i},+this.value)" onkeydown="if(event.key==='Enter')this.blur()">
+        <span class="res-pool-sep">/ ${max}</span>
+        <button class="res-pool-btn" onclick="adjustResource(${i},1)">+</button>
+      </div>`
+    : `<div class="res-pips">${Array.from({length: Math.min(max, 20)}, (_, p) => {
+        const filled = p < current;
+        return `<button class="res-pip${filled ? ' res-pip-filled' : ''}" onclick="toggleResourcePip(${i},${p})"></button>`;
+      }).join('')}${max > 20 ? `<span class="res-overflow">+${max-20}</span>` : ''}</div>`;
+
+  return `<div class="res-card" data-res-id="${esc(r.id||i)}">
+    <div class="res-card-header">
+      <div class="res-card-meta">
+        <span class="res-name">${esc(r.name)}</span>
+        ${dieBadge}
+        <span class="res-recharge">⟳ ${rechargeLabel}</span>
+      </div>
+      <div class="res-card-actions">
+        <button class="res-action-btn" onclick="openResourceEditModal(${i})" title="Edit">✎</button>
+        <button class="res-action-btn res-delete-btn" onclick="deleteResource(${i})" title="Delete">✕</button>
+      </div>
+    </div>
+    ${controls}
+  </div>`;
+}
+
+function renderResourcesPanel(ch) {
+  const resources = ch.resources || [];
+  const classRes = resources.filter(r => !r.custom);
+  const customRes = resources.filter(r => r.custom);
+
+  const hasAny = resources.length > 0;
+
+  const classSection = classRes.length ? `
+    <div class="res-group-label">Class &amp; Subclass</div>
+    ${classRes.map(r => renderResourceCard(r, resources.indexOf(r), ch)).join('')}` : '';
+
+  const customSection = `
+    <div class="res-group-divider${!classRes.length ? ' res-group-first' : ''}"><span>Custom</span></div>
+    ${customRes.length
+      ? customRes.map(r => renderResourceCard(r, resources.indexOf(r), ch)).join('')
+      : '<div class="feature-empty">No custom resources.</div>'}
+    <button class="btn btn-sm res-add-btn" onclick="openResourceEditModal(-1)" style="margin-top:0.4rem">+ Add Resource</button>`;
+
+  return `<div class="sheet-panel res-panel">
+    <div class="cs-section-label">Resources</div>
+    ${classSection}
+    ${customSection}
+  </div>`;
+}
+
+function toggleResourcePip(index, pipIndex) {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  const r = ch.resources[index]; if (!r) return;
+  const max = resolveMaxFormula(r.max, ch);
+  const current = Math.min(r.current || 0, max);
+  r.current = pipIndex < current ? pipIndex : pipIndex + 1;
+  r.current = Math.max(0, Math.min(max, r.current));
+  saveData(db);
+  const panel = document.querySelector('.res-panel');
+  if (panel) panel.outerHTML = renderResourcesPanel(db.characters[currentCharId]);
+  else renderApp();
+}
+
+function adjustResource(index, delta) {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  const r = ch.resources[index]; if (!r) return;
+  const max = resolveMaxFormula(r.max, ch);
+  r.current = Math.max(0, Math.min(max, (r.current || 0) + delta));
+  saveData(db); renderApp();
+}
+
+function setResourceCurrent(index, val) {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  const r = ch.resources[index]; if (!r) return;
+  const max = resolveMaxFormula(r.max, ch);
+  r.current = Math.max(0, Math.min(max, Math.floor(val) || 0));
+  saveData(db); renderApp();
+}
+
+function deleteResource(index) {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  ch.resources.splice(index, 1);
+  saveData(db); renderApp();
+}
+
+function openResourceEditModal(index) {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  const isNew = index === -1;
+  const r = isNew ? { name: '', type: 'pips', max: 3, current: 3, maxFormula: 3, die: null, recharge: 'long', source: '', desc: '', custom: true } : ch.resources[index];
+  const dies = ['', 'd4', 'd6', 'd8', 'd10', 'd12', 'd20'];
+  openModal(`<h2>${isNew ? 'Add Resource' : 'Edit Resource'}</h2>
+    <div class="form-group"><label>Name</label><input type="text" id="re-name" value="${esc(r.name)}" placeholder="Bardic Inspiration" autofocus></div>
+    <div class="form-group"><label>Type</label>
+      <div class="res-type-toggle">
+        <button class="res-type-btn${r.type==='pips'?' active':''}" onclick="resTypeToggle('pips',this)">Pips</button>
+        <button class="res-type-btn${r.type==='pool'?' active':''}" onclick="resTypeToggle('pool',this)">Pool</button>
+      </div>
+      <input type="hidden" id="re-type" value="${r.type}">
+    </div>
+    <div class="form-group"><label>Max</label><input type="number" id="re-max" value="${r.max}" min="1" max="999"></div>
+    <div class="form-group"><label>Die (optional)</label>
+      <select id="re-die">${dies.map(d=>`<option value="${d}"${(r.die||'')=== d?' selected':''}>${d||'None'}</option>`).join('')}</select>
+    </div>
+    <div class="form-group"><label>Recharge</label>
+      <select id="re-recharge">
+        ${['short','long','dawn','manual'].map(v=>`<option value="${v}"${r.recharge===v?' selected':''}>${{short:'Short Rest',long:'Long Rest',dawn:'Dawn',manual:'Manual'}[v]}</option>`).join('')}
+      </select>
+    </div>
+    <div class="form-group"><label>Source</label><input type="text" id="re-source" value="${esc(r.source||'')}" placeholder="e.g. College of Lore"></div>
+    <div class="form-group"><label>Description</label><textarea id="re-desc" rows="3" class="sheet-textarea" placeholder="What does this resource represent?">${esc(r.desc||'')}</textarea></div>
+    <div class="form-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveResourceEdit(${index})">Save</button>
+    </div>`);
+  setTimeout(() => document.getElementById('re-name')?.focus(), 50);
+}
+
+function resTypeToggle(type, btn) {
+  document.getElementById('re-type').value = type;
+  btn.closest('.res-type-toggle').querySelectorAll('.res-type-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+}
+
+function saveResourceEdit(index) {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  const name = document.getElementById('re-name').value.trim();
+  if (!name) return;
+  const max = Math.max(1, parseInt(document.getElementById('re-max').value) || 1);
+  const entry = {
+    id: index === -1 ? `res_${Date.now()}_${Math.random().toString(36).slice(2,6)}` : (ch.resources[index]?.id || `res_${Date.now()}`),
+    name,
+    type: document.getElementById('re-type').value || 'pips',
+    max,
+    maxFormula: max,
+    current: index === -1 ? max : Math.min(ch.resources[index]?.current ?? max, max),
+    die: document.getElementById('re-die').value || null,
+    recharge: document.getElementById('re-recharge').value || 'long',
+    source: document.getElementById('re-source').value.trim(),
+    desc: document.getElementById('re-desc').value.trim(),
+    custom: true,
+  };
+  ch.resources = ch.resources || [];
+  if (index === -1) ch.resources.push(entry);
+  else ch.resources[index] = { ...ch.resources[index], ...entry, custom: ch.resources[index]?.custom ?? true };
+  saveData(db); closeModal(); renderApp();
+}
+
+function restoreResources(rechargeType, charId) {
+  const id = charId || currentCharId;
+  const ch = db.characters[id]; if (!ch) return;
+  (ch.resources || []).forEach(r => {
+    if (r.recharge === rechargeType) r.current = resolveMaxFormula(r.max, ch);
+    if (rechargeType === 'long' && r.recharge === 'short') r.current = resolveMaxFormula(r.max, ch);
+  });
+}
+
+// ── Die Scaling Rules ─────────────────────────────────────────────────────────
+// Maps resource name → [[minLevel, die], ...] sorted ascending
+const RESOURCE_DIE_SCALE = {
+  'Bardic Inspiration': [[1,'d6'],[5,'d8'],[10,'d10'],[15,'d12']],
+  'Superiority Dice':   [[3,'d8'],[10,'d10'],[18,'d12']],
+};
+
+function scaledDie(resourceName, level) {
+  const tiers = RESOURCE_DIE_SCALE[resourceName];
+  if (!tiers) return null;
+  let die = tiers[0][1];
+  for (const [lvl, d] of tiers) { if (level >= lvl) die = d; }
+  return die;
+}
+
+// ── Toast Notifications ───────────────────────────────────────────────────────
+function showToast(html, duration = 5000) {
+  let container = document.getElementById('toast-container');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'toast-container';
+    document.body.appendChild(container);
+  }
+  const toast = document.createElement('div');
+  toast.className = 'toast-msg';
+  toast.innerHTML = html;
+  container.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add('toast-show'));
+  setTimeout(() => {
+    toast.classList.remove('toast-show');
+    setTimeout(() => toast.remove(), 400);
+  }, duration);
+}
+
+// ── Sync Subclass Features on Level Change ────────────────────────────────────
+function syncSubclassFeatures(charId) {
+  const ch = db.characters[charId];
+  if (!ch || !ch.subclass) return;
+
+  const cls = ch.class || '';
+  const subclassName = ch.subclass;
+  const level = ch.level || 1;
+  const subclassData = typeof SUBCLASS_DATA !== 'undefined' &&
+    SUBCLASS_DATA[cls]?.[subclassName];
+  if (!subclassData) return;
+
+  const unlocked = [];
+
+  // 1. Add newly unlocked features
+  const existingNames = new Set((ch.featuresList || []).filter(f => f._subclass === subclassName).map(f => f.name));
+  (subclassData.features || []).forEach(feat => {
+    if (feat.level <= level && !existingNames.has(feat.name)) {
+      ch.featuresList = ch.featuresList || [];
+      ch.featuresList.push({ name: feat.name, desc: feat.description, _subclass: subclassName });
+      unlocked.push({ name: feat.name, resource: feat.resource });
+    }
+  });
+
+  // 2. Update resource maxes and die scaling
+  (ch.resources || []).forEach(r => {
+    if (!r._subclass) return;
+    // Recalculate max from stored formula
+    if (r.maxFormula !== undefined) {
+      const newMax = resolveMaxFormula(r.maxFormula, ch);
+      if (r.max !== newMax) {
+        r.current = Math.min(r.current || 0, newMax);
+        r.max = newMax;
+      }
+    }
+    // Update die scaling
+    const newDie = scaledDie(r.name, level);
+    if (newDie && r.die !== newDie) {
+      r.die = newDie;
+    }
+    // Bardic Inspiration recharges on short rest at level 5+
+    if (r.name === 'Bardic Inspiration' && cls === 'Bard') {
+      r.recharge = level >= 5 ? 'short' : 'long';
+    }
+  });
+
+  // 3. Create resource trackers for newly unlocked features
+  const existingResNames = new Set((ch.resources || []).filter(r => r._subclass === subclassName).map(r => r.name));
+  unlocked.forEach(({ resource }) => {
+    if (!resource || existingResNames.has(resource.name)) return;
+    existingResNames.add(resource.name);
+    const max = resolveMaxFormula(resource.maxFormula, ch);
+    ch.resources = ch.resources || [];
+    ch.resources.push({
+      id: `res_${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
+      name: resource.name,
+      type: (resource.maxFormula === 'level_x5' || resource.name.includes('Hands') || resource.name.includes('Pool')) ? 'pool' : 'pips',
+      current: max,
+      max,
+      maxFormula: resource.maxFormula,
+      die: scaledDie(resource.name, level) || resource.die || null,
+      recharge: resource.recharge || 'long',
+      source: subclassName,
+      desc: '',
+      custom: false,
+      _subclass: subclassName,
+    });
+  });
+
+  // 4. Toast
+  if (unlocked.length) {
+    const lines = unlocked.map(u => {
+      let msg = `<strong>${esc(u.name)}</strong>`;
+      if (u.resource) {
+        const die = scaledDie(u.resource.name, level) || u.resource.die;
+        const recharge = u.resource.recharge === 'short' ? 'short rest' : 'long rest';
+        msg += ` — ${esc(u.resource.name)}${die ? ' '+die : ''}, recharges on ${recharge}`;
+      }
+      return msg;
+    }).join('<br>');
+    showToast(`<div class="toast-title">✦ Level ${level} unlocked:</div>${lines}`);
+  }
+}
+
+function renderSubclassField(ch) {
+  const cls = ch.class || '';
+  const subclasses = (typeof SUBCLASS_DATA !== 'undefined' && SUBCLASS_DATA[cls])
+    ? Object.keys(SUBCLASS_DATA[cls]) : [];
+  const current = ch.subclass || '';
+  const sourceLabel = current && SUBCLASS_DATA?.[cls]?.[current]?.source
+    ? `<span class="subclass-source-badge">${SUBCLASS_DATA[cls][current].source}</span>` : '';
+
+  if (!subclasses.length) {
+    return `<input type="text" value="${esc(current)}" placeholder="Subclass..."
+      oninput="ch_field('subclass',this.value)" onblur="saveData(db)">`;
+  }
+
+  const opts = `<option value="">Choose subclass...</option>` +
+    subclasses.map(s => `<option value="${esc(s)}"${current===s?' selected':''}>${esc(s)}</option>`).join('');
+
+  return `<div class="subclass-wrap">
+    <select onchange="applySubclass('${ch.id}','${esc(cls)}',this.value)"
+      style="flex:1;font-size:0.85rem;padding:0.1rem 0;background:transparent;border:none;border-bottom:1px solid var(--border);border-radius:0;color:var(--text)">
+      ${opts}
+    </select>
+    ${sourceLabel}
+  </div>`;
+}
+
+// ── Subclass System ───────────────────────────────────────────────────────────
+function resolveMaxFormula(formula, ch) {
+  if (typeof formula === 'number') return formula;
+  const abilityMod = s => Math.floor(((ch.abilities?.[s] || 10) - 10) / 2);
+  switch (formula) {
+    case 'cha_mod':    return Math.max(1, abilityMod('cha'));
+    case 'int_mod':    return Math.max(1, abilityMod('int'));
+    case 'wis_mod':    return Math.max(1, abilityMod('wis'));
+    case 'proficiency': return profBonus(ch.level || 1);
+    case 'level':      return ch.level || 1;
+    case 'level_div_2': return Math.max(1, Math.floor((ch.level || 1) / 2));
+    default:           return 1;
+  }
+}
+
+function applySubclass(charId, className, subclassName) {
+  const ch = db.characters[charId];
+  if (!ch) return;
+
+  const oldSubclass = ch.subclass || '';
+
+  // Remove features injected by any previous subclass
+  ch.featuresList = (ch.featuresList || []).filter(f => !f._subclass);
+
+  // Remove resources injected by any previous subclass
+  ch.resources = (ch.resources || []).filter(r => !r._subclass);
+
+  ch.subclass = subclassName;
+
+  if (!subclassName) { saveData(db); renderApp(); return; }
+
+  const subclassData = (typeof SUBCLASS_DATA !== 'undefined') &&
+    SUBCLASS_DATA[className] && SUBCLASS_DATA[className][subclassName];
+  if (!subclassData) { saveData(db); renderApp(); return; }
+
+  const level = ch.level || 1;
+
+  // Inject features up to current level, deduplicating resources (one per resource name)
+  const injectedResources = new Set();
+  (subclassData.features || []).forEach(feat => {
+    if (feat.level > level) return;
+
+    ch.featuresList.push({
+      name: feat.name,
+      desc: feat.description,
+      _subclass: subclassName,
+    });
+
+    if (feat.resource && !injectedResources.has(feat.resource.name)) {
+      injectedResources.add(feat.resource.name);
+      const max = resolveMaxFormula(feat.resource.maxFormula, ch);
+      ch.resources.push({
+        id: `res_${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
+        name: feat.resource.name,
+        type: (feat.resource.maxFormula === 'level_x5' || feat.resource.name.includes('Hands') || feat.resource.name.includes('Pool')) ? 'pool' : 'pips',
+        current: max,
+        max,
+        maxFormula: feat.resource.maxFormula,
+        die: feat.resource.die || null,
+        recharge: feat.resource.recharge || 'long',
+        source: subclassName,
+        desc: feat.description || '',
+        custom: false,
+        _subclass: subclassName,
+      });
+    }
+  });
+
+  saveData(db);
+  renderApp();
+}
+
 function renderCharacterSheet() {
   const ch = db.characters[currentCharId];
   if (!ch) return '<p>Character not found.</p>';
@@ -2140,6 +2616,10 @@ function renderCharacterSheet() {
         </div>
       </div>
       <div class="cs-header-field">
+        <label>Subclass</label>
+        ${renderSubclassField(ch)}
+      </div>
+      <div class="cs-header-field">
         <label>Background</label>
         <input type="text" value="${esc(ch.background)}" oninput="ch_field('background',this.value)" placeholder="Soldier">
       </div>
@@ -2170,6 +2650,7 @@ function renderCharacterSheet() {
       </div>
       <div class="cs-col-mid">
         ${renderCombatSection(ch)}
+        ${renderResourcesPanel(ch)}
         ${renderAttacksSection(ch)}
         ${renderEquipmentCurrency(ch)}
         ${renderSpellsSection(ch)}
@@ -2189,6 +2670,7 @@ function ch_field_level(value) {
   const ch = db.characters[currentCharId];
   ch.level = Math.min(20, Math.max(1, parseInt(value)||1));
   ch.proficiencyBonus = profBonus(ch.level);
+  syncSubclassFeatures(currentCharId);
   saveData(db); renderApp();
 }
 function combatField(field, value) {
@@ -2202,6 +2684,17 @@ function combatField(field, value) {
 }
 function updateAbility(ability, value) {
   db.characters[currentCharId].abilities[ability] = parseInt(value)||10;
+  // Recalculate any ability-score-based resource maxes
+  const ch = db.characters[currentCharId];
+  (ch.resources || []).forEach(r => {
+    if (r.maxFormula !== undefined && typeof r.maxFormula === 'string') {
+      const newMax = resolveMaxFormula(r.maxFormula, ch);
+      if (r.max !== newMax) {
+        r.current = Math.min(r.current || 0, newMax);
+        r.max = newMax;
+      }
+    }
+  });
   saveData(db); renderApp();
 }
 function toggleInspiration() {
@@ -2335,6 +2828,8 @@ function doLongRest() {
   }
   // Reset death saves
   ch.deathSaves = { successes: 0, failures: 0 };
+  // Restore resources
+  restoreResources('long', currentCharId);
   saveData(db); renderApp();
 }
 
@@ -2353,7 +2848,7 @@ function openShortRestDialog() {
     <div id="sr-roll-log" style="max-height:120px;overflow-y:auto;margin-bottom:0.8rem"></div>
     <div class="form-actions">
       <button class="btn" id="sr-roll-btn" onclick="shortRestRollHD()" ${hdRemaining <= 0 || ch.combat.currentHP >= ch.combat.maxHP ? 'disabled' : ''}>Roll Hit Die</button>
-      <button class="btn btn-primary" onclick="closeModal()">Done</button>
+      <button class="btn btn-primary" onclick="restoreResources('short',currentCharId);saveData(db);closeModal();renderApp()">Done</button>
     </div>`);
 }
 
@@ -2458,6 +2953,7 @@ function setLevel() {
   const val = parseInt(document.getElementById('level-input').value)||1;
   const ch = db.characters[currentCharId];
   ch.level = Math.min(20,Math.max(1,val)); ch.proficiencyBonus = profBonus(ch.level);
+  syncSubclassFeatures(currentCharId);
   saveData(db); closeModal(); renderApp();
 }
 
