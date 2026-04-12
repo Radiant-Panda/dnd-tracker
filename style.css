@@ -2634,6 +2634,42 @@ input.hp-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0;
 .wiz-bonus-chip.bonus-2 { background: var(--gold); color: #1a1a2e; }
 .wiz-bonus-chip.bonus-1 { background: rgba(196,191,224,0.35); color: var(--text); }
 
+/* Point Buy */
+.pb-score {
+  display: inline-block;
+  font-size: 1.3rem;
+  font-weight: bold;
+  color: var(--gold);
+  min-width: 2ch;
+  text-align: center;
+}
+.pb-btn {
+  width: 1.8rem; height: 1.8rem;
+  padding: 0; font-size: 1rem;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.pb-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+.pb-remaining {
+  transition: transform 0.15s ease;
+}
+.pb-pulse {
+  animation: pbPulse 0.25s ease;
+}
+@keyframes pbPulse {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.15); }
+  100% { transform: scale(1); }
+}
+.pb-perfect .pb-remaining {
+  text-shadow: 0 0 12px rgba(196,180,84,0.5);
+}
+.pb-counter {
+  background: var(--surface2);
+  border-radius: var(--radius);
+  padding: 0.5rem;
+  margin-bottom: 0.6rem;
+}
+
 /* ── Responsive ── */
 @media (max-width: 500px) {
   .header-inner { padding: 0.5rem; }

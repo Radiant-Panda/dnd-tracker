@@ -4474,9 +4474,10 @@ function openCharWizard() {
     name: '', race: '', raceSource: '', raceData: null,
     background: '', backgroundData: null,
     abilityBonuses: {},
+    abilityMethod: 'pointbuy',
     _speciesSource: '2024',
     class: 'Fighter', level: 1,
-    abilities: { str:10, dex:10, con:10, int:10, wis:10, cha:10 },
+    abilities: { str:8, dex:8, con:8, int:8, wis:8, cha:8 },
     maxHP: 10, maxHPSet: false
   };
   renderWizardStep(0);
@@ -4581,12 +4582,15 @@ function renderWizardStep(step) {
         <button class="btn btn-primary" onclick="renderWizardStep(5)">Next →</button>
       </div>`;
   } else if (step === 5) {
-    // Ability Scores with +2/+1 bonus picker
+    // Ability Scores with method selector + bonus picker
+    if (!wizardData.abilityMethod) wizardData.abilityMethod = 'pointbuy';
+    const method = wizardData.abilityMethod;
+
+    // Background bonus section
     let bonusSection = '';
     const bg = wizardData.backgroundData;
     const is2014 = wizardData.raceSource === 'races_2014';
     if (is2014 && wizardData.raceData?.abilityBonuses) {
-      // Auto-apply 2014 fixed bonuses
       wizardData.abilityBonuses = { ...wizardData.raceData.abilityBonuses };
       const chips = Object.entries(wizardData.raceData.abilityBonuses)
         .map(([a,v]) => `<span class="wiz-stat-chip" style="opacity:0.6">+${v} ${a.toUpperCase()}</span>`).join(' ');
@@ -4602,21 +4606,25 @@ function renderWizardStep(step) {
       bonusSection = `<div style="margin-bottom:0.6rem;font-size:0.82rem">
         <div style="color:var(--text-dim);margin-bottom:0.3rem">Background grants +2 to one and +1 to another from:</div>${chips}</div>`;
     }
+
+    // Method toggle
+    const methodToggle = `<div class="wiz-source-toggle" style="margin-bottom:0.6rem">
+      <button class="btn btn-sm ${method==='pointbuy'?'btn-primary':''}" onclick="wiz_setAbilityMethod('pointbuy')">Point Buy</button>
+      <button class="btn btn-sm ${method==='array'?'btn-primary':''}" onclick="wiz_setAbilityMethod('array')">Standard Array</button>
+      <button class="btn btn-sm ${method==='manual'?'btn-primary':''}" onclick="wiz_setAbilityMethod('manual')">Manual Roll</button>
+    </div>`;
+
+    let scoreSection = '';
+    if (method === 'pointbuy') {
+      scoreSection = _wizPointBuySection();
+    } else if (method === 'array') {
+      scoreSection = _wizArraySection();
+    } else {
+      scoreSection = _wizManualSection();
+    }
+
     body = `<h2>✾ Ability Scores</h2>${wizardProgress(5)}
-      <p style="font-size:0.75rem;color:var(--text-dim);margin-bottom:0.5rem">Standard array: 15, 14, 13, 12, 10, 8 — or roll your own.</p>
-      ${bonusSection}
-      <div class="wizard-ability-grid">
-        ${ABILITIES.map(a => {
-          const base = wizardData.abilities[a];
-          const bonus = wizardData.abilityBonuses[a] || 0;
-          const total = base + bonus;
-          return `<div class="wizard-ability-box">
-            <label>${ABILITY_SHORT[a]}</label>
-            <input type="number" id="wiz-ab-${a}" value="${base}" min="1" max="30" oninput="wizardData.abilities['${a}']=+this.value||10;renderWizardStep(5)">
-            ${bonus ? `<div style="font-size:0.7rem;color:var(--gold);margin-top:0.15rem">${base} + ${bonus} = <strong>${total}</strong></div>` : ''}
-          </div>`;
-        }).join('')}
-      </div>
+      ${methodToggle}${bonusSection}${scoreSection}
       <div class="form-actions">
         <button class="btn" onclick="renderWizardStep(4)">← Back</button>
         <button class="btn btn-primary" onclick="renderWizardStep(6)">Next →</button>
@@ -4650,6 +4658,7 @@ function renderWizardStep(step) {
         <div style="margin-bottom:0.3rem">
           <strong>Class:</strong> ${esc(wizardData.class)} &nbsp;·&nbsp; <strong>Level:</strong> ${wizardData.level} &nbsp;·&nbsp; PB +${pb}
         </div>
+        <div style="font-size:0.75rem;color:var(--text-dim)">Scores: ${wizardData.abilityMethod==='pointbuy'?'Point Buy':wizardData.abilityMethod==='array'?'Standard Array':'Manual Roll'}</div>
       </div>
       <div class="wizard-ability-grid" style="margin-bottom:0.8rem">${scoresHtml}</div>
       <div class="form-actions">
@@ -4736,6 +4745,178 @@ function wiz_toggleBonus(ability) {
     if (!has2) bonuses[ability] = 2;
     else if (!has1) bonuses[ability] = 1;
   }
+  renderWizardStep(5);
+}
+
+// ── Ability Score Methods ──
+const PB_COST = { 8:0, 9:1, 10:2, 11:3, 12:4, 13:5, 14:7, 15:9 };
+const PB_BUDGET = 27;
+
+function wiz_setAbilityMethod(method) {
+  wizardData.abilityMethod = method;
+  if (method === 'pointbuy') {
+    ABILITIES.forEach(a => { wizardData.abilities[a] = 8; });
+  } else if (method === 'array') {
+    ABILITIES.forEach(a => { wizardData.abilities[a] = 8; });
+    wizardData._arrayAssign = {};
+  } else {
+    if (!wizardData._manualSet) {
+      ABILITIES.forEach(a => { wizardData.abilities[a] = 10; });
+    }
+  }
+  wizardData._diceRolls = wizardData._diceRolls || {};
+  renderWizardStep(5);
+}
+
+function _wizPointBuySpent() {
+  return ABILITIES.reduce((sum, a) => sum + (PB_COST[wizardData.abilities[a]] || 0), 0);
+}
+
+function _wizPointBuySection() {
+  const spent = _wizPointBuySpent();
+  const remaining = PB_BUDGET - spent;
+  let color = 'var(--green, #4caf50)';
+  let extra = '';
+  if (remaining === 0) { color = 'var(--gold)'; extra = ' ✦'; }
+  else if (remaining <= 3) color = 'var(--red-lt, #ef5350)';
+  else if (remaining <= 8) color = 'var(--amber, #ffa726)';
+
+  const rows = ABILITIES.map(a => {
+    const score = wizardData.abilities[a];
+    const cost = PB_COST[score] || 0;
+    const bonus = wizardData.abilityBonuses[a] || 0;
+    const total = score + bonus;
+    const canInc = score < 15 && remaining > 0 && (PB_COST[score + 1] - cost) <= remaining;
+    const canDec = score > 8;
+    return `<tr>
+      <td style="font-weight:600;font-size:0.82rem;padding:0.3rem 0.4rem">${ABILITY_SHORT[a]}</td>
+      <td style="text-align:center"><button class="btn btn-sm pb-btn" ${canDec?'':`disabled`} onclick="wiz_pbAdjust('${a}',-1)">−</button></td>
+      <td style="text-align:center"><span class="pb-score">${score}</span></td>
+      <td style="text-align:center"><button class="btn btn-sm pb-btn" ${canInc?'':`disabled`} onclick="wiz_pbAdjust('${a}',1)">+</button></td>
+      <td style="font-size:0.72rem;color:var(--text-dim);text-align:center">${cost} pts</td>
+      ${bonus ? `<td style="font-size:0.72rem;color:var(--gold);text-align:center">+${bonus}=${total}</td>` : '<td></td>'}
+    </tr>`;
+  }).join('');
+
+  return `<div class="pb-counter ${remaining===0?'pb-perfect':''}" style="text-align:center;margin-bottom:0.6rem">
+      <div style="font-size:0.72rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px">Points Remaining</div>
+      <div class="pb-remaining" style="font-size:2rem;font-weight:bold;color:${color}">${remaining}${extra} <span style="font-size:1rem;font-weight:normal;color:var(--text-dim)">/ ${PB_BUDGET}</span></div>
+    </div>
+    <table style="width:100%;border-collapse:collapse">${rows}</table>`;
+}
+
+function wiz_pbAdjust(ability, dir) {
+  const cur = wizardData.abilities[ability];
+  const next = cur + dir;
+  if (next < 8 || next > 15) return;
+  const costDiff = (PB_COST[next] || 0) - (PB_COST[cur] || 0);
+  if (costDiff > (PB_BUDGET - _wizPointBuySpent())) return;
+  wizardData.abilities[ability] = next;
+  renderWizardStep(5);
+  // Pulse animation
+  setTimeout(() => {
+    const el = document.querySelector('.pb-remaining');
+    if (el) { el.classList.remove('pb-pulse'); void el.offsetWidth; el.classList.add('pb-pulse'); }
+  }, 20);
+}
+
+function _wizArraySection() {
+  const stdArray = [15, 14, 13, 12, 10, 8];
+  const assign = wizardData._arrayAssign || {};
+  const used = new Set(Object.values(assign));
+  const available = stdArray.filter(v => !used.has(v) || Object.entries(assign).filter(([,val]) => val === v).length < stdArray.filter(x => x === v).length);
+
+  const rows = ABILITIES.map(a => {
+    const assigned = assign[a];
+    const bonus = wizardData.abilityBonuses[a] || 0;
+    // Build available options for this dropdown
+    const opts = stdArray.filter(v => {
+      if (v === assigned) return true;
+      const usedCount = Object.values(assign).filter(x => x === v).length;
+      const totalCount = stdArray.filter(x => x === v).length;
+      return usedCount < totalCount;
+    });
+    const options = opts.map(v => `<option value="${v}" ${v===assigned?'selected':''}>${v}</option>`).join('');
+    const total = assigned ? assigned + bonus : null;
+    return `<div class="wizard-ability-box">
+      <label>${ABILITY_SHORT[a]}</label>
+      <select class="attack-type-select" style="font-size:1rem;text-align:center;color:var(--gold);font-weight:bold" onchange="wiz_arrayAssign('${a}',+this.value)">
+        <option value="">—</option>
+        ${options}
+      </select>
+      ${total && bonus ? `<div style="font-size:0.7rem;color:var(--gold);margin-top:0.15rem">${assigned} + ${bonus} = <strong>${total}</strong></div>` : ''}
+    </div>`;
+  }).join('');
+
+  const allAssigned = ABILITIES.every(a => assign[a] !== undefined);
+  return `<p style="font-size:0.75rem;color:var(--text-dim);margin-bottom:0.5rem">Assign each value (15, 14, 13, 12, 10, 8) to one ability.</p>
+    <div class="wizard-ability-grid">${rows}</div>
+    ${allAssigned ? '<div style="text-align:center;font-size:0.8rem;color:var(--gold);margin-top:0.3rem">✦ All scores assigned</div>' : ''}`;
+}
+
+function wiz_arrayAssign(ability, value) {
+  wizardData._arrayAssign = wizardData._arrayAssign || {};
+  if (value) {
+    wizardData._arrayAssign[ability] = value;
+    wizardData.abilities[ability] = value;
+  } else {
+    delete wizardData._arrayAssign[ability];
+    wizardData.abilities[ability] = 8;
+  }
+  renderWizardStep(5);
+}
+
+function _wizManualSection() {
+  const rolls = wizardData._diceRolls || {};
+  const rows = ABILITIES.map(a => {
+    const base = wizardData.abilities[a];
+    const bonus = wizardData.abilityBonuses[a] || 0;
+    const total = base + bonus;
+    const rollInfo = rolls[a];
+    return `<div class="wizard-ability-box">
+      <label>${ABILITY_SHORT[a]}</label>
+      <input type="number" value="${base}" min="3" max="18" oninput="wizardData.abilities['${a}']=+this.value||10;wizardData._manualSet=true;renderWizardStep(5)"
+        style="width:100%;text-align:center;background:transparent;border:none;border-bottom:1px solid rgba(155,109,255,0.3);color:var(--gold);font-size:1.2rem;font-weight:bold;font-family:inherit">
+      ${bonus ? `<div style="font-size:0.7rem;color:var(--gold);margin-top:0.15rem">${base} + ${bonus} = <strong>${total}</strong></div>` : ''}
+      ${rollInfo ? `<div style="font-size:0.65rem;color:var(--text-dim);margin-top:0.1rem">🎲 ${rollInfo}</div>` : ''}
+      <button class="btn btn-sm" style="margin-top:0.25rem;font-size:0.65rem;padding:0.1rem 0.3rem" onclick="wiz_rollSingle('${a}')">Roll</button>
+    </div>`;
+  }).join('');
+
+  return `<p style="font-size:0.75rem;color:var(--text-dim);margin-bottom:0.5rem">Enter scores manually or roll 4d6 drop lowest.</p>
+    <div style="display:flex;gap:0.4rem;justify-content:center;margin-bottom:0.5rem">
+      <button class="btn btn-sm" onclick="wiz_rollAll()">🎲 Roll All (4d6 drop lowest)</button>
+      <button class="btn btn-sm" onclick="wiz_rollAll()">Reroll All</button>
+    </div>
+    <div class="wizard-ability-grid">${rows}</div>`;
+}
+
+function _roll4d6drop1() {
+  const dice = Array.from({length:4}, () => Math.floor(Math.random()*6)+1);
+  dice.sort((a,b) => b-a);
+  const dropped = dice[3];
+  const kept = dice.slice(0,3);
+  const total = kept.reduce((a,b) => a+b, 0);
+  return { dice, dropped, total, text: `${dice.join(', ')} → drop ${dropped} → ${total}` };
+}
+
+function wiz_rollAll() {
+  wizardData._diceRolls = {};
+  ABILITIES.forEach(a => {
+    const r = _roll4d6drop1();
+    wizardData.abilities[a] = r.total;
+    wizardData._diceRolls[a] = r.text;
+  });
+  wizardData._manualSet = true;
+  renderWizardStep(5);
+}
+
+function wiz_rollSingle(ability) {
+  const r = _roll4d6drop1();
+  wizardData.abilities[ability] = r.total;
+  wizardData._diceRolls = wizardData._diceRolls || {};
+  wizardData._diceRolls[ability] = r.text;
+  wizardData._manualSet = true;
   renderWizardStep(5);
 }
 
