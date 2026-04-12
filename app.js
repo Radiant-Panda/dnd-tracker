@@ -581,10 +581,10 @@ function renderInitiativeTracker(campaign) {
             </div>
             <div class="init-stats">
               <span>AC <strong>${cb.ac}</strong></span>
-              <span>HP <input type="number" class="hp-input" value="${cb.hp}" min="0" max="${cb.maxHP}" oninput="updateCombatantHP(${i},+this.value)"> / ${cb.maxHP}</span>
+              <span>HP <input type="number" class="hp-input" value="${cb.hp}" min="0" max="${cb.maxHP}" oninput="updateCombatantHP(${i},+this.value)"> / ${cb.maxHP}${cb.tempHP > 0 ? ` (<span class="temp-hp-display">+${cb.tempHP} temp</span>)` : ''}<button class="btn btn-sm" style="padding:0.2rem 0.35rem; font-size:0.75rem; margin-left:0.3rem;" onclick="openTempHPInput(${i})" title="Add temp HP">+T</button></span>
               <span><button class="btn btn-sm" onclick="healCombatant(${i},1)">+</button><button class="btn btn-sm btn-danger" onclick="damageCombatant(${i},1)">-</button></span>
             </div>
-            <div class="hp-bar-wrap"><div class="hp-bar ${hpPct<=25?'low':hpPct<=50?'mid':''}" style="width:${hpPct}%"></div></div>
+            <div class="hp-bar-wrap" style="position:relative; overflow:hidden;"><div class="hp-bar ${hpPct<=25?'low':hpPct<=50?'mid':''}" style="width:${hpPct}%; position:relative; z-index:2;"></div>${cb.tempHP > 0 ? '<div class="hp-bar-temp" style="width:'+Math.min(100, Math.round(((cb.hp + cb.tempHP) / cb.maxHP) * 100))+'%; position:absolute; top:0; left:0; z-index:1;"></div>' : ''}</div>
             ${cb._concCheck ? `<div class="conc-warning">&#9888; Concentration check required — DC ${cb._concCheck.dc} (${esc(cb._concCheck.spell)})<button class="conc-dismiss" onclick="dismissConcCheck(${i})">&times;</button></div>` : ''}
             ${cb.legendaryMax ? `<div class="legendary-pips" id="leg-pips-${i}" title="Legendary Actions — reset at the start of this creature's turn">
               ${Array.from({length: cb.legendaryMax}, (_,j) => {
@@ -642,7 +642,7 @@ function openAddCombatantModal() {
 }
 function addCombatant() {
   const init = getInitiative();
-  init.combatants.push({ id:uid(), name:document.getElementById('cb-name').value.trim()||'Unknown', initiative:parseInt(document.getElementById('cb-init').value)||1, ac:parseInt(document.getElementById('cb-ac').value)||10, hp:parseInt(document.getElementById('cb-hp').value)||10, maxHP:parseInt(document.getElementById('cb-hp').value)||10, type:document.getElementById('cb-type').value, conditions:[], notes:'' });
+  init.combatants.push({ id:uid(), name:document.getElementById('cb-name').value.trim()||'Unknown', initiative:parseInt(document.getElementById('cb-init').value)||1, ac:parseInt(document.getElementById('cb-ac').value)||10, hp:parseInt(document.getElementById('cb-hp').value)||10, maxHP:parseInt(document.getElementById('cb-hp').value)||10, type:document.getElementById('cb-type').value, conditions:[], notes:'', tempHP:0 });
   saveData(db); closeModal(); renderApp();
 }
 function quickAddCombatant(entityId, type) {
@@ -658,7 +658,7 @@ function quickAddCombatant(entityId, type) {
   const raw = prompt(`Initiative roll for ${name}:`, rolled);
   if (raw === null) return; // cancelled
   const initiative = parseInt(raw) || rolled;
-  getInitiative().combatants.push({ id:uid(), charId, name, initiative, ac, hp, maxHP, type, conditions:[], notes:'' });
+  getInitiative().combatants.push({ id:uid(), charId, name, initiative, ac, hp, maxHP, type, conditions:[], notes:'', tempHP:0 });
   saveData(db); closeModal(); renderApp();
 }
 function addAllPcsToInitiative() {
@@ -666,7 +666,7 @@ function addAllPcsToInitiative() {
   const linked=new Set(init.combatants.filter(c=>c.charId).map(c=>c.charId));
   (campaign.characters||[]).forEach(id => {
     const ch=db.characters[id]; if(!ch||linked.has(id)) return;
-    init.combatants.push({id:uid(),charId:id,name:ch.name,initiative:Math.ceil(Math.random()*20),ac:ch.combat.ac,hp:ch.combat.currentHP,maxHP:ch.combat.maxHP,type:'player',conditions:[],notes:''});
+    init.combatants.push({id:uid(),charId:id,name:ch.name,initiative:Math.ceil(Math.random()*20),ac:ch.combat.ac,hp:ch.combat.currentHP,maxHP:ch.combat.maxHP,type:'player',conditions:[],notes:'',tempHP:ch.combat.tempHP||0});
   });
   saveData(db); renderApp();
 }
@@ -759,12 +759,52 @@ function nextTurn() {
 function updateCombatantHP(i,val) {
   const cb=getInitiative().combatants[i];
   const oldHP = cb ? cb.hp : 0;
-  CharacterStore.updateInitiativeHP(currentCampaignId,i,+val);
+  CharacterStore.updateInitiativeHP(currentCampaignId,i,+val,cb.tempHP);
   if (cb && +val < oldHP) _checkConcentration(i, oldHP - +val);
 }
 function updateCombatantInitiative(i,val) { if(!val||isNaN(val)) return; getInitiative().combatants[i].initiative=val; saveData(db); }
-function damageCombatant(i,amt) { const cb=getInitiative().combatants[i]; CharacterStore.updateInitiativeHP(currentCampaignId,i,cb.hp-amt); _checkConcentration(i,amt); renderApp(); }
-function healCombatant(i,amt)  { const cb=getInitiative().combatants[i]; CharacterStore.updateInitiativeHP(currentCampaignId,i,cb.hp+amt); renderApp(); }
+function damageCombatant(i,amt) {
+  const cb=getInitiative().combatants[i];
+  if (!cb || amt <= 0) return;
+  let remaining = amt;
+  // Temp HP absorbs first
+  if (cb.tempHP > 0) {
+    const absorbed = Math.min(cb.tempHP, remaining);
+    cb.tempHP -= absorbed;
+    remaining -= absorbed;
+  }
+  // Remaining damage applies to real HP
+  const newHP = Math.max(0, cb.hp - remaining);
+  CharacterStore.updateInitiativeHP(currentCampaignId,i,newHP,cb.tempHP);
+  _checkConcentration(i,amt);
+  renderApp();
+}
+function healCombatant(i,amt) {
+  const cb=getInitiative().combatants[i];
+  if (!cb || amt <= 0) return;
+  const newHP = Math.min(cb.maxHP, cb.hp + amt);
+  CharacterStore.updateInitiativeHP(currentCampaignId,i,newHP,cb.tempHP);
+  renderApp();
+}
+function openTempHPInput(i) {
+  openModal(`<h2>Add Temp HP</h2>
+    <div class="form-group">
+      <label>Temp HP Amount</label>
+      <input type="number" id="temp-hp-input" placeholder="0" min="0" max="999" autofocus>
+    </div>
+    <div class="form-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="setTempHP(${i},+document.getElementById('temp-hp-input').value);closeModal()">Add</button>
+    </div>`);
+  document.getElementById('temp-hp-input').focus();
+}
+function setTempHP(i, amount) {
+  const cb=getInitiative().combatants[i];
+  if (cb) {
+    cb.tempHP = Math.max(0, amount);
+    CharacterStore.updateInitiativeHP(currentCampaignId,i,cb.hp,cb.tempHP);
+  }
+}
 function removeCombatant(i) { const init=getInitiative(); init.combatants.splice(i,1); if(init.currentIndex>=init.combatants.length) init.currentIndex=0; saveData(db); renderApp(); }
 function spendLegendary(i, pipIdx) {
   const cb = getInitiative().combatants[i];
@@ -836,7 +876,17 @@ function applyAoeDamage() {
     // 'none' = 0 damage
     if (dmg <= 0) return;
     totalHit++;
-    CharacterStore.updateInitiativeHP(currentCampaignId, idx, combatants[idx].hp - dmg);
+    // Apply temp HP absorption
+    const cb = combatants[idx];
+    let remaining = dmg;
+    let newTempHP = cb.tempHP || 0;
+    if (newTempHP > 0) {
+      const absorbed = Math.min(newTempHP, remaining);
+      newTempHP -= absorbed;
+      remaining -= absorbed;
+    }
+    const newHP = Math.max(0, cb.hp - remaining);
+    CharacterStore.updateInitiativeHP(currentCampaignId, idx, newHP, newTempHP);
     _checkConcentration(idx, dmg);
   });
 
@@ -1199,7 +1249,7 @@ function addMonsterToCombat(m) {
 
   const combatant = {
     id: uid(), name: m.name, initiative, ac, hp, maxHP: hp,
-    type: 'monster', conditions: [], statBlock, notes: ''
+    type: 'monster', conditions: [], statBlock, notes: '', tempHP: 0
   };
   if (m.legendary_actions?.length > 0) {
     combatant.legendaryMax = m.legendary_actions.length <= 3 ? 3 : m.legendary_actions.length;
@@ -1432,15 +1482,19 @@ const CharacterStore = {
 
   /** Update a combatant's HP in the initiative tracker and sync back to character
    *  sheet if the combatant is a linked player character */
-  updateInitiativeHP(campaignId, combatantIndex, newHP) {
+  updateInitiativeHP(campaignId, combatantIndex, newHP, newTempHP) {
     const campaign = db.campaigns.find(c => c.id === campaignId);
     if (!campaign?.initiative) return;
     const cb = campaign.initiative.combatants[combatantIndex];
     if (!cb) return;
     cb.hp = Math.max(0, Math.min(newHP, cb.maxHP));
+    cb.tempHP = Math.max(0, newTempHP || 0);
     if (cb.type === 'player' && cb.charId) {
       const ch = db.characters[cb.charId];
-      if (ch) ch.combat.currentHP = cb.hp;
+      if (ch) {
+        ch.combat.currentHP = cb.hp;
+        ch.combat.tempHP = cb.tempHP;
+      }
     }
     saveData(db);
   },

@@ -1215,6 +1215,11 @@ main {
   pointer-events: none;
 }
 
+.temp-hp-display {
+  font-weight: 600;
+  color: #50a0ff;
+}
+
 /* Concentration Tracking */
 .conc-badge {
   font-size: 0.65rem;
