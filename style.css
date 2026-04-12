@@ -1798,7 +1798,7 @@ input.hp-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0;
 
 .condition-picker {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(145px, 1fr));
   gap: 0.4rem;
   margin-bottom: 0.5rem;
 }
@@ -1809,10 +1809,51 @@ input.hp-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0;
   font-size: 0.85rem;
   cursor: pointer;
   transition: background 0.1s, border-color 0.1s;
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.3rem;
 }
 .condition-option:hover { border-color: var(--gold); background: rgba(155,109,255,0.08); }
 .condition-option.active { background: rgba(232,121,249,0.12); border-color: rgba(232,121,249,0.5); color: #e879f9; }
+.condition-info-btn {
+  font-size: 0.78rem;
+  opacity: 0.5;
+  flex-shrink: 0;
+  padding: 0 0.1rem;
+  border-radius: 50%;
+  transition: opacity 0.15s;
+}
+.condition-info-btn:hover { opacity: 1; color: var(--gold); }
+
+/* Condition reference modal */
+.condition-ref-header { text-align: center; padding-bottom: 0.75rem; border-bottom: 1px solid var(--border); margin-bottom: 0.75rem; }
+.condition-ref-emoji { font-size: 3rem; line-height: 1; margin-bottom: 0.25rem; }
+.condition-ref-name { font-size: 1.4rem; margin: 0 0 0.3rem; }
+.condition-ref-desc { font-size: 0.82rem; color: var(--text-dim); font-style: italic; margin: 0; }
+.condition-ref-rules {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.condition-ref-rules li {
+  font-size: 0.85rem;
+  padding: 0.3rem 0.5rem 0.3rem 1.1rem;
+  position: relative;
+  border-left: 2px solid rgba(155,109,255,0.3);
+  color: var(--text);
+}
+.condition-ref-rules li::before {
+  content: '▸';
+  position: absolute;
+  left: 0.25rem;
+  color: rgba(155,109,255,0.6);
+  font-size: 0.65rem;
+  top: 0.4rem;
+}
 
 /* ── Stat Block Panel (Initiative Row) ── */
 .stat-block-toggle {
@@ -2304,6 +2345,21 @@ input.hp-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0;
   min-width: 1rem;
   text-align: center;
 }
+
+/* Pact Magic */
+.pact-magic-section {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px dashed rgba(168,85,247,0.25);
+}
+.pact-magic-section .cs-field-label { color: #a855f7; }
+.pact-magic-section .spell-bubble.filled {
+  background: radial-gradient(circle at 35% 35%, rgba(168,85,247,0.95), rgba(88,28,135,0.9));
+  box-shadow: 0 0 6px rgba(168,85,247,0.65), inset 0 0 3px rgba(255,255,255,0.2);
+  border-color: rgba(168,85,247,0.8);
+}
+.pact-magic-section .spell-bubble { border-color: rgba(168,85,247,0.4); }
+.pact-magic-section .spell-bubble:hover { border-color: #a855f7; box-shadow: 0 0 5px rgba(168,85,247,0.4); }
 
 /* Spell groups */
 .spell-group { margin-bottom: 0.75rem; }

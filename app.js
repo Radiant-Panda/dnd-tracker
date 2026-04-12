@@ -17,6 +17,9 @@ function migrateCharacter(ch) {
   if (!ch.spells.slotsMax) ch.spells.slotsMax = {1:0,2:0,3:0,4:0,5:0,6:0,7:0,8:0,9:0};
   if (!ch.spells.known)    ch.spells.known    = [];
   if (!ch.spells.prepared) ch.spells.prepared = [];
+  if (ch.spells.pactSlots     === undefined) ch.spells.pactSlots     = 0;
+  if (ch.spells.pactSlotsMax  === undefined) ch.spells.pactSlotsMax  = 0;
+  if (ch.spells.pactSlotLevel === undefined) ch.spells.pactSlotLevel = 0;
   if (!ch.combat)          ch.combat = {ac:10,initiative:0,speed:30,maxHP:10,currentHP:10,tempHP:0,hitDice:'1d8',hitDiceUsed:0};
   if (ch.combat.hitDiceUsed === undefined) ch.combat.hitDiceUsed = 0;
   if (!ch.featuresList)    ch.featuresList = [];
@@ -39,6 +42,13 @@ function migrateCharacter(ch) {
   // v3: multiclass support
   if (!ch.classes) {
     ch.classes = [{ class: ch.class || 'Fighter', subclass: ch.subclass || '', level: ch.level || 1 }];
+  }
+  // v4: auto-calculate spell slots on first migration
+  if (!ch.spells._autoCalcApplied && typeof calculateSpellSlots === 'function') {
+    applySpellSlots(ch);
+    // Remove old Pact Magic Slots resource (now handled by pact magic fields)
+    ch.resources = (ch.resources || []).filter(r => r.name !== 'Pact Magic Slots');
+    ch.spells._autoCalcApplied = true;
   }
   // Inject base class resources inline (deduplicates by name)
   _injectBaseClassResourcesForCh(ch);
@@ -258,6 +268,7 @@ function createCharacter() {
   const ch = newCharacter(name, document.getElementById('ch-race').value.trim(), document.getElementById('ch-class').value, level);
   db.characters[ch.id] = ch;
   injectBaseClassResources(ch.id);
+  applySpellSlots(ch);
   const campaign = db.campaigns.find(c => c.id === currentCampaignId);
   (campaign.characters = campaign.characters||[]).push(ch.id);
   saveData(db); closeModal(); renderApp();
@@ -367,6 +378,135 @@ function saveNpcSheet() {
 // ── Initiative Tracker ────────────────────────────────────────────────────────
 const CONDITIONS = ['Blinded','Charmed','Deafened','Exhausted','Frightened','Grappled','Incapacitated','Invisible','Paralyzed','Petrified','Poisoned','Prone','Restrained','Stunned','Unconscious'];
 
+const CONDITIONS_RULES = {
+  Blinded: {
+    desc: 'The creature cannot see and automatically fails any ability check requiring sight.',
+    rules: [
+      'A blinded creature can\'t see and automatically fails any ability check that requires sight.',
+      'Attack rolls against the creature have advantage.',
+      'The creature\'s attack rolls have disadvantage.'
+    ]
+  },
+  Charmed: {
+    desc: 'The creature cannot attack the charmer and the charmer has advantage on social checks against it.',
+    rules: [
+      'A charmed creature can\'t attack the charmer or target the charmer with harmful abilities or magical effects.',
+      'The charmer has advantage on any ability check to interact socially with the creature.'
+    ]
+  },
+  Deafened: {
+    desc: 'The creature cannot hear and automatically fails ability checks requiring hearing.',
+    rules: [
+      'A deafened creature can\'t hear and automatically fails any ability check that requires hearing.'
+    ]
+  },
+  Exhausted: {
+    desc: 'Exhaustion has 6 cumulative levels; each imposes increasing penalties until death at level 6.',
+    rules: [
+      'Level 1 — Disadvantage on ability checks.',
+      'Level 2 — Speed halved.',
+      'Level 3 — Disadvantage on attack rolls and saving throws.',
+      'Level 4 — Hit point maximum halved.',
+      'Level 5 — Speed reduced to 0.',
+      'Level 6 — Death.',
+      'Finishing a long rest reduces exhaustion level by 1, provided the creature has had food and water.'
+    ]
+  },
+  Frightened: {
+    desc: 'The creature has disadvantage on checks and attacks while it can see the source of its fear, and cannot move closer to it.',
+    rules: [
+      'A frightened creature has disadvantage on ability checks and attack rolls while the source of its fear is within line of sight.',
+      'The creature can\'t willingly move closer to the source of its fear.'
+    ]
+  },
+  Grappled: {
+    desc: 'The creature\'s speed is reduced to 0 and cannot benefit from bonuses to speed.',
+    rules: [
+      'A grappled creature\'s speed becomes 0, and it can\'t benefit from any bonus to its speed.',
+      'The condition ends if the grappler is incapacitated.',
+      'The condition also ends if an effect removes the grappled creature from the reach of the grappler or grappling effect.'
+    ]
+  },
+  Incapacitated: {
+    desc: 'The creature cannot take actions or reactions.',
+    rules: [
+      'An incapacitated creature can\'t take actions or reactions.'
+    ]
+  },
+  Invisible: {
+    desc: 'The creature cannot be seen without magic or special senses; it is heavily obscured for hiding.',
+    rules: [
+      'An invisible creature is impossible to see without the aid of magic or a special sense.',
+      'For the purpose of hiding, the creature is heavily obscured.',
+      'The creature\'s location can be detected by any noise it makes or any tracks it leaves.',
+      'Attack rolls against the creature have disadvantage.',
+      'The creature\'s attack rolls have advantage.'
+    ]
+  },
+  Paralyzed: {
+    desc: 'The creature is incapacitated, cannot move or speak, and automatically fails STR and DEX saves; attacks against it have advantage and hits within 5 feet are critical hits.',
+    rules: [
+      'A paralyzed creature is incapacitated and can\'t move or speak.',
+      'The creature automatically fails Strength and Dexterity saving throws.',
+      'Attack rolls against the creature have advantage.',
+      'Any attack that hits the creature is a critical hit if the attacker is within 5 feet of the creature.'
+    ]
+  },
+  Petrified: {
+    desc: 'The creature is transformed into solid inanimate matter, incapacitated, and unaware of its surroundings.',
+    rules: [
+      'A petrified creature is transformed, along with any nonmagical object it is wearing or carrying, into a solid inanimate substance (usually stone).',
+      'Its weight increases by a factor of ten, and it ceases aging.',
+      'The creature is incapacitated, can\'t move or speak, and is unaware of its surroundings.',
+      'Attack rolls against the creature have advantage.',
+      'The creature automatically fails Strength and Dexterity saving throws.',
+      'The creature has resistance to all damage.',
+      'The creature is immune to poison and disease, although a poison or disease already in its system is suspended, not neutralized.'
+    ]
+  },
+  Poisoned: {
+    desc: 'The creature has disadvantage on attack rolls and ability checks.',
+    rules: [
+      'A poisoned creature has disadvantage on attack rolls and ability checks.'
+    ]
+  },
+  Prone: {
+    desc: 'The creature can only crawl unless it stands up; its attacks have disadvantage, and attackers have advantage if within 5 feet.',
+    rules: [
+      'A prone creature\'s only movement option is to crawl, unless it stands up and thereby ends the condition.',
+      'The creature has disadvantage on attack rolls.',
+      'An attack roll against the creature has advantage if the attacker is within 5 feet of the creature. Otherwise, the attack roll has disadvantage.'
+    ]
+  },
+  Restrained: {
+    desc: 'The creature\'s speed is 0, its attacks have disadvantage, and attack rolls against it have advantage; it has disadvantage on DEX saves.',
+    rules: [
+      'A restrained creature\'s speed becomes 0, and it can\'t benefit from any bonus to its speed.',
+      'Attack rolls against the creature have advantage.',
+      'The creature\'s attack rolls have disadvantage.',
+      'The creature has disadvantage on Dexterity saving throws.'
+    ]
+  },
+  Stunned: {
+    desc: 'The creature is incapacitated, cannot move, can speak only falteringly, and automatically fails STR and DEX saves; attacks against it have advantage.',
+    rules: [
+      'A stunned creature is incapacitated, can\'t move, and can speak only falteringly.',
+      'The creature automatically fails Strength and Dexterity saving throws.',
+      'Attack rolls against the creature have advantage.'
+    ]
+  },
+  Unconscious: {
+    desc: 'The creature is incapacitated, drops everything, falls prone, and fails STR and DEX saves; attacks have advantage and hits within 5 feet are critical hits.',
+    rules: [
+      'An unconscious creature is incapacitated, can\'t move or speak, and is unaware of its surroundings.',
+      'The creature drops whatever it\'s holding and falls prone.',
+      'The creature automatically fails Strength and Dexterity saving throws.',
+      'Attack rolls against the creature have advantage.',
+      'Any attack that hits the creature is a critical hit if the attacker is within 5 feet of the creature.'
+    ]
+  }
+};
+
 function getConditionEmoji(cond) {
   const emojis = {
     'Blinded': '👁️',
@@ -440,8 +580,7 @@ function renderInitiativeTracker(campaign) {
             </div>
             <div class="hp-bar-wrap"><div class="hp-bar ${hpPct<=25?'low':hpPct<=50?'mid':''}" style="width:${hpPct}%"></div></div>
             <div class="condition-row">
-              ${(cb.conditions||[]).map(cond=>`<span class="condition-tag ${getConditionClass(cond)}" onclick="removeCondition(${i},'${cond}')" title="Click to remove">${getConditionEmoji(cond)} ${cond} &times;</span>`).join('')}
-              <button class="btn btn-sm" onclick="openConditionPicker(${i})">+ Condition</button>
+              ${_conditionRowHtml(i, cb.conditions)}
             </div>
             ${cb.statBlock?`<button class="btn btn-sm stat-block-toggle" onclick="toggleStatBlock(${i})">&#128214; Stat Block</button>
             <div class="stat-block-panel" id="stat-block-${i}">${renderCombatantStatBlock(cb.statBlock, i)}</div>`:''}
@@ -520,18 +659,51 @@ function clearInitiative() { if(!confirm('End combat and clear all combatants?')
 function openConditionPicker(i) {
   const cb=getInitiative().combatants[i];
   openModal(`<h2>Conditions — ${esc(cb.name)}</h2>
-    <div class="condition-picker">${CONDITIONS.map(cond=>`<div class="condition-option ${(cb.conditions||[]).includes(cond)?'active':''}" onclick="toggleCondition(${i},'${cond}')">${cond}</div>`).join('')}</div>
+    <div class="condition-picker">${CONDITIONS.map(cond => {
+      const active = (cb.conditions||[]).includes(cond) ? 'active' : '';
+      return `<div class="condition-option ${active}" onclick="toggleCondition(${i},'${cond}')">
+        <span>${getConditionEmoji(cond)} ${cond}</span>
+        <span class="condition-info-btn" onclick="event.stopPropagation();openConditionRef('${cond}',${i})" title="View rules">ⓘ</span>
+      </div>`;
+    }).join('')}</div>
     <div class="form-actions"><button class="btn btn-primary" onclick="closeModal()">Done</button></div>`);
 }
 function toggleCondition(i, cond) {
   const cb=getInitiative().combatants[i]; cb.conditions=cb.conditions||[];
   const idx=cb.conditions.indexOf(cond); if(idx>=0) cb.conditions.splice(idx,1); else cb.conditions.push(cond);
   saveData(db);
-  document.querySelectorAll('.condition-option').forEach(el => { if(el.textContent.trim()===cond) el.classList.toggle('active',cb.conditions.includes(cond)); });
+  document.querySelectorAll('.condition-option').forEach(el => {
+    const name = el.querySelector('span')?.textContent?.trim().replace(/^[^\s]+\s/,'') || el.textContent.trim();
+    if(name===cond) el.classList.toggle('active',cb.conditions.includes(cond));
+  });
   const row=document.querySelectorAll('.initiative-row')[i];
-  if(row) { const cr=row.querySelector('.condition-row'); if(cr) cr.innerHTML=`${cb.conditions.map(c=>`<span class="condition-tag ${getConditionClass(c)}" onclick="removeCondition(${i},'${c}')" title="Click to remove">${getConditionEmoji(c)} ${c} &times;</span>`).join('')}<button class="btn btn-sm" onclick="openConditionPicker(${i})">+ Condition</button>`; }
+  if(row) { const cr=row.querySelector('.condition-row'); if(cr) cr.innerHTML=_conditionRowHtml(i, cb.conditions); }
 }
-function removeCondition(i,cond) { const init=getInitiative(); init.combatants[i].conditions=(init.combatants[i].conditions||[]).filter(c=>c!==cond); saveData(db); renderApp(); }
+function _conditionRowHtml(i, conditions) {
+  return `${(conditions||[]).map(c=>`<span class="condition-tag ${getConditionClass(c)}" onclick="openConditionRef('${c}',${i})" title="Click to view rules">${getConditionEmoji(c)} ${c}</span>`).join('')}<button class="btn btn-sm" onclick="openConditionPicker(${i})">+ Condition</button>`;
+}
+function removeCondition(i,cond) {
+  const init=getInitiative(); init.combatants[i].conditions=(init.combatants[i].conditions||[]).filter(c=>c!==cond);
+  saveData(db); renderApp();
+}
+function openConditionRef(cond, combatantIdx) {
+  const ref = CONDITIONS_RULES[cond] || { desc: '', rules: [] };
+  const emoji = getConditionEmoji(cond);
+  const hasCombatant = combatantIdx !== undefined && combatantIdx !== null;
+  openModal(`
+    <div class="condition-ref-header">
+      <div class="condition-ref-emoji">${emoji}</div>
+      <h2 class="condition-ref-name">${esc(cond)}</h2>
+      <p class="condition-ref-desc">${esc(ref.desc)}</p>
+    </div>
+    <ul class="condition-ref-rules">
+      ${ref.rules.map(r=>`<li>${esc(r)}</li>`).join('')}
+    </ul>
+    <div class="form-actions">
+      ${hasCombatant ? `<button class="btn btn-danger" onclick="removeCondition(${combatantIdx},'${cond}');closeModal()">Remove Condition</button>` : ''}
+      <button class="btn" onclick="closeModal()">Keep</button>
+    </div>`);
+}
 
 // ── Monster Search ─────────────────────────────────────────────────────────────
 let monsterFullData = null;
@@ -909,8 +1081,8 @@ function newCharacter(name, race, cls, level) {
     spells: {
       slots:    { 1:0, 2:0, 3:0, 4:0, 5:0, 6:0, 7:0, 8:0, 9:0 },
       slotsMax: { 1:0, 2:0, 3:0, 4:0, 5:0, 6:0, 7:0, 8:0, 9:0 },
-      known: [],
-      prepared: []
+      known: [], prepared: [],
+      pactSlots: 0, pactSlotsMax: 0, pactSlotLevel: 0, _autoCalcApplied: true
     },
     attacks: [],
     equipment: [],
@@ -1324,6 +1496,114 @@ const SPELL_ABILITY = {
   Sorcerer:'cha', Warlock:'cha', Wizard:'int', Artificer:'int',
   'Blood Hunter':'int'
 };
+// ── Spellcasting Tables ──────────────────────────────────────────────────────
+const CASTER_TYPE = {
+  Bard:'full',Cleric:'full',Druid:'full',Sorcerer:'full',Wizard:'full',
+  Paladin:'half',Ranger:'half',Artificer:'artificer',Warlock:'pact'
+};
+const THIRD_CASTER_SUBCLASSES = { Fighter:['Eldritch Knight'], Rogue:['Arcane Trickster'] };
+// index 0 unused; index 1..20 = slots per spell level [1st..9th]
+const FULL_CASTER_SLOTS = [null,
+  [2,0,0,0,0,0,0,0,0],[3,0,0,0,0,0,0,0,0],[4,2,0,0,0,0,0,0,0],[4,3,0,0,0,0,0,0,0],
+  [4,3,2,0,0,0,0,0,0],[4,3,3,0,0,0,0,0,0],[4,3,3,1,0,0,0,0,0],[4,3,3,2,0,0,0,0,0],
+  [4,3,3,3,1,0,0,0,0],[4,3,3,3,2,0,0,0,0],[4,3,3,3,2,1,0,0,0],[4,3,3,3,2,1,0,0,0],
+  [4,3,3,3,2,1,1,0,0],[4,3,3,3,2,1,1,0,0],[4,3,3,3,2,1,1,1,0],[4,3,3,3,2,1,1,1,0],
+  [4,3,3,3,2,1,1,1,1],[4,3,3,3,3,1,1,1,1],[4,3,3,3,3,2,1,1,1],[4,3,3,3,3,2,2,1,1]
+];
+const HALF_CASTER_SLOTS = [null,
+  [0,0,0,0,0,0,0,0,0],[2,0,0,0,0,0,0,0,0],[3,0,0,0,0,0,0,0,0],[3,0,0,0,0,0,0,0,0],
+  [4,2,0,0,0,0,0,0,0],[4,2,0,0,0,0,0,0,0],[4,3,0,0,0,0,0,0,0],[4,3,0,0,0,0,0,0,0],
+  [4,3,2,0,0,0,0,0,0],[4,3,2,0,0,0,0,0,0],[4,3,3,0,0,0,0,0,0],[4,3,3,0,0,0,0,0,0],
+  [4,3,3,1,0,0,0,0,0],[4,3,3,1,0,0,0,0,0],[4,3,3,2,0,0,0,0,0],[4,3,3,2,0,0,0,0,0],
+  [4,3,3,3,1,0,0,0,0],[4,3,3,3,1,0,0,0,0],[4,3,3,3,2,0,0,0,0],[4,3,3,3,2,0,0,0,0]
+];
+const THIRD_CASTER_SLOTS = [null,
+  [0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[2,0,0,0,0,0,0,0,0],[3,0,0,0,0,0,0,0,0],
+  [3,0,0,0,0,0,0,0,0],[3,0,0,0,0,0,0,0,0],[4,2,0,0,0,0,0,0,0],[4,2,0,0,0,0,0,0,0],
+  [4,2,0,0,0,0,0,0,0],[4,2,0,0,0,0,0,0,0],[4,3,0,0,0,0,0,0,0],[4,3,0,0,0,0,0,0,0],
+  [4,3,2,0,0,0,0,0,0],[4,3,2,0,0,0,0,0,0],[4,3,2,0,0,0,0,0,0],[4,3,2,0,0,0,0,0,0],
+  [4,3,3,0,0,0,0,0,0],[4,3,3,0,0,0,0,0,0],[4,3,3,1,0,0,0,0,0],[4,3,3,1,0,0,0,0,0]
+];
+const ARTIFICER_SLOTS = [null,
+  [2,0,0,0,0,0,0,0,0],[2,0,0,0,0,0,0,0,0],[3,0,0,0,0,0,0,0,0],[3,0,0,0,0,0,0,0,0],
+  [4,2,0,0,0,0,0,0,0],[4,2,0,0,0,0,0,0,0],[4,3,0,0,0,0,0,0,0],[4,3,0,0,0,0,0,0,0],
+  [4,3,2,0,0,0,0,0,0],[4,3,2,0,0,0,0,0,0],[4,3,3,0,0,0,0,0,0],[4,3,3,0,0,0,0,0,0],
+  [4,3,3,1,0,0,0,0,0],[4,3,3,1,0,0,0,0,0],[4,3,3,2,0,0,0,0,0],[4,3,3,2,0,0,0,0,0],
+  [4,3,3,3,1,0,0,0,0],[4,3,3,3,1,0,0,0,0],[4,3,3,3,2,0,0,0,0],[4,3,3,3,2,0,0,0,0]
+];
+// Pact Magic: { slots, level } per warlock level
+const PACT_MAGIC_TABLE = [null,
+  {slots:1,level:1},{slots:2,level:1},{slots:2,level:2},{slots:2,level:2},
+  {slots:2,level:3},{slots:2,level:3},{slots:2,level:4},{slots:2,level:4},
+  {slots:2,level:5},{slots:2,level:5},{slots:3,level:5},{slots:3,level:5},
+  {slots:3,level:5},{slots:3,level:5},{slots:3,level:5},{slots:3,level:5},
+  {slots:4,level:5},{slots:4,level:5},{slots:4,level:5},{slots:4,level:5}
+];
+
+function _classCasterType(entry) {
+  const ct = CASTER_TYPE[entry.class];
+  if (ct) return ct;
+  const subs = THIRD_CASTER_SUBCLASSES[entry.class];
+  if (subs && subs.includes(entry.subclass)) return 'third';
+  return null;
+}
+
+function calculateSpellSlots(ch) {
+  const classes = ch.classes || [];
+  const result = { slotsMax:{1:0,2:0,3:0,4:0,5:0,6:0,7:0,8:0,9:0}, pactSlots:0, pactSlotLevel:0, hasWarlock:false };
+  // Pact Magic (Warlock)
+  const warlock = classes.find(c => c.class === 'Warlock');
+  if (warlock) {
+    result.hasWarlock = true;
+    const pm = PACT_MAGIC_TABLE[Math.min(warlock.level||1, 20)];
+    if (pm) { result.pactSlots = pm.slots; result.pactSlotLevel = pm.level; }
+  }
+  // Gather non-Warlock caster classes
+  const casters = [];
+  for (const c of classes) {
+    const ct = _classCasterType(c);
+    if (ct && ct !== 'pact') casters.push({ ...c, casterType: ct });
+  }
+  let table;
+  if (casters.length === 0) {
+    return result; // no regular slots
+  } else if (casters.length === 1) {
+    // Single-class: use class-specific table
+    const c = casters[0], lvl = Math.min(c.level||1, 20);
+    if (c.casterType === 'full') table = FULL_CASTER_SLOTS[lvl];
+    else if (c.casterType === 'half') table = HALF_CASTER_SLOTS[lvl];
+    else if (c.casterType === 'third') table = THIRD_CASTER_SLOTS[lvl];
+    else if (c.casterType === 'artificer') table = ARTIFICER_SLOTS[lvl];
+  } else {
+    // Multiclass: sum effective caster levels
+    let effectiveLevel = 0;
+    for (const c of casters) {
+      const lvl = c.level || 1;
+      if (c.casterType === 'full') effectiveLevel += lvl;
+      else if (c.casterType === 'half') effectiveLevel += (lvl >= 2 ? Math.floor(lvl / 2) : 0);
+      else if (c.casterType === 'third') effectiveLevel += (lvl >= 3 ? Math.floor(lvl / 3) : 0);
+      else if (c.casterType === 'artificer') effectiveLevel += Math.ceil(lvl / 2);
+    }
+    effectiveLevel = Math.min(effectiveLevel, 20);
+    table = effectiveLevel > 0 ? FULL_CASTER_SLOTS[effectiveLevel] : null;
+  }
+  if (table) {
+    for (let i = 0; i < 9; i++) result.slotsMax[i+1] = table[i] || 0;
+  }
+  return result;
+}
+
+function applySpellSlots(ch) {
+  const calc = calculateSpellSlots(ch);
+  for (let lvl = 1; lvl <= 9; lvl++) {
+    ch.spells.slotsMax[lvl] = calc.slotsMax[lvl] || 0;
+    if ((ch.spells.slots[lvl]||0) > ch.spells.slotsMax[lvl]) ch.spells.slots[lvl] = ch.spells.slotsMax[lvl];
+  }
+  ch.spells.pactSlotsMax = calc.hasWarlock ? calc.pactSlots : 0;
+  ch.spells.pactSlotLevel = calc.hasWarlock ? calc.pactSlotLevel : 0;
+  if ((ch.spells.pactSlots||0) > ch.spells.pactSlotsMax) ch.spells.pactSlots = ch.spells.pactSlotsMax;
+}
+
 const SCHOOL_COLORS = {
   Abjuration:'#6d8fd4', Conjuration:'#6dba8f', Divination:'#c4a85a',
   Enchantment:'#c084fc', Evocation:'#e87070', Illusion:'#7b9dd4',
@@ -1785,24 +2065,45 @@ function deleteCustomSpell(idx) {
 
 function renderSpellsSection(ch) {
   const pb = profBonus(ch.level);
-  const spellAbility = SPELL_ABILITY[ch.class] || null;
-  const spellMod  = spellAbility ? mod(ch.abilities[spellAbility]) : null;
-  const saveDC    = spellAbility ? (8 + pb + spellMod) : null;
-  const atkBonus  = spellAbility ? (pb + spellMod) : null;
-  const abilLabel = spellAbility ? ABILITY_SHORT[spellAbility] : null;
-  const isSpellcaster = !!spellAbility;
   const known    = (ch.spells.known    || []).length;
   const prepared = (ch.spells.prepared || []).length;
 
-  const headerStats = isSpellcaster
-    ? `<div class="spell-stat-row">
-        <div class="spell-stat-box"><div class="spell-stat-label">Spellcasting Ability</div><div class="spell-stat-val">${abilLabel}</div></div>
-        <div class="spell-stat-box"><div class="spell-stat-label">Spell Save DC</div><div class="spell-stat-val">${saveDC}</div></div>
-        <div class="spell-stat-box"><div class="spell-stat-label">Spell Attack</div><div class="spell-stat-val">${atkBonus>=0?'+':''}${atkBonus}</div></div>
-      </div>`
-    : `<p class="text-dim" style="font-size:0.82rem;margin-bottom:0.8rem">${esc(ch.class)} does not use spellcasting.</p>`;
+  // Determine if any class is a spellcaster
+  const isSpellcaster = (ch.classes||[]).some(c => {
+    const ct = CASTER_TYPE[c.class];
+    if (ct) return true;
+    const subs = THIRD_CASTER_SUBCLASSES[c.class];
+    return subs && subs.includes(c.subclass);
+  });
 
-  const slotsHtml = isSpellcaster ? `
+  // Build per-class spellcasting stat rows
+  let headerStats = '';
+  if (isSpellcaster) {
+    const seen = new Set();
+    const statRows = (ch.classes||[]).map(c => {
+      const ab = SPELL_ABILITY[c.class];
+      if (!ab || seen.has(ab)) return '';
+      // For third-casters, only show if subclass matches
+      const ct = _classCasterType(c);
+      if (!ct) return '';
+      seen.add(ab);
+      const sMod = mod(ch.abilities[ab]);
+      const dc = 8 + pb + sMod;
+      const atk = pb + sMod;
+      return `<div class="spell-stat-row">
+        <div class="spell-stat-box"><div class="spell-stat-label">${esc(c.class)}</div><div class="spell-stat-val">${ABILITY_SHORT[ab]}</div></div>
+        <div class="spell-stat-box"><div class="spell-stat-label">Spell Save DC</div><div class="spell-stat-val">${dc}</div></div>
+        <div class="spell-stat-box"><div class="spell-stat-label">Spell Attack</div><div class="spell-stat-val">${atk>=0?'+':''}${atk}</div></div>
+      </div>`;
+    }).filter(Boolean);
+    headerStats = statRows.join('');
+  } else {
+    headerStats = `<p class="text-dim" style="font-size:0.82rem;margin-bottom:0.8rem">${esc(ch.class)} does not use spellcasting.</p>`;
+  }
+
+  // Regular spell slots (hide grid if all zeros and has pact magic)
+  const hasRegularSlots = [1,2,3,4,5,6,7,8,9].some(l => (ch.spells.slotsMax||{})[l] > 0);
+  const slotsHtml = isSpellcaster && hasRegularSlots ? `
     <div class="spell-slots-section">
       <div class="cs-field-label" style="margin-bottom:0.55rem">Spell Slots</div>
       <div class="spell-slots-grid">
@@ -1825,10 +2126,32 @@ function renderSpellsSection(ch) {
       </div>
     </div>` : '';
 
+  // Pact Magic (Warlock)
+  const pactMax = ch.spells.pactSlotsMax || 0;
+  const pactCur = ch.spells.pactSlots || 0;
+  const pactLvl = ch.spells.pactSlotLevel || 0;
+  const pactOrd = ['','1st','2nd','3rd','4th','5th'][pactLvl] || `${pactLvl}th`;
+  const pactHtml = pactMax > 0 ? `
+    <div class="pact-magic-section">
+      <div class="cs-field-label" style="margin-bottom:0.55rem">Pact Magic · ${pactOrd}-level · short rest</div>
+      <div class="spell-slot-row">
+        <span class="spell-slot-lbl">Pact</span>
+        <div class="spell-slot-bubbles">
+          ${Array.from({length:pactMax},(_,i)=>`<div class="spell-bubble pact-bubble ${i<pactCur?'filled':''}" onclick="togglePactBubble(${i})" title="Pact slot ${i+1}"></div>`).join('')}
+        </div>
+        <div class="slot-max-ctrl">
+          <button class="slot-adj-btn" onclick="pactSlotMaxAdj(-1)">−</button>
+          <span class="slot-max-val">${pactMax}</span>
+          <button class="slot-adj-btn" onclick="pactSlotMaxAdj(1)">+</button>
+        </div>
+      </div>
+    </div>` : '';
+
   return `<div class="sheet-panel">
     <div class="cs-section-label">Spells</div>
     ${headerStats}
     ${slotsHtml}
+    ${pactHtml}
     <div class="spell-tabs">
       <button class="spell-tab${spellViewTab==='all'?' active':''}" data-tab="all" onclick="switchSpellTab('all')">✿ All Spells</button>
       <button class="spell-tab${spellViewTab==='known'?' active':''}" data-tab="known" onclick="switchSpellTab('known')">Known <span class="spell-count">${known}</span></button>
@@ -1893,6 +2216,26 @@ function slotMaxAdj(level, delta) {
   ch.spells.slotsMax[level] = newMax;
   if ((ch.spells.slots[level] || 0) > newMax) ch.spells.slots[level] = newMax;
   saveData(db); renderApp();
+}
+
+function togglePactBubble(index) {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  const cur = ch.spells.pactSlots || 0;
+  ch.spells.pactSlots = index < cur ? index : index + 1;
+  saveData(db); renderApp();
+}
+
+function pactSlotMaxAdj(delta) {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  const newMax = Math.min(9, Math.max(0, (ch.spells.pactSlotsMax || 0) + delta));
+  ch.spells.pactSlotsMax = newMax;
+  if ((ch.spells.pactSlots || 0) > newMax) ch.spells.pactSlots = newMax;
+  saveData(db); renderApp();
+}
+
+function restorePactSlots() {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  ch.spells.pactSlots = ch.spells.pactSlotsMax || 0;
 }
 
 function renderPersonalitySection(ch) {
@@ -2692,11 +3035,6 @@ function syncSubclassFeatures(charId) {
       const newMax2 = level >= 17 ? 2 : 1;
       if (r.max !== newMax2) { r.max = newMax2; r.current = Math.min(r.current, newMax2); }
     }
-    // Warlock gets 2 pact slots at level 2
-    if (r.name === 'Pact Magic Slots') {
-      const newMax3 = level >= 2 ? 2 : 1;
-      if (r.max !== newMax3) { r.max = newMax3; r.current = Math.min(r.current, newMax3); }
-    }
   });
 }
 
@@ -2776,10 +3114,7 @@ const BASE_CLASS_RESOURCES = {
     { name: 'Sorcery Points', maxFormula: 'level', die: null, recharge: 'long', type: 'pips',
       desc: 'Points that fuel Metamagic and other sorcerous effects.' },
   ],
-  Warlock: ch => [
-    { name: 'Pact Magic Slots', maxFormula: (ch.level || 1) >= 2 ? 2 : 1, die: null, recharge: 'short', type: 'pips',
-      desc: 'Spell slots that recharge on a Short or Long Rest.' },
-  ],
+  Warlock: ch => [],
   Wizard: ch => [
     { name: 'Arcane Recovery', maxFormula: 1, die: null, recharge: 'long', type: 'pips',
       desc: 'Recover expended spell slots during a Short Rest (once per Long Rest).' },
@@ -3164,6 +3499,7 @@ function chClassField(idx, field, value) {
     syncClassFields(ch);
     applySubclassForClass(currentCharId, idx, ch.classes[idx].class, value);
   }
+  applySpellSlots(ch);
   saveData(db);
   renderApp();
   refreshPanels();
@@ -3175,6 +3511,7 @@ function addCharClass() {
   ch.classes.push({ class: 'Fighter', subclass: '', level: 1 });
   syncClassFields(ch);
   _injectResourcesForClass(ch, 'Fighter');
+  applySpellSlots(ch);
   saveData(db);
   mcEditIdx = ch.classes.length - 1;
   renderApp();
@@ -3200,6 +3537,7 @@ function removeCharClass(idx) {
     _injectResourcesForClass(ch, ch.classes[0].class);
     if (ch.classes[0].subclass) applySubclassForClass(currentCharId, 0, ch.classes[0].class, ch.classes[0].subclass);
   }
+  applySpellSlots(ch);
   saveData(db);
   renderApp();
   refreshPanels();
@@ -3212,6 +3550,7 @@ function ch_field_level(value) {
   syncClassFields(ch);
   if (_levelDebounce) clearTimeout(_levelDebounce);
   _levelDebounce = setTimeout(() => {
+    applySpellSlots(ch);
     syncSubclassFeatures(currentCharId);
     renderApp();
     refreshPanels();
@@ -3394,6 +3733,8 @@ function doLongRest() {
       ch.spells.slots[lvl] = ch.spells.slotsMax[lvl] || 0;
     }
   }
+  // Restore pact magic slots
+  if (ch.spells?.pactSlotsMax) ch.spells.pactSlots = ch.spells.pactSlotsMax;
   // Reset death saves
   ch.deathSaves = { successes: 0, failures: 0 };
   // Restore resources
@@ -3416,7 +3757,7 @@ function openShortRestDialog() {
     <div id="sr-roll-log" style="max-height:120px;overflow-y:auto;margin-bottom:0.8rem"></div>
     <div class="form-actions">
       <button class="btn" id="sr-roll-btn" onclick="shortRestRollHD()" ${hdRemaining <= 0 || ch.combat.currentHP >= ch.combat.maxHP ? 'disabled' : ''}>Roll Hit Die</button>
-      <button class="btn btn-primary" onclick="restoreResources('short',currentCharId);saveData(db);closeModal();renderApp()">Done</button>
+      <button class="btn btn-primary" onclick="restorePactSlots();restoreResources('short',currentCharId);saveData(db);closeModal();renderApp()">Done</button>
     </div>`);
 }
 
@@ -3584,6 +3925,7 @@ function _levelUpGainHP(classIdx, hpGain) {
     entry.level = Math.min(entry.level + 1, 20 - otherSum);
   }
   syncClassFields(ch);
+  applySpellSlots(ch);
   ch.combat.maxHP = (ch.combat.maxHP || 0) + gained;
   ch.combat.currentHP = Math.min(ch.combat.currentHP + gained, ch.combat.maxHP);
   syncSubclassFeatures(currentCharId);
@@ -3860,6 +4202,7 @@ function wizardFinish() {
   ch.proficiencyBonus = profBonus(wizardData.level);
   db.characters[ch.id] = ch;
   injectBaseClassResources(ch.id);
+  applySpellSlots(ch);
   const c = db.campaigns.find(c => c.id === currentCampaignId);
   (c.characters = c.characters || []).push(ch.id);
   if (!c.activeCharId) c.activeCharId = ch.id;
