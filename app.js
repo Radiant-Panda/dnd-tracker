@@ -4471,7 +4471,11 @@ function deleteCharacterFromPanel(charId) {
 function openCharWizard() {
   closeCharPanel();
   wizardData = {
-    name: '', race: '', class: 'Fighter', level: 1,
+    name: '', race: '', raceSource: '', raceData: null,
+    background: '', backgroundData: null,
+    abilityBonuses: {},
+    _speciesSource: '2024',
+    class: 'Fighter', level: 1,
     abilities: { str:10, dex:10, con:10, int:10, wis:10, cha:10 },
     maxHP: 10, maxHPSet: false
   };
@@ -4479,9 +4483,45 @@ function openCharWizard() {
 }
 
 function wizardProgress(current) {
-  return `<div class="wizard-progress">${[0,1,2,3,4,5].map(i =>
+  return `<div class="wizard-progress">${[0,1,2,3,4,5,6,7].map(i =>
     `<div class="wizard-step-dot ${i < current ? 'done' : i === current ? 'current' : ''}"></div>`
   ).join('')}</div>`;
+}
+
+function _wizSpeciesCards() {
+  const srcKey = wizardData._speciesSource === '2014' ? 'races_2014' : wizardData._speciesSource === 'mpmm' ? 'races_mpmm' : 'species_2024';
+  const list = SPECIES_DATA[srcKey] || [];
+  return list.map((sp, i) => {
+    const sel = wizardData.race === sp.name && wizardData.raceSource === srcKey;
+    const traits = (sp.traits || []).slice(0, 2).map(t => esc(t.name)).join(', ');
+    let bonusLine = '';
+    if (sp.abilityBonuses) {
+      bonusLine = Object.entries(sp.abilityBonuses).map(([k,v]) => `+${v} ${k.toUpperCase()}`).join(', ');
+    } else if (srcKey === 'races_mpmm') {
+      bonusLine = '+2/+1 choose any';
+    }
+    return `<div class="wiz-card ${sel?'selected':''}" onclick="wiz_selectSpecies('${srcKey}',${i})">
+      <div style="font-weight:bold;font-size:0.9rem">${esc(sp.name)}</div>
+      <div style="font-size:0.72rem;color:var(--text-dim)">${esc(sp.size||'')} · ${sp.speed||30} ft</div>
+      ${bonusLine ? `<div style="font-size:0.72rem;color:var(--gold-lt);margin-top:0.15rem">${bonusLine}</div>` : ''}
+      ${traits ? `<div style="font-size:0.7rem;color:var(--text-dim);margin-top:0.15rem">${traits}</div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+function _wizBackgroundCards() {
+  const list = SPECIES_DATA.backgrounds_2024 || [];
+  return list.map((bg, i) => {
+    const sel = wizardData.background === bg.name;
+    const chips = (bg.abilityGroup || []).map(a => `<span class="wiz-stat-chip">${a.toUpperCase()}</span>`).join(' ');
+    return `<div class="wiz-card ${sel?'selected':''}" onclick="wiz_selectBackground(${i})">
+      <div style="font-weight:bold;font-size:0.9rem">${esc(bg.name)}</div>
+      <div style="margin-top:0.2rem">${chips}</div>
+      <div style="font-size:0.72rem;color:var(--text-dim);margin-top:0.15rem">Skills: ${(bg.skills||[]).map(s=>esc(s)).join(', ')}</div>
+      <div style="font-size:0.72rem;color:var(--text-dim)">Tool: ${(bg.tools||[]).map(t=>esc(t)).join(', ')}</div>
+      <div style="font-size:0.72rem;color:var(--gold-lt);margin-top:0.15rem">Feat: ${esc(bg.feat||'—')}</div>
+    </div>`;
+  }).join('');
 }
 
 function renderWizardStep(step) {
@@ -4496,26 +4536,37 @@ function renderWizardStep(step) {
         <button class="btn btn-primary" onclick="wizardNext(0)">Next →</button>
       </div>`;
   } else if (step === 1) {
+    const s = wizardData._speciesSource;
     body = `<h2>✾ Species</h2>${wizardProgress(1)}
-      <div class="form-group"><label>Species / Race</label>
-        <input type="text" id="wiz-race" value="${esc(wizardData.race)}" placeholder="Dwarf, Elf, Human, Tiefling...">
+      <div class="wiz-source-toggle">
+        <button class="btn btn-sm ${s==='2024'?'btn-primary':''}" onclick="wizardData._speciesSource='2024';renderWizardStep(1)">2024 PHB</button>
+        <button class="btn btn-sm ${s==='2014'?'btn-primary':''}" onclick="wizardData._speciesSource='2014';renderWizardStep(1)">2014 PHB</button>
+        <button class="btn btn-sm ${s==='mpmm'?'btn-primary':''}" onclick="wizardData._speciesSource='mpmm';renderWizardStep(1)">Mordenkainen's</button>
       </div>
+      <div class="wiz-card-grid">${_wizSpeciesCards()}</div>
       <div class="form-actions">
         <button class="btn" onclick="renderWizardStep(0)">← Back</button>
         <button class="btn btn-primary" onclick="wizardNext(1)">Next →</button>
       </div>`;
   } else if (step === 2) {
-    const classes = ['Barbarian','Bard','Cleric','Druid','Fighter','Monk','Paladin','Ranger','Rogue','Sorcerer','Warlock','Wizard','Artificer','Blood Hunter'];
-    body = `<h2>✾ Class</h2>${wizardProgress(2)}
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.35rem;margin-bottom:1rem">
-        ${classes.map(c => `<button class="btn btn-sm ${wizardData.class === c ? 'btn-primary' : ''}" onclick="wiz_setClass('${c}')" style="justify-content:flex-start;gap:0.4rem"><span>${CLASS_ICONS[c] || '⚔'}</span>${c}</button>`).join('')}
-      </div>
+    body = `<h2>✾ Background</h2>${wizardProgress(2)}
+      <div class="wiz-card-grid">${_wizBackgroundCards()}</div>
       <div class="form-actions">
         <button class="btn" onclick="renderWizardStep(1)">← Back</button>
         <button class="btn btn-primary" onclick="renderWizardStep(3)">Next →</button>
       </div>`;
   } else if (step === 3) {
-    body = `<h2>✾ Level</h2>${wizardProgress(3)}
+    const classes = ['Barbarian','Bard','Cleric','Druid','Fighter','Monk','Paladin','Ranger','Rogue','Sorcerer','Warlock','Wizard','Artificer','Blood Hunter'];
+    body = `<h2>✾ Class</h2>${wizardProgress(3)}
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.35rem;margin-bottom:1rem">
+        ${classes.map(c => `<button class="btn btn-sm ${wizardData.class === c ? 'btn-primary' : ''}" onclick="wiz_setClass('${c}')" style="justify-content:flex-start;gap:0.4rem"><span>${CLASS_ICONS[c] || '⚔'}</span>${c}</button>`).join('')}
+      </div>
+      <div class="form-actions">
+        <button class="btn" onclick="renderWizardStep(2)">← Back</button>
+        <button class="btn btn-primary" onclick="renderWizardStep(4)">Next →</button>
+      </div>`;
+  } else if (step === 4) {
+    body = `<h2>✾ Level</h2>${wizardProgress(4)}
       <div style="text-align:center;padding:1.2rem 0">
         <div class="cs-field-label" style="margin-bottom:0.8rem">Character Level</div>
         <div style="display:flex;align-items:center;justify-content:center;gap:1.4rem">
@@ -4526,28 +4577,93 @@ function renderWizardStep(step) {
         <div style="font-size:0.8rem;color:var(--text-dim);margin-top:0.7rem">Proficiency Bonus: +${profBonus(wizardData.level)}</div>
       </div>
       <div class="form-actions">
-        <button class="btn" onclick="renderWizardStep(2)">← Back</button>
-        <button class="btn btn-primary" onclick="renderWizardStep(4)">Next →</button>
-      </div>`;
-  } else if (step === 4) {
-    body = `<h2>✾ Ability Scores</h2>${wizardProgress(4)}
-      <p style="font-size:0.75rem;color:var(--text-dim);margin-bottom:0.5rem">Standard array: 15, 14, 13, 12, 10, 8 — or roll your own.</p>
-      <div class="wizard-ability-grid">
-        ${ABILITIES.map(a => `<div class="wizard-ability-box">
-          <label>${ABILITY_SHORT[a]}</label>
-          <input type="number" id="wiz-ab-${a}" value="${wizardData.abilities[a]}" min="1" max="30" oninput="wizardData.abilities['${a}']=+this.value||10">
-        </div>`).join('')}
-      </div>
-      <div class="form-actions">
         <button class="btn" onclick="renderWizardStep(3)">← Back</button>
         <button class="btn btn-primary" onclick="renderWizardStep(5)">Next →</button>
       </div>`;
   } else if (step === 5) {
+    // Ability Scores with +2/+1 bonus picker
+    let bonusSection = '';
+    const bg = wizardData.backgroundData;
+    const is2014 = wizardData.raceSource === 'races_2014';
+    if (is2014 && wizardData.raceData?.abilityBonuses) {
+      // Auto-apply 2014 fixed bonuses
+      wizardData.abilityBonuses = { ...wizardData.raceData.abilityBonuses };
+      const chips = Object.entries(wizardData.raceData.abilityBonuses)
+        .map(([a,v]) => `<span class="wiz-stat-chip" style="opacity:0.6">+${v} ${a.toUpperCase()}</span>`).join(' ');
+      bonusSection = `<div style="margin-bottom:0.6rem;font-size:0.82rem">
+        <div style="color:var(--text-dim);margin-bottom:0.3rem">Racial bonuses (fixed):</div>${chips}</div>`;
+    } else if (bg && bg.abilityGroup) {
+      const chips = bg.abilityGroup.map(a => {
+        const v = wizardData.abilityBonuses[a];
+        const cls = v === 2 ? 'bonus-2' : v === 1 ? 'bonus-1' : '';
+        const label = v ? `+${v} ${a.toUpperCase()}` : a.toUpperCase();
+        return `<span class="wiz-stat-chip wiz-bonus-chip ${cls}" onclick="wiz_toggleBonus('${a}')">${label}</span>`;
+      }).join(' ');
+      bonusSection = `<div style="margin-bottom:0.6rem;font-size:0.82rem">
+        <div style="color:var(--text-dim);margin-bottom:0.3rem">Background grants +2 to one and +1 to another from:</div>${chips}</div>`;
+    }
+    body = `<h2>✾ Ability Scores</h2>${wizardProgress(5)}
+      <p style="font-size:0.75rem;color:var(--text-dim);margin-bottom:0.5rem">Standard array: 15, 14, 13, 12, 10, 8 — or roll your own.</p>
+      ${bonusSection}
+      <div class="wizard-ability-grid">
+        ${ABILITIES.map(a => {
+          const base = wizardData.abilities[a];
+          const bonus = wizardData.abilityBonuses[a] || 0;
+          const total = base + bonus;
+          return `<div class="wizard-ability-box">
+            <label>${ABILITY_SHORT[a]}</label>
+            <input type="number" id="wiz-ab-${a}" value="${base}" min="1" max="30" oninput="wizardData.abilities['${a}']=+this.value||10;renderWizardStep(5)">
+            ${bonus ? `<div style="font-size:0.7rem;color:var(--gold);margin-top:0.15rem">${base} + ${bonus} = <strong>${total}</strong></div>` : ''}
+          </div>`;
+        }).join('')}
+      </div>
+      <div class="form-actions">
+        <button class="btn" onclick="renderWizardStep(4)">← Back</button>
+        <button class="btn btn-primary" onclick="renderWizardStep(6)">Next →</button>
+      </div>`;
+  } else if (step === 6) {
+    // Review step
+    const bg = wizardData.backgroundData;
+    const pb = profBonus(wizardData.level);
+    let scoresHtml = ABILITIES.map(a => {
+      const base = wizardData.abilities[a];
+      const bonus = wizardData.abilityBonuses[a] || 0;
+      const total = base + bonus;
+      return `<div class="wizard-ability-box">
+        <label>${ABILITY_SHORT[a]}</label>
+        <div style="font-size:1.2rem;font-weight:bold;color:${bonus ? 'var(--gold)' : 'var(--text)'}">${total}</div>
+        ${bonus ? `<div style="font-size:0.65rem;color:var(--text-dim)">${base}+${bonus}</div>` : ''}
+      </div>`;
+    }).join('');
+    body = `<h2>✾ Review</h2>${wizardProgress(6)}
+      <div style="background:var(--surface2);border-radius:var(--radius);padding:0.75rem;font-size:0.82rem;margin-bottom:0.8rem">
+        <div style="font-weight:bold;color:var(--gold-lt);font-size:1rem;margin-bottom:0.4rem">${CLASS_ICONS[wizardData.class] || '⚔'} ${esc(wizardData.name)}</div>
+        <div style="margin-bottom:0.3rem">
+          <strong>Species:</strong> ${esc(wizardData.race || '—')}
+          ${wizardData.raceData?.source ? `<span class="wiz-stat-chip" style="margin-left:0.3rem">${esc(wizardData.raceData.source)}</span>` : ''}
+        </div>
+        <div style="margin-bottom:0.3rem">
+          <strong>Background:</strong> ${esc(wizardData.background || '—')}
+          ${bg?.feat ? ` · <span style="color:var(--gold-lt)">Feat: ${esc(bg.feat)}</span>` : ''}
+        </div>
+        ${bg?.skills?.length ? `<div style="margin-bottom:0.3rem"><strong>Skills:</strong> ${bg.skills.map(s=>esc(s)).join(', ')}</div>` : ''}
+        <div style="margin-bottom:0.3rem">
+          <strong>Class:</strong> ${esc(wizardData.class)} &nbsp;·&nbsp; <strong>Level:</strong> ${wizardData.level} &nbsp;·&nbsp; PB +${pb}
+        </div>
+      </div>
+      <div class="wizard-ability-grid" style="margin-bottom:0.8rem">${scoresHtml}</div>
+      <div class="form-actions">
+        <button class="btn" onclick="renderWizardStep(5)">← Back</button>
+        <button class="btn btn-primary" onclick="renderWizardStep(7)">Next →</button>
+      </div>`;
+  } else if (step === 7) {
     const hd = HIT_DICE[wizardData.class] || 8;
-    const conMod = Math.floor((wizardData.abilities.con - 10) / 2);
+    const conBase = wizardData.abilities.con || 10;
+    const conBonus = wizardData.abilityBonuses.con || 0;
+    const conMod = Math.floor(((conBase + conBonus) - 10) / 2);
     const suggested = Math.max(1, (hd + conMod) * wizardData.level);
     if (!wizardData.maxHPSet) wizardData.maxHP = suggested;
-    body = `<h2>✾ Hit Points</h2>${wizardProgress(5)}
+    body = `<h2>✾ Hit Points</h2>${wizardProgress(7)}
       <div class="form-group"><label>Maximum HP</label>
         <input type="number" id="wiz-hp" value="${wizardData.maxHP}" min="1">
         <div style="font-size:0.75rem;color:var(--text-dim);margin-top:0.4rem">
@@ -4560,14 +4676,14 @@ function renderWizardStep(step) {
         <div style="color:var(--text-dim)">Level ${wizardData.level} ${esc(wizardData.race || '—')} ${esc(wizardData.class)} &nbsp;&bull;&nbsp; PB +${profBonus(wizardData.level)}</div>
       </div>
       <div class="form-actions">
-        <button class="btn" onclick="renderWizardStep(4)">← Back</button>
+        <button class="btn" onclick="renderWizardStep(6)">← Back</button>
         <button class="btn btn-primary" onclick="wizardFinish()">Create Character ✦</button>
       </div>`;
   }
   openModal(body);
   setTimeout(() => {
     const inp = document.querySelector('#modal-content input[type="text"], #modal-content input[type="number"]');
-    if (inp && step !== 2 && step !== 3) inp.focus();
+    if (inp && step !== 1 && step !== 2 && step !== 3 && step !== 4 && step !== 6) inp.focus();
   }, 40);
 }
 
@@ -4577,13 +4693,54 @@ function wizardNext(step) {
     if (!v) { const el = document.getElementById('wiz-name'); if (el) { el.style.borderColor = 'var(--red-lt)'; el.focus(); } return; }
     wizardData.name = v; renderWizardStep(1);
   } else if (step === 1) {
-    wizardData.race = document.getElementById('wiz-race')?.value.trim() || '';
     renderWizardStep(2);
   }
 }
 
-function wiz_setClass(cls) { wizardData.class = cls; renderWizardStep(2); }
-function wiz_setLevel(lvl) { wizardData.level = Math.min(20, Math.max(1, lvl)); renderWizardStep(3); }
+function wiz_selectSpecies(srcKey, idx) {
+  const sp = SPECIES_DATA[srcKey]?.[idx];
+  if (!sp) return;
+  wizardData.race = sp.name;
+  wizardData.raceSource = srcKey;
+  wizardData.raceData = sp;
+  // Clear ability bonuses if switching source types
+  if (srcKey === 'races_2014' && sp.abilityBonuses) {
+    wizardData.abilityBonuses = { ...sp.abilityBonuses };
+  } else if (srcKey !== 'races_2014') {
+    wizardData.abilityBonuses = {};
+  }
+  renderWizardStep(1);
+}
+
+function wiz_selectBackground(idx) {
+  const bg = SPECIES_DATA.backgrounds_2024?.[idx];
+  if (!bg) return;
+  wizardData.background = bg.name;
+  wizardData.backgroundData = bg;
+  // Reset ability bonuses when changing background (for 2024 mode)
+  if (wizardData.raceSource !== 'races_2014') {
+    wizardData.abilityBonuses = {};
+  }
+  renderWizardStep(2);
+}
+
+function wiz_toggleBonus(ability) {
+  const bonuses = wizardData.abilityBonuses;
+  const current = bonuses[ability];
+  if (current) {
+    // Clicking assigned stat clears it
+    delete bonuses[ability];
+  } else {
+    const has2 = Object.values(bonuses).includes(2);
+    const has1 = Object.values(bonuses).includes(1);
+    if (!has2) bonuses[ability] = 2;
+    else if (!has1) bonuses[ability] = 1;
+  }
+  renderWizardStep(5);
+}
+
+function wiz_setClass(cls) { wizardData.class = cls; renderWizardStep(3); }
+function wiz_setLevel(lvl) { wizardData.level = Math.min(20, Math.max(1, lvl)); renderWizardStep(4); }
 
 function wizardFinish() {
   if (CharacterStore.getAllForCampaign(currentCampaignId).length >= 20) {
@@ -4591,10 +4748,29 @@ function wizardFinish() {
   }
   wizardData.maxHP = Math.max(1, parseInt(document.getElementById('wiz-hp')?.value) || wizardData.maxHP || 1);
   const ch = newCharacter(wizardData.name, wizardData.race, wizardData.class, wizardData.level);
-  ch.abilities        = { ...wizardData.abilities };
+  ch.abilities = { ...wizardData.abilities };
+  // Apply +2/+1 ability bonuses
+  for (const [ab, bonus] of Object.entries(wizardData.abilityBonuses || {})) {
+    ch.abilities[ab] = (ch.abilities[ab] || 10) + bonus;
+  }
   ch.combat.maxHP     = wizardData.maxHP;
   ch.combat.currentHP = wizardData.maxHP;
   ch.proficiencyBonus = profBonus(wizardData.level);
+  // Background data
+  if (wizardData.backgroundData) {
+    ch.background = wizardData.background;
+    (wizardData.backgroundData.skills || []).forEach(skill => {
+      if (!ch.skillProficiencies.includes(skill)) ch.skillProficiencies.push(skill);
+    });
+    const tools = (wizardData.backgroundData.tools || []).join(', ');
+    if (tools) ch.proficiencies = tools;
+    if (wizardData.backgroundData.feat) {
+      ch.featuresList = ch.featuresList || [];
+      ch.featuresList.push({ name: wizardData.backgroundData.feat, desc: 'Granted by background.', _background: true });
+    }
+  }
+  // Set speed from species
+  if (wizardData.raceData?.speed) ch.combat.speed = wizardData.raceData.speed;
   db.characters[ch.id] = ch;
   injectBaseClassResources(ch.id);
   applySpellSlots(ch);
