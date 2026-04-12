@@ -1070,6 +1070,23 @@ main {
   padding: 0.1rem 0;
 }
 .attack-input:focus { outline: none; border-bottom: 1px solid var(--gold); }
+.attack-type-select {
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.75rem;
+  width: 100%;
+  padding: 0.1rem 0;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.attack-type-select:focus { outline: none; }
+.attack-type-select option { background: var(--bg-panel, #1a1a2e); color: var(--text); }
+.attack-actions { white-space: nowrap; text-align: right; }
+.attack-actions .btn-icon { padding: 0.1rem 0.25rem; font-size: 0.8rem; opacity: 0.7; }
+.attack-actions .btn-icon:hover { opacity: 1; }
 
 /* Currency */
 .currency-grid {

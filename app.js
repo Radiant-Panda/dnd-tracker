@@ -1791,15 +1791,38 @@ function renderAttacksSection(ch) {
   return `<div class="sheet-panel" style="margin-top:0.6rem">
     <div class="cs-section-label">Attacks &amp; Spellcasting</div>
     <table class="attacks-table">
-      <thead><tr><th style="width:42%">Name</th><th style="width:22%">Atk Bonus</th><th style="width:30%">Damage / Type</th><th style="width:6%"></th></tr></thead>
+      <thead><tr>
+        <th style="width:24%">Name</th>
+        <th style="width:19%">Type</th>
+        <th style="width:13%">Bonus</th>
+        <th style="width:26%">Damage / Type</th>
+        <th style="width:18%"></th>
+      </tr></thead>
       <tbody>
         ${rows.map((atk,i)=>`<tr>
           <td><input class="attack-input" value="${esc(atk.name)}" placeholder="Longsword" oninput="updateAttack(${i},'name',this.value)"></td>
+          <td><select class="attack-type-select" onchange="autoCalcAttackBonus(${i},this.value)">
+            <option value="" ${!atk.weaponType?'selected':''}>—</option>
+            <option value="melee-str" ${atk.weaponType==='melee-str'?'selected':''}>Melee (STR)</option>
+            <option value="melee-finesse" ${atk.weaponType==='melee-finesse'?'selected':''}>Melee Finesse</option>
+            <option value="ranged-dex" ${atk.weaponType==='ranged-dex'?'selected':''}>Ranged (DEX)</option>
+            <option value="spell" ${atk.weaponType==='spell'?'selected':''}>Spell Attack</option>
+          </select></td>
           <td><input class="attack-input" value="${esc(atk.bonus)}" placeholder="+5" oninput="updateAttack(${i},'bonus',this.value)"></td>
           <td><input class="attack-input" value="${esc(atk.damage)}" placeholder="1d8+3 slashing" oninput="updateAttack(${i},'damage',this.value)"></td>
-          <td><button class="btn btn-icon btn-danger" onclick="removeAttack(${i})">&times;</button></td>
+          <td class="attack-actions">
+            <button class="btn btn-icon" onclick="rollAttack(${i})" title="Roll attack">🎲</button>
+            <button class="btn btn-icon" onclick="rollDamage(${i})" title="Roll damage">⚄</button>
+            <button class="btn btn-icon btn-danger" onclick="removeAttack(${i})">&times;</button>
+          </td>
         </tr>`).join('')}
-        ${Array.from({length:emptyCount},()=>`<tr><td><input class="attack-input" placeholder="—"></td><td><input class="attack-input" placeholder="—"></td><td><input class="attack-input" placeholder="—"></td><td></td></tr>`).join('')}
+        ${Array.from({length:emptyCount},()=>`<tr>
+          <td><input class="attack-input" placeholder="—"></td>
+          <td class="text-dim" style="font-size:0.75rem;padding:0.2rem 0.3rem">—</td>
+          <td><input class="attack-input" placeholder="—"></td>
+          <td><input class="attack-input" placeholder="—"></td>
+          <td></td>
+        </tr>`).join('')}
       </tbody>
     </table>
     <button class="btn btn-sm" style="margin-top:0.5rem" onclick="addAttack()">+ Add Attack</button>
@@ -4141,13 +4164,60 @@ function adjustHitDice(delta) {
 function addAttack() {
   const ch = db.characters[currentCharId];
   ch.attacks = ch.attacks||[];
-  ch.attacks.push({id:uid(),name:'',bonus:'',damage:''});
+  ch.attacks.push({id:uid(),name:'',bonus:'',damage:'',weaponType:''});
   saveData(db); renderApp();
 }
 function removeAttack(i) { db.characters[currentCharId].attacks.splice(i,1); saveData(db); renderApp(); }
 function updateAttack(i, field, value) {
   const ch = db.characters[currentCharId];
   if (ch.attacks[i]) ch.attacks[i][field] = value;
+}
+function autoCalcAttackBonus(i, weaponType) {
+  const ch = db.characters[currentCharId];
+  if (!ch || !ch.attacks[i]) return;
+  ch.attacks[i].weaponType = weaponType;
+  if (weaponType) {
+    const pb = profBonus(ch.level);
+    const abs = ch.abilities || {};
+    const strMod = mod(abs.str || 10);
+    const dexMod = mod(abs.dex || 10);
+    let abilityMod;
+    if (weaponType === 'melee-str')      abilityMod = strMod;
+    else if (weaponType === 'melee-finesse') abilityMod = Math.max(strMod, dexMod);
+    else if (weaponType === 'ranged-dex')  abilityMod = dexMod;
+    else { // spell
+      const spellAbil = SPELL_ABILITY[ch.class] || 'int';
+      abilityMod = mod(abs[spellAbil] || 10);
+    }
+    const bonus = pb + abilityMod;
+    ch.attacks[i].bonus = (bonus >= 0 ? '+' : '') + bonus;
+  }
+  saveData(db); renderApp();
+}
+function rollAttack(i) {
+  const ch = db.characters[currentCharId];
+  const atk = ch?.attacks?.[i];
+  if (!atk) return;
+  const d20 = Math.floor(Math.random() * 20) + 1;
+  const bonusNum = parseInt(atk.bonus) || 0;
+  const total = d20 + bonusNum;
+  const bonusStr = bonusNum >= 0 ? `+ ${bonusNum}` : `\u2212 ${Math.abs(bonusNum)}`;
+  showToast(`<strong>${esc(atk.name || 'Attack')} attack:</strong> d20(${d20}) ${bonusStr} = <strong>${total}</strong>`);
+}
+function rollDamage(i) {
+  const ch = db.characters[currentCharId];
+  const atk = ch?.attacks?.[i];
+  if (!atk?.damage) { showToast('No damage dice set.'); return; }
+  const diceStr = atk.damage.trim().split(/\s+/)[0];
+  const m = diceStr.match(/^(\d+)d(\d+)([+-]\d+)?/i);
+  if (!m) { showToast(`Cannot parse: <strong>${esc(atk.damage)}</strong>`); return; }
+  const count = parseInt(m[1]), sides = parseInt(m[2]), bonus = parseInt(m[3] || '0');
+  const rolls = Array.from({length: count}, () => Math.floor(Math.random() * sides) + 1);
+  const rollSum = rolls.reduce((a, b) => a + b, 0);
+  const total = rollSum + bonus;
+  const rollsStr = count === 1 ? `${rolls[0]}` : `${rolls.join('+')}=${rollSum}`;
+  const bonusStr = bonus > 0 ? ` + ${bonus}` : bonus < 0 ? ` \u2212 ${Math.abs(bonus)}` : '';
+  showToast(`<strong>${esc(atk.name || 'Attack')} damage:</strong> ${count}d${sides}(${rollsStr})${bonusStr} = <strong>${total}</strong>`);
 }
 function updateCurrency(coin, value) {
   const ch = db.characters[currentCharId];
