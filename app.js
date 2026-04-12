@@ -543,7 +543,7 @@ function getConditionClass(cond) {
 }
 
 function getCampaign() { return db.campaigns.find(c => c.id === currentCampaignId); }
-function getInitiative() { const c=getCampaign(); if(!c.initiative) c.initiative={round:1,currentIndex:0,combatants:[]}; return c.initiative; }
+function getInitiative() { const c=getCampaign(); if(!c.initiative) c.initiative={round:1,currentIndex:0,combatants:[]}; c.initiative.combatants.forEach(cb => { if(typeof cb.tempHP === 'undefined') cb.tempHP = 0; }); return c.initiative; }
 
 function renderInitiativeTracker(campaign) {
   const init = campaign.initiative || {round:1,currentIndex:0,combatants:[]};
@@ -803,6 +803,7 @@ function setTempHP(i, amount) {
   if (cb) {
     cb.tempHP = Math.max(0, amount);
     CharacterStore.updateInitiativeHP(currentCampaignId,i,cb.hp,cb.tempHP);
+    renderApp();
   }
 }
 function removeCombatant(i) { const init=getInitiative(); init.combatants.splice(i,1); if(init.currentIndex>=init.combatants.length) init.currentIndex=0; saveData(db); renderApp(); }
@@ -866,9 +867,9 @@ function applyAoeDamage() {
   let totalHit = 0, fullCount = 0, halfCount = 0, halfDmg = 0;
 
   document.querySelectorAll('.aoe-row').forEach(row => {
-    const cb = row.querySelector('input[type=checkbox]');
-    if (!cb || !cb.checked) return;
-    const idx = parseInt(cb.dataset.idx);
+    const checkbox = row.querySelector('input[type=checkbox]');
+    if (!checkbox || !checkbox.checked) return;
+    const idx = parseInt(checkbox.dataset.idx);
     const saveType = row.querySelector('.aoe-save').value;
     let dmg = 0;
     if (saveType === 'full') { dmg = baseDmg; fullCount++; }
