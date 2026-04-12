@@ -506,7 +506,11 @@ const CONDITIONS_RULES = {
   }
 };
 
+function condName(c) { return typeof c === 'string' ? c : c.name; }
+function condDuration(c) { return typeof c === 'object' ? c.duration : undefined; }
+
 function getConditionEmoji(cond) {
+  cond = condName(cond);
   const emojis = {
     'Blinded': '👁️',
     'Charmed': '💕',
@@ -528,6 +532,7 @@ function getConditionEmoji(cond) {
 }
 
 function getConditionClass(cond) {
+  cond = condName(cond);
   const classes = {
     'Poisoned': 'poisoned',
     'Stunned': 'stunned',
@@ -556,6 +561,7 @@ function renderInitiativeTracker(campaign) {
       <span class="round-badge">Round ${init.round}</span>
       <div class="flex gap-1">
         <button class="btn btn-sm" onclick="openMonsterSearchModal()">&#128269; Monster Search</button>
+        <button class="btn btn-sm" onclick="openAoeDamageModal()">&#128165; AoE Damage</button>
         <button class="btn btn-sm" onclick="addAllPcsToInitiative()">Add All PCs</button>
         <button class="btn btn-sm" onclick="sortInitiative()">Sort &#8595;</button>
       </div>
@@ -570,6 +576,7 @@ function renderInitiativeTracker(campaign) {
             <div class="init-top">
               <span class="init-name">${esc(cb.name)}</span>
               <span class="init-type ${cb.type}">${cb.type}</span>
+              ${(()=>{ const cs = _getConcentrationSpell(cb); return cs ? `<span class="conc-badge" title="Concentrating on ${esc(cs)}">C: ${esc(cs)}</span>` : ''; })()}
               ${isActive?'<span class="active-arrow">&#9654; Active</span>':''}
             </div>
             <div class="init-stats">
@@ -578,13 +585,29 @@ function renderInitiativeTracker(campaign) {
               <span><button class="btn btn-sm" onclick="healCombatant(${i},1)">+</button><button class="btn btn-sm btn-danger" onclick="damageCombatant(${i},1)">-</button></span>
             </div>
             <div class="hp-bar-wrap"><div class="hp-bar ${hpPct<=25?'low':hpPct<=50?'mid':''}" style="width:${hpPct}%"></div></div>
+            ${cb._concCheck ? `<div class="conc-warning">&#9888; Concentration check required — DC ${cb._concCheck.dc} (${esc(cb._concCheck.spell)})<button class="conc-dismiss" onclick="dismissConcCheck(${i})">&times;</button></div>` : ''}
+            ${cb.legendaryMax ? `<div class="legendary-pips" id="leg-pips-${i}" title="Legendary Actions — reset at the start of this creature's turn">
+              ${Array.from({length: cb.legendaryMax}, (_,j) => {
+                const available = j >= (cb.legendaryUsed||0);
+                return `<button class="leg-pip ${available?'available':'spent'}" onclick="spendLegendary(${i},${j})">${available?'◆':'◇'}</button>`;
+              }).join('')}
+              <button class="btn btn-sm leg-reset-btn" onclick="resetLegendary(${i})">Reset</button>
+            </div>` : ''}
             <div class="condition-row">
               ${_conditionRowHtml(i, cb.conditions)}
             </div>
+            ${cb.notes ? `<div class="combatant-notes-collapsed">📝 <span class="notes-preview">${esc(cb.notes)}</span></div>` : ''}
+            ${cb._notesOpen ? `<div class="combatant-notes-expanded">
+              <input type="text" class="notes-input" value="${esc(cb.notes||'')}" placeholder="Add notes (bloodied, hiding, etc.)"
+                oninput="setCombatantNotes(${i},this.value)" onblur="closeCombatantNotes(${i})">
+            </div>` : ''}
             ${cb.statBlock?`<button class="btn btn-sm stat-block-toggle" onclick="toggleStatBlock(${i})">&#128214; Stat Block</button>
             <div class="stat-block-panel" id="stat-block-${i}">${renderCombatantStatBlock(cb.statBlock, i)}</div>`:''}
           </div>
-          <button class="btn btn-icon btn-danger" onclick="removeCombatant(${i})">&times;</button>
+          <div class="combatant-actions">
+            <button class="btn btn-icon note-btn ${cb.notes ? 'has-notes' : ''}" onclick="toggleCombatantNotes(${i})" title="Notes">${cb.notes ? '●' : ''}📝</button>
+            <button class="btn btn-icon btn-danger" onclick="removeCombatant(${i})">&times;</button>
+          </div>
         </div>`;
       }).join('')}
     </div>
@@ -619,7 +642,7 @@ function openAddCombatantModal() {
 }
 function addCombatant() {
   const init = getInitiative();
-  init.combatants.push({ id:uid(), name:document.getElementById('cb-name').value.trim()||'Unknown', initiative:parseInt(document.getElementById('cb-init').value)||1, ac:parseInt(document.getElementById('cb-ac').value)||10, hp:parseInt(document.getElementById('cb-hp').value)||10, maxHP:parseInt(document.getElementById('cb-hp').value)||10, type:document.getElementById('cb-type').value, conditions:[] });
+  init.combatants.push({ id:uid(), name:document.getElementById('cb-name').value.trim()||'Unknown', initiative:parseInt(document.getElementById('cb-init').value)||1, ac:parseInt(document.getElementById('cb-ac').value)||10, hp:parseInt(document.getElementById('cb-hp').value)||10, maxHP:parseInt(document.getElementById('cb-hp').value)||10, type:document.getElementById('cb-type').value, conditions:[], notes:'' });
   saveData(db); closeModal(); renderApp();
 }
 function quickAddCombatant(entityId, type) {
@@ -635,7 +658,7 @@ function quickAddCombatant(entityId, type) {
   const raw = prompt(`Initiative roll for ${name}:`, rolled);
   if (raw === null) return; // cancelled
   const initiative = parseInt(raw) || rolled;
-  getInitiative().combatants.push({ id:uid(), charId, name, initiative, ac, hp, maxHP, type, conditions:[] });
+  getInitiative().combatants.push({ id:uid(), charId, name, initiative, ac, hp, maxHP, type, conditions:[], notes:'' });
   saveData(db); closeModal(); renderApp();
 }
 function addAllPcsToInitiative() {
@@ -643,46 +666,260 @@ function addAllPcsToInitiative() {
   const linked=new Set(init.combatants.filter(c=>c.charId).map(c=>c.charId));
   (campaign.characters||[]).forEach(id => {
     const ch=db.characters[id]; if(!ch||linked.has(id)) return;
-    init.combatants.push({id:uid(),charId:id,name:ch.name,initiative:Math.ceil(Math.random()*20),ac:ch.combat.ac,hp:ch.combat.currentHP,maxHP:ch.combat.maxHP,type:'player',conditions:[]});
+    init.combatants.push({id:uid(),charId:id,name:ch.name,initiative:Math.ceil(Math.random()*20),ac:ch.combat.ac,hp:ch.combat.currentHP,maxHP:ch.combat.maxHP,type:'player',conditions:[],notes:''});
   });
   saveData(db); renderApp();
 }
+function _getConcentrationSpell(cb) {
+  if (!cb.charId) return null;
+  const ch = db.characters[cb.charId];
+  if (!ch) return null;
+  const prepared = ch.spells?.prepared || [];
+  const concSpell = prepared.find(s => typeof s === 'object' && s.concentration === 'yes');
+  return concSpell ? concSpell.name : null;
+}
+function _checkConcentration(i, dmg) {
+  const cb = getInitiative().combatants[i];
+  if (!cb) return;
+  const spell = _getConcentrationSpell(cb);
+  if (!spell || dmg <= 0) return;
+  const dc = Math.max(10, Math.floor(dmg / 2));
+  cb._concCheck = { dc, spell, dmg };
+  saveData(db);
+  showToast(`<strong>${esc(cb.name)}</strong>: Concentration check — DC ${dc} (${esc(spell)})`);
+}
+
+function dismissConcCheck(i) {
+  const cb = getInitiative().combatants[i];
+  if (cb) { delete cb._concCheck; saveData(db); renderApp(); }
+}
+
+function toggleCombatantNotes(i) {
+  const cb = getInitiative().combatants[i];
+  if (cb) {
+    cb._notesOpen = !cb._notesOpen;
+    saveData(db);
+    renderApp();
+    if (cb._notesOpen) setTimeout(() => document.querySelector(`.notes-input`)?.focus(), 50);
+  }
+}
+
+function setCombatantNotes(i, text) {
+  const cb = getInitiative().combatants[i];
+  if (cb) {
+    cb.notes = text.trim();
+    saveData(db);
+  }
+}
+
+function closeCombatantNotes(i) {
+  const cb = getInitiative().combatants[i];
+  if (cb) {
+    cb._notesOpen = false;
+    saveData(db);
+    renderApp();
+  }
+}
+
 function sortInitiative() { const init=getInitiative(); init.combatants.sort((a,b)=>b.initiative-a.initiative); init.currentIndex=0; saveData(db); renderApp(); }
-function nextTurn() { const init=getInitiative(); if(!init.combatants.length) return; init.currentIndex=(init.currentIndex||0)+1; if(init.currentIndex>=init.combatants.length){init.currentIndex=0;init.round++;} saveData(db); renderApp(); }
-function updateCombatantHP(i,val) { CharacterStore.updateInitiativeHP(currentCampaignId,i,+val); }
+function nextTurn() {
+  const init=getInitiative(); if(!init.combatants.length) return;
+  // Clear concentration warnings from all combatants at turn change
+  init.combatants.forEach(cb => delete cb._concCheck);
+  // Decrement timed conditions on the combatant whose turn just ended
+  const prevIdx = (init.currentIndex||0) % init.combatants.length;
+  const prev = init.combatants[prevIdx];
+  if (prev && prev.conditions?.length) {
+    const expired = [];
+    prev.conditions = prev.conditions.filter(c => {
+      if (typeof c === 'object' && c.duration) {
+        c.duration--;
+        if (c.duration <= 0) { expired.push(c.name); return false; }
+      }
+      return true;
+    });
+    expired.forEach(name => showToast(`${esc(prev.name)}: <strong>${name}</strong> has expired.`));
+  }
+  init.currentIndex=(init.currentIndex||0)+1;
+  if(init.currentIndex>=init.combatants.length){init.currentIndex=0;init.round++;}
+  // Auto-reset legendary actions for the now-active combatant
+  const active = init.combatants[init.currentIndex % init.combatants.length];
+  if (active && active.legendaryMax) {
+    active.legendaryUsed = 0;
+    active._legFlash = true;
+  }
+  saveData(db); renderApp();
+  // Flash the pips briefly
+  if (active && active._legFlash) {
+    const pips = document.getElementById('leg-pips-' + (init.currentIndex % init.combatants.length));
+    if (pips) { pips.classList.add('flash'); setTimeout(() => pips.classList.remove('flash'), 800); }
+    delete active._legFlash;
+  }
+}
+function updateCombatantHP(i,val) {
+  const cb=getInitiative().combatants[i];
+  const oldHP = cb ? cb.hp : 0;
+  CharacterStore.updateInitiativeHP(currentCampaignId,i,+val);
+  if (cb && +val < oldHP) _checkConcentration(i, oldHP - +val);
+}
 function updateCombatantInitiative(i,val) { if(!val||isNaN(val)) return; getInitiative().combatants[i].initiative=val; saveData(db); }
-function damageCombatant(i,amt) { const cb=getInitiative().combatants[i]; CharacterStore.updateInitiativeHP(currentCampaignId,i,cb.hp-amt); renderApp(); }
+function damageCombatant(i,amt) { const cb=getInitiative().combatants[i]; CharacterStore.updateInitiativeHP(currentCampaignId,i,cb.hp-amt); _checkConcentration(i,amt); renderApp(); }
 function healCombatant(i,amt)  { const cb=getInitiative().combatants[i]; CharacterStore.updateInitiativeHP(currentCampaignId,i,cb.hp+amt); renderApp(); }
 function removeCombatant(i) { const init=getInitiative(); init.combatants.splice(i,1); if(init.currentIndex>=init.combatants.length) init.currentIndex=0; saveData(db); renderApp(); }
+function spendLegendary(i, pipIdx) {
+  const cb = getInitiative().combatants[i];
+  if (!cb || !cb.legendaryMax) return;
+  // Clicking a filled pip sets legendaryUsed to pipIdx+1 (spend that many)
+  const newUsed = pipIdx + 1;
+  if (newUsed <= (cb.legendaryUsed||0)) return; // already spent
+  cb.legendaryUsed = Math.min(newUsed, cb.legendaryMax);
+  saveData(db); renderApp();
+}
+function resetLegendary(i) {
+  const cb = getInitiative().combatants[i];
+  if (!cb || !cb.legendaryMax) return;
+  cb.legendaryUsed = 0;
+  saveData(db); renderApp();
+}
 function clearInitiative() { if(!confirm('End combat and clear all combatants?')) return; getCampaign().initiative={round:1,currentIndex:0,combatants:[]}; saveData(db); renderApp(); }
+
+function openAoeDamageModal() {
+  const combatants = getInitiative().combatants;
+  if (!combatants.length) return;
+  const rows = combatants.map((cb, i) => {
+    const hpPct = cb.maxHP > 0 ? Math.round((cb.hp / cb.maxHP) * 100) : 100;
+    return `<div class="aoe-row">
+      <label class="aoe-check"><input type="checkbox" data-idx="${i}" checked><span class="aoe-name">${esc(cb.name)}</span>
+        <span class="aoe-hp ${hpPct <= 25 ? 'low' : hpPct <= 50 ? 'mid' : ''}">${cb.hp}/${cb.maxHP}</span></label>
+      <select class="aoe-save" data-idx="${i}">
+        <option value="full">Full Damage</option>
+        <option value="half">Half (saved)</option>
+        <option value="none">No Damage (saved)</option>
+      </select>
+    </div>`;
+  }).join('');
+  openModal(`<h2>AoE Damage</h2>
+    <div class="form-group"><label>Damage Amount</label><input type="number" id="aoe-dmg" min="1" value="28" class="hp-input" style="width:100%;font-size:1.1rem;padding:0.5rem"></div>
+    <div class="aoe-batch-row">
+      <button class="btn btn-sm" onclick="aoeBatchSave('full')">All Full</button>
+      <button class="btn btn-sm" onclick="aoeBatchSave('half')">All Half</button>
+      <button class="btn btn-sm" onclick="aoeBatchSave('none')">All No Dmg</button>
+      <label class="aoe-toggle-all"><input type="checkbox" checked onchange="aoeToggleAll(this.checked)"> Select All</label>
+    </div>
+    <div class="aoe-list">${rows}</div>
+    <div id="aoe-summary" class="aoe-summary"></div>
+    <div class="form-actions"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="applyAoeDamage()">Apply Damage</button></div>`);
+  document.getElementById('aoe-dmg').focus();
+}
+
+function aoeBatchSave(val) {
+  document.querySelectorAll('.aoe-save').forEach(s => s.value = val);
+}
+function aoeToggleAll(checked) {
+  document.querySelectorAll('.aoe-row input[type=checkbox]').forEach(cb => cb.checked = checked);
+}
+
+function applyAoeDamage() {
+  const baseDmg = parseInt(document.getElementById('aoe-dmg').value) || 0;
+  if (baseDmg <= 0) return;
+  const combatants = getInitiative().combatants;
+  let totalHit = 0, fullCount = 0, halfCount = 0, halfDmg = 0;
+
+  document.querySelectorAll('.aoe-row').forEach(row => {
+    const cb = row.querySelector('input[type=checkbox]');
+    if (!cb || !cb.checked) return;
+    const idx = parseInt(cb.dataset.idx);
+    const saveType = row.querySelector('.aoe-save').value;
+    let dmg = 0;
+    if (saveType === 'full') { dmg = baseDmg; fullCount++; }
+    else if (saveType === 'half') { dmg = Math.floor(baseDmg / 2); halfCount++; halfDmg = dmg; }
+    // 'none' = 0 damage
+    if (dmg <= 0) return;
+    totalHit++;
+    CharacterStore.updateInitiativeHP(currentCampaignId, idx, combatants[idx].hp - dmg);
+    _checkConcentration(idx, dmg);
+  });
+
+  const parts = [];
+  if (fullCount) parts.push(`${fullCount} took full`);
+  if (halfCount) parts.push(`${halfCount} saved for ${halfDmg} each`);
+  const summary = `Dealt ${baseDmg} damage to ${totalHit} combatant${totalHit !== 1 ? 's' : ''}` + (parts.length ? ` (${parts.join(', ')})` : '') + '.';
+
+  document.getElementById('aoe-summary').textContent = summary;
+  document.getElementById('aoe-summary').classList.add('visible');
+
+  // Re-render the HP values in the checklist
+  document.querySelectorAll('.aoe-row').forEach(row => {
+    const idx = parseInt(row.querySelector('input[type=checkbox]').dataset.idx);
+    const cb = combatants[idx];
+    const hpEl = row.querySelector('.aoe-hp');
+    if (hpEl) {
+      hpEl.textContent = `${cb.hp}/${cb.maxHP}`;
+      const pct = cb.maxHP > 0 ? Math.round((cb.hp / cb.maxHP) * 100) : 100;
+      hpEl.className = 'aoe-hp' + (pct <= 25 ? ' low' : pct <= 50 ? ' mid' : '');
+    }
+  });
+}
 function openConditionPicker(i) {
   const cb=getInitiative().combatants[i];
+  const activeNames = (cb.conditions||[]).map(c => condName(c));
   openModal(`<h2>Conditions — ${esc(cb.name)}</h2>
     <div class="condition-picker">${CONDITIONS.map(cond => {
-      const active = (cb.conditions||[]).includes(cond) ? 'active' : '';
+      const active = activeNames.includes(cond) ? 'active' : '';
+      const existing = (cb.conditions||[]).find(c => condName(c) === cond);
+      const dur = existing ? condDuration(existing) : '';
       return `<div class="condition-option ${active}" onclick="toggleCondition(${i},'${cond}')">
         <span>${getConditionEmoji(cond)} ${cond}</span>
-        <span class="condition-info-btn" onclick="event.stopPropagation();openConditionRef('${cond}',${i})" title="View rules">ⓘ</span>
+        <span class="cond-option-right">
+          <input type="number" class="cond-dur-input" data-cond="${cond}" min="1" max="99" placeholder="Rds" value="${dur||''}" onclick="event.stopPropagation()" onchange="event.stopPropagation();setConditionDuration(${i},'${cond}',+this.value)" title="Duration in rounds (optional)">
+          <span class="condition-info-btn" onclick="event.stopPropagation();openConditionRef('${cond}',${i})" title="View rules">ⓘ</span>
+        </span>
       </div>`;
     }).join('')}</div>
     <div class="form-actions"><button class="btn btn-primary" onclick="closeModal()">Done</button></div>`);
 }
 function toggleCondition(i, cond) {
   const cb=getInitiative().combatants[i]; cb.conditions=cb.conditions||[];
-  const idx=cb.conditions.indexOf(cond); if(idx>=0) cb.conditions.splice(idx,1); else cb.conditions.push(cond);
+  const existIdx = cb.conditions.findIndex(c => condName(c) === cond);
+  if (existIdx >= 0) {
+    cb.conditions.splice(existIdx, 1);
+  } else {
+    const durInput = document.querySelector(`.cond-dur-input[data-cond="${cond}"]`);
+    const dur = durInput ? parseInt(durInput.value) : 0;
+    cb.conditions.push(dur > 0 ? { name: cond, duration: dur } : cond);
+  }
   saveData(db);
+  const isActive = cb.conditions.some(c => condName(c) === cond);
   document.querySelectorAll('.condition-option').forEach(el => {
     const name = el.querySelector('span')?.textContent?.trim().replace(/^[^\s]+\s/,'') || el.textContent.trim();
-    if(name===cond) el.classList.toggle('active',cb.conditions.includes(cond));
+    if(name===cond) el.classList.toggle('active', isActive);
   });
   const row=document.querySelectorAll('.initiative-row')[i];
   if(row) { const cr=row.querySelector('.condition-row'); if(cr) cr.innerHTML=_conditionRowHtml(i, cb.conditions); }
 }
+function setConditionDuration(i, cond, dur) {
+  const cb=getInitiative().combatants[i]; cb.conditions=cb.conditions||[];
+  const existIdx = cb.conditions.findIndex(c => condName(c) === cond);
+  if (existIdx < 0) return; // not active, ignore duration change
+  if (dur > 0) {
+    cb.conditions[existIdx] = { name: cond, duration: dur };
+  } else {
+    cb.conditions[existIdx] = cond; // revert to indefinite string
+  }
+  saveData(db);
+  const row=document.querySelectorAll('.initiative-row')[i];
+  if(row) { const cr=row.querySelector('.condition-row'); if(cr) cr.innerHTML=_conditionRowHtml(i, cb.conditions); }
+}
 function _conditionRowHtml(i, conditions) {
-  return `${(conditions||[]).map(c=>`<span class="condition-tag ${getConditionClass(c)}" onclick="openConditionRef('${c}',${i})" title="Click to view rules">${getConditionEmoji(c)} ${c}</span>`).join('')}<button class="btn btn-sm" onclick="openConditionPicker(${i})">+ Condition</button>`;
+  return `${(conditions||[]).map(c=>{
+    const name = condName(c);
+    const dur = condDuration(c);
+    const durBadge = dur ? `<span class="cond-dur-badge">${dur}rd${dur!==1?'s':''}</span>` : '';
+    return `<span class="condition-tag ${getConditionClass(c)}" onclick="openConditionRef('${name}',${i})" title="${dur ? dur+' round'+(dur!==1?'s':'')+' remaining' : 'Click to view rules'}">${getConditionEmoji(c)} ${name}${durBadge}</span>`;
+  }).join('')}<button class="btn btn-sm" onclick="openConditionPicker(${i})">+ Condition</button>`;
 }
 function removeCondition(i,cond) {
-  const init=getInitiative(); init.combatants[i].conditions=(init.combatants[i].conditions||[]).filter(c=>c!==cond);
+  const init=getInitiative(); init.combatants[i].conditions=(init.combatants[i].conditions||[]).filter(c=>condName(c)!==cond);
   saveData(db); renderApp();
 }
 function openConditionRef(cond, combatantIdx) {
@@ -788,8 +1025,9 @@ function searchMonsters(resetCount) {
     + showing.map(m => {
       const color = MONSTER_BOOK_COLORS[m.book] || '#888';
       const fullName = MONSTER_BOOK_NAMES[m.book] || m.book;
+      const limitedBadge = m.limited ? `<span class="monster-limited-badge">limited</span>` : '';
       return `<div class="monster-row" onclick="loadMonsterStat(${m.i})">
-        <span>${esc(m.name)}</span>
+        <span>${esc(m.name)}${limitedBadge}</span>
         <span class="monster-row-meta">
           <span class="monster-cr-badge">CR ${m.cr}</span>
           <span class="monster-book-badge" style="background:${color}">${esc(fullName)}</span>
@@ -801,6 +1039,20 @@ function searchMonsters(resetCount) {
 }
 function showMoreMonsters() { monsterShowCount += 80; searchMonsters(false); }
 
+function _isLimitedMonster(m) {
+  return !m.str && !Object.values(m.desc_sections || {}).some(v => v);
+}
+
+let _limitedFlagsApplied = false;
+function _applyLimitedFlags() {
+  if (_limitedFlagsApplied || !monsterFullData || !monsterCache) return;
+  _limitedFlagsApplied = true;
+  const limitedSet = new Set();
+  monsterFullData.forEach((m, i) => { if (_isLimitedMonster(m)) limitedSet.add(i); });
+  monsterCache.forEach(m => { if (limitedSet.has(m.i)) m.limited = true; });
+  searchMonsters(false);
+}
+
 async function loadMonsterStat(idx) {
   const el = document.getElementById('monster-results');
   if (el) el.innerHTML = `<p class="text-dim" style="text-align:center">Loading...</p>`;
@@ -809,6 +1061,7 @@ async function loadMonsterStat(idx) {
       const res = await fetch('./data/monsters.json');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       monsterFullData = await res.json();
+      _applyLimitedFlags();
     }
     const m = monsterFullData[idx];
     if (el) el.innerHTML = renderMonsterStatBlock(m);
@@ -819,67 +1072,101 @@ async function loadMonsterStat(idx) {
 
 let _pendingMonster = null;
 
+function parseDescEntries(text) {
+  if (!text) return [];
+  // Split on "Name: desc" where Name is a capitalised phrase preceded by period+space or start of string
+  const re = /(?:^|\.\s+)([A-Z][A-Za-z ,()'-]+?):\s*/g;
+  const entries = [];
+  let match, lastEnd = 0, foundFirst = false;
+  while ((match = re.exec(text)) !== null) {
+    if (foundFirst) {
+      // close out previous entry desc
+      entries[entries.length - 1].desc = text.slice(lastEnd, match.index).replace(/\.\s*$/, '').trim();
+    }
+    entries.push({ name: match[1].trim(), desc: '' });
+    lastEnd = re.lastIndex;
+    foundFirst = true;
+  }
+  if (foundFirst) {
+    entries[entries.length - 1].desc = text.slice(lastEnd).trim();
+  }
+  return entries;
+}
+
 function renderMonsterStatBlock(m) {
   _pendingMonster = m;
   const abilityMod = s => { const v = Math.floor(((s||10)-10)/2); return (v>=0?'+':'')+v; };
   const hasAbilities = m.str !== undefined;
   const bookColor = MONSTER_BOOK_COLORS[m.book_short] || '#888';
 
-  let html = `<button class="btn btn-sm" onclick="searchMonsters()" style="margin-bottom:0.8rem">&#8592; Back</button>
-    <div class="stat-block">
-      <div class="stat-block-name">${esc(m.name)}</div>
-      <div class="stat-block-meta">${esc(m.size)} ${esc(m.type)}, ${esc(m.alignment)}
-        <span class="monster-book-badge" style="background:${bookColor};margin-left:0.5rem">${esc(m.book_short)}</span>
-      </div>
-      <hr class="stat-block-divider">`;
+  const sectionDivider = `<div class="sb-section-divider"></div>`;
+
+  let body = '';
 
   if (hasAbilities) {
-    // Structured stat block from properties
-    html += `<div><strong>AC</strong> ${m.ac} ${m.ac_note && m.ac_note!==String(m.ac) ? `<span class="text-dim">(${esc(m.ac_note)})</span>` : ''} &nbsp;<strong>HP</strong> ${m.hp} ${m.hp_note ? `<span class="text-dim">(${esc(m.hp_note)})</span>` : ''} &nbsp;<strong>Speed</strong> ${esc(m.speed)}</div>
-      <hr class="stat-block-divider">
-      <div class="ability-grid" style="margin:0.5rem 0">
-        ${[['STR',m.str],['DEX',m.dex],['CON',m.con],['INT',m.int],['WIS',m.wis],['CHA',m.cha]].map(([n,v])=>`<div class="ability-box"><div class="ability-name">${n}</div><div style="font-size:1rem;font-weight:bold;color:var(--gold)">${v}</div><div class="ability-mod">${abilityMod(v)}</div></div>`).join('')}
-      </div>
-      <hr class="stat-block-divider">`;
-    if (m.saving_throws) html += `<div><strong>Saves</strong> ${esc(m.saving_throws)}</div>`;
-    if (m.skills) html += `<div><strong>Skills</strong> ${esc(m.skills)}</div>`;
-    if (m.resistances) html += `<div><strong>Resistances</strong> ${esc(m.resistances)}</div>`;
-    if (m.immunities) html += `<div><strong>Immunities</strong> ${esc(m.immunities)}</div>`;
-    if (m.condition_immunities) html += `<div><strong>Condition Immunities</strong> ${esc(m.condition_immunities)}</div>`;
-    if (m.vulnerabilities) html += `<div><strong>Vulnerabilities</strong> ${esc(m.vulnerabilities)}</div>`;
-    if (m.senses) html += `<div><strong>Senses</strong> ${esc(m.senses)}</div>`;
-    if (m.languages) html += `<div><strong>Languages</strong> ${esc(m.languages)}</div>`;
-    html += `<div><strong>CR</strong> ${esc(m.cr)} &nbsp;<strong>XP</strong> ${(m.xp||0).toLocaleString()}</div>`;
+    const _acNote = m.ac_note && m.ac_note !== String(m.ac) && !/^\d+$/.test(m.ac_note.trim()) ? ` <span class="text-dim">(${esc(m.ac_note)})</span>` : '';
+    const _speedStr = typeof m.speed === 'string' ? esc(m.speed) : Object.entries(m.speed||{}).map(([k,v])=>`${k} ${v}`).join(', ');
+    body += `<div class="sb-stats-row"><span><strong>AC</strong> ${m.ac}${_acNote}</span><span><strong>HP</strong> ${m.hp}${m.hp_note ? ` <span class="text-dim">(${esc(m.hp_note)})</span>` : ''}</span><span><strong>Speed</strong> ${_speedStr}</span></div>`;
+    body += `<hr class="stat-block-divider">`;
+    body += `<div class="sb-ability-grid">${[['STR',m.str],['DEX',m.dex],['CON',m.con],['INT',m.int],['WIS',m.wis],['CHA',m.cha]].map(([n,v])=>`<div class="sb-ability-cell"><div class="sb-ability-name">${n}</div><div class="sb-ability-score">${v} <span class="sb-ability-mod">(${abilityMod(v)})</span></div></div>`).join('')}</div>`;
+    body += `<hr class="stat-block-divider">`;
+    if (m.saving_throws) body += `<div class="sb-prop"><strong>Saving Throws</strong> ${esc(m.saving_throws)}</div>`;
+    if (m.skills) body += `<div class="sb-prop"><strong>Skills</strong> ${esc(m.skills)}</div>`;
+    if (m.resistances) body += `<div class="sb-prop"><strong>Damage Resistances</strong> ${esc(m.resistances)}</div>`;
+    if (m.immunities) body += `<div class="sb-prop"><strong>Damage Immunities</strong> ${esc(m.immunities)}</div>`;
+    if (m.condition_immunities) body += `<div class="sb-prop"><strong>Condition Immunities</strong> ${esc(m.condition_immunities)}</div>`;
+    if (m.vulnerabilities) body += `<div class="sb-prop"><strong>Vulnerabilities</strong> ${esc(m.vulnerabilities)}</div>`;
+    if (m.senses) body += `<div class="sb-prop"><strong>Senses</strong> ${esc(m.senses)}</div>`;
+    if (m.languages) body += `<div class="sb-prop"><strong>Languages</strong> ${esc(m.languages)}</div>`;
+    body += `<div class="sb-prop"><strong>Challenge</strong> ${esc(m.cr)} (${(m.xp||0).toLocaleString()} XP)</div>`;
 
-    if (m.traits?.length) {
-      html += `<hr class="stat-block-divider"><div class="stat-section-title">Traits</div>`;
-      m.traits.forEach(t => { html += `<div class="stat-entry"><strong>${esc(t.name)}.</strong> ${esc(t.desc)}</div>`; });
-    }
-    if (m.actions?.length) {
-      html += `<hr class="stat-block-divider"><div class="stat-section-title">Actions</div>`;
-      m.actions.forEach(t => { html += `<div class="stat-entry"><strong>${esc(t.name)}.</strong> ${esc(t.desc)}</div>`; });
-    }
-    if (m.reactions?.length) {
-      html += `<hr class="stat-block-divider"><div class="stat-section-title">Reactions</div>`;
-      m.reactions.forEach(t => { html += `<div class="stat-entry"><strong>${esc(t.name)}.</strong> ${esc(t.desc)}</div>`; });
-    }
-    if (m.legendary_actions?.length) {
-      html += `<hr class="stat-block-divider"><div class="stat-section-title">Legendary Actions</div>`;
-      m.legendary_actions.forEach(t => { html += `<div class="stat-entry"><strong>${esc(t.name)}.</strong> ${esc(t.desc)}</div>`; });
-    }
+    const _section = (title, arr) => {
+      if (!arr?.length) return '';
+      return sectionDivider + `<div class="stat-section-title">${title}</div>` + arr.map(t => `<div class="stat-entry"><strong>${esc(t.name)}.</strong> ${esc(t.desc)}</div>`).join('');
+    };
+    body += _section('Traits', m.traits);
+    body += _section('Actions', m.actions);
+    body += _section('Reactions', m.reactions);
+    body += _section('Legendary Actions', m.legendary_actions);
   } else {
-    // Description-based stat block
-    html += `<div><strong>CR</strong> ${esc(m.cr)}</div>`;
     const ds = m.desc_sections || {};
-    if (ds.traits) html += `<hr class="stat-block-divider"><div class="stat-section-title">Traits</div><div class="stat-entry">${esc(ds.traits)}</div>`;
-    if (ds.actions) html += `<hr class="stat-block-divider"><div class="stat-section-title">Actions</div><div class="stat-entry">${esc(ds.actions)}</div>`;
-    if (ds.reactions) html += `<hr class="stat-block-divider"><div class="stat-section-title">Reactions</div><div class="stat-entry">${esc(ds.reactions)}</div>`;
-    if (ds.legendary) html += `<hr class="stat-block-divider"><div class="stat-section-title">Legendary Actions</div><div class="stat-entry">${esc(ds.legendary)}</div>`;
+    const hasDescContent = Object.values(ds).some(v => v);
+    if (hasDescContent) {
+      body += `<div class="sb-prop"><strong>Challenge</strong> ${esc(m.cr)}</div>`;
+      const _renderDescSection = (title, text) => {
+        if (!text) return '';
+        const entries = parseDescEntries(text);
+        let s = sectionDivider + `<div class="stat-section-title">${title}</div>`;
+        if (entries.length) {
+          entries.forEach(e => { s += `<div class="stat-entry"><em>${esc(e.name)}.</em> ${esc(e.desc)}</div>`; });
+        } else {
+          s += `<div class="stat-entry">${esc(text)}</div>`;
+        }
+        return s;
+      };
+      body += _renderDescSection('Traits', ds.traits);
+      body += _renderDescSection('Actions', ds.actions);
+      body += _renderDescSection('Reactions', ds.reactions);
+      body += _renderDescSection('Legendary Actions', ds.legendary);
+    } else {
+      body += `<div class="sb-prop"><strong>Challenge</strong> ${esc(m.cr)}</div>`;
+      body += `<p class="monster-limited-msg">Full stat block not available for this monster — check the source book for complete stats.</p>`;
+    }
   }
 
-  html += `<div class="form-actions" style="margin-top:1rem"><button class="btn btn-primary" onclick="addMonsterToCombat(_pendingMonster)">+ Add to Initiative</button></div>
+  return `<button class="btn sb-back-btn" onclick="searchMonsters()">&#8592; Back to Search</button>
+    <div class="stat-block">
+      <div class="sb-header">
+        <div class="stat-block-name">${esc(m.name)}</div>
+        <div class="sb-summary">${esc(m.size)} ${esc(m.type)}, ${esc(m.alignment)} &mdash; CR ${esc(m.cr)}
+          <span class="monster-book-badge" style="background:${bookColor};margin-left:0.4rem">${esc(m.book_short)}</span>
+        </div>
+      </div>
+      <div class="sb-body">${body}</div>
+    </div>
+    <div class="sb-footer">
+      <button class="btn btn-primary" style="width:100%" onclick="addMonsterToCombat(_pendingMonster)">+ Add to Initiative</button>
     </div>`;
-  return html;
 }
 
 function addMonsterToCombat(m) {
@@ -910,10 +1197,15 @@ function addMonsterToCombat(m) {
     desc_sections: m.desc_sections || null,
   };
 
-  init.combatants.push({
+  const combatant = {
     id: uid(), name: m.name, initiative, ac, hp, maxHP: hp,
-    type: 'monster', conditions: [], statBlock
-  });
+    type: 'monster', conditions: [], statBlock, notes: ''
+  };
+  if (m.legendary_actions?.length > 0) {
+    combatant.legendaryMax = m.legendary_actions.length <= 3 ? 3 : m.legendary_actions.length;
+    combatant.legendaryUsed = 0;
+  }
+  init.combatants.push(combatant);
   saveData(db); closeModal(); showCampaign(currentCampaignId, 'initiative');
 }
 
