@@ -246,21 +246,7 @@ function renderCharacterCards(campaign) {
   }).join('')}</div>`;
 }
 
-function openNewCharModal() {
-  openModal(`<h2>Add Character</h2>
-    <div class="form-row">
-      <div class="form-group"><label>Name</label><input type="text" id="ch-name" placeholder="Thorin Ironfist"></div>
-      <div class="form-group"><label>Race / Species</label><input type="text" id="ch-race" placeholder="Dwarf"></div>
-    </div>
-    <div class="form-row">
-      <div class="form-group"><label>Class</label>
-        <select id="ch-class">${['Barbarian','Bard','Cleric','Druid','Fighter','Monk','Paladin','Ranger','Rogue','Sorcerer','Warlock','Wizard','Artificer','Blood Hunter'].map(c=>`<option>${c}</option>`).join('')}</select>
-      </div>
-      <div class="form-group"><label>Level</label><input type="number" id="ch-level" value="1" min="1" max="20"></div>
-    </div>
-    <div class="form-actions"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="createCharacter()">Create</button></div>`);
-  document.getElementById('ch-name').focus();
-}
+function openNewCharModal() { openCharWizard(); }
 function createCharacter() {
   const name = document.getElementById('ch-name').value.trim();
   const level = parseInt(document.getElementById('ch-level').value)||1;
