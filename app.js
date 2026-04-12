@@ -1003,13 +1003,14 @@ const MONSTER_BOOK_NAMES = {
   TCE:"Tasha's Cauldron", BGG:"Bigby's Giants", ToB:'Tome of Beasts', ToB2:'Tome of Beasts 2',
   ToB3:'Tome of Beasts 3', CC:'Creature Codex', SJ:'Spelljammer', EGW:'Wildemount',
   MOT:'Theros', PAM:'Planescape', VER:'Vecna', QIS:'Infinite Staircase', PHB24:'PHB 2024',
+  XMM:'MM 2024',
 };
 const MONSTER_BOOK_COLORS = {
   MM:'#c084fc', BR14:'#9b6dff', BR24:'#9b6dff', MPMM:'#3b82f6', VGM:'#6d8fd4',
   MTF:'#6d8fd4', FM:'#e87070', FTD:'#f59e0b', TCE:'#14b8a6', BGG:'#c4a85a',
   ToB:'#7bbdb8', ToB2:'#7bbdb8', ToB3:'#7bbdb8', CC:'#9c7bc4',
   SJ:'#6dba8f', EGW:'#f59e0b', MOT:'#c4a85a', PAM:'#6dba8f',
-  VER:'#e87070', QIS:'#7b9dd4', PHB24:'#c084fc',
+  VER:'#e87070', QIS:'#7b9dd4', PHB24:'#c084fc', XMM:'#c084fc',
 };
 
 async function openMonsterSearchModal() {
@@ -1049,10 +1050,13 @@ async function loadMonsterList() {
 function populateBookFilter() {
   const sel = document.getElementById('monster-book-filter'); if (!sel) return;
   const books = [...new Set(monsterCache.map(m => m.book))].sort();
+  // Build a map of book → source_label from index entries
+  const labelMap = {};
+  monsterCache.forEach(m => { if (m.source_label && !labelMap[m.book]) labelMap[m.book] = m.source_label; });
   sel.innerHTML = `<option value="all">All Books (${monsterCache.length})</option>`
     + books.map(b => {
       const count = monsterCache.filter(m => m.book === b).length;
-      const fullName = MONSTER_BOOK_NAMES[b] || b;
+      const fullName = labelMap[b] || MONSTER_BOOK_NAMES[b] || b;
       return `<option value="${b}"${monsterBookFilter===b?' selected':''}>${fullName} (${count})</option>`;
     }).join('');
 }
@@ -1075,7 +1079,7 @@ function searchMonsters(resetCount) {
   el.innerHTML = `<div style="font-size:0.78rem;color:var(--text-dim);margin-bottom:0.5rem">${filtered.length} results${remaining > 0 ? ` (showing ${showing.length})` : ''}</div>`
     + showing.map(m => {
       const color = MONSTER_BOOK_COLORS[m.book] || '#888';
-      const fullName = MONSTER_BOOK_NAMES[m.book] || m.book;
+      const fullName = m.source_label || MONSTER_BOOK_NAMES[m.book] || m.book;
       const limitedBadge = m.limited ? `<span class="monster-limited-badge">limited</span>` : '';
       return `<div class="monster-row" onclick="loadMonsterStat(${m.i})">
         <span>${esc(m.name)}${limitedBadge}</span>
@@ -1148,7 +1152,7 @@ function renderMonsterStatBlock(m) {
   _pendingMonster = m;
   const abilityMod = s => { const v = Math.floor(((s||10)-10)/2); return (v>=0?'+':'')+v; };
   const hasAbilities = m.str !== undefined;
-  const bookColor = MONSTER_BOOK_COLORS[m.book_short] || '#888';
+  const bookColor = MONSTER_BOOK_COLORS[m.source] || '#888';
 
   const sectionDivider = `<div class="sb-section-divider"></div>`;
 
@@ -1157,7 +1161,7 @@ function renderMonsterStatBlock(m) {
   if (hasAbilities) {
     const _acNote = m.ac_note && m.ac_note !== String(m.ac) && !/^\d+$/.test(m.ac_note.trim()) ? ` <span class="text-dim">(${esc(m.ac_note)})</span>` : '';
     const _speedStr = typeof m.speed === 'string' ? esc(m.speed) : Object.entries(m.speed||{}).map(([k,v])=>`${k} ${v}`).join(', ');
-    body += `<div class="sb-stats-row"><span><strong>AC</strong> ${m.ac}${_acNote}</span><span><strong>HP</strong> ${m.hp}${m.hp_note ? ` <span class="text-dim">(${esc(m.hp_note)})</span>` : ''}</span><span><strong>Speed</strong> ${_speedStr}</span></div>`;
+    body += `<div class="sb-stats-row"><span><strong>AC</strong> ${m.ac}${_acNote}</span><span><strong>HP</strong> ${m.hp}${m.hp_formula ? ` <span class="text-dim">(${esc(m.hp_formula)})</span>` : ''}</span><span><strong>Speed</strong> ${_speedStr}</span></div>`;
     body += `<hr class="stat-block-divider">`;
     body += `<div class="sb-ability-grid">${[['STR',m.str],['DEX',m.dex],['CON',m.con],['INT',m.int],['WIS',m.wis],['CHA',m.cha]].map(([n,v])=>`<div class="sb-ability-cell"><div class="sb-ability-name">${n}</div><div class="sb-ability-score">${v} <span class="sb-ability-mod">(${abilityMod(v)})</span></div></div>`).join('')}</div>`;
     body += `<hr class="stat-block-divider">`;
@@ -1177,32 +1181,12 @@ function renderMonsterStatBlock(m) {
     };
     body += _section('Traits', m.traits);
     body += _section('Actions', m.actions);
+    body += _section('Bonus Actions', m.bonus_actions);
     body += _section('Reactions', m.reactions);
     body += _section('Legendary Actions', m.legendary_actions);
   } else {
-    const ds = m.desc_sections || {};
-    const hasDescContent = Object.values(ds).some(v => v);
-    if (hasDescContent) {
-      body += `<div class="sb-prop"><strong>Challenge</strong> ${esc(m.cr)}</div>`;
-      const _renderDescSection = (title, text) => {
-        if (!text) return '';
-        const entries = parseDescEntries(text);
-        let s = sectionDivider + `<div class="stat-section-title">${title}</div>`;
-        if (entries.length) {
-          entries.forEach(e => { s += `<div class="stat-entry"><em>${esc(e.name)}.</em> ${esc(e.desc)}</div>`; });
-        } else {
-          s += `<div class="stat-entry">${esc(text)}</div>`;
-        }
-        return s;
-      };
-      body += _renderDescSection('Traits', ds.traits);
-      body += _renderDescSection('Actions', ds.actions);
-      body += _renderDescSection('Reactions', ds.reactions);
-      body += _renderDescSection('Legendary Actions', ds.legendary);
-    } else {
-      body += `<div class="sb-prop"><strong>Challenge</strong> ${esc(m.cr)}</div>`;
-      body += `<p class="monster-limited-msg">Full stat block not available for this monster — check the source book for complete stats.</p>`;
-    }
+    body += `<div class="sb-prop"><strong>Challenge</strong> ${esc(m.cr)}</div>`;
+    body += `<p class="monster-limited-msg">Full stat block not available for this monster — check the source book for complete stats.</p>`;
   }
 
   return `<button class="btn sb-back-btn" onclick="searchMonsters()">&#8592; Back to Search</button>
@@ -1210,7 +1194,7 @@ function renderMonsterStatBlock(m) {
       <div class="sb-header">
         <div class="stat-block-name">${esc(m.name)}</div>
         <div class="sb-summary">${esc(m.size)} ${esc(m.type)}, ${esc(m.alignment)} &mdash; CR ${esc(m.cr)}
-          <span class="monster-book-badge" style="background:${bookColor};margin-left:0.4rem">${esc(m.book_short)}</span>
+          <span class="monster-book-badge" style="background:${bookColor};margin-left:0.4rem">${esc(m.source_label)}</span>
         </div>
       </div>
       <div class="sb-body">${body}</div>
@@ -1229,31 +1213,31 @@ function addMonsterToCombat(m) {
 
   const statBlock = {
     size: m.size || '', type: m.type || '', alignment: m.alignment || '',
-    hit_points_roll: m.hp_note || '',
+    hit_points_roll: m.hp_formula || '',
     speed: typeof m.speed === 'string' ? m.speed : Object.entries(m.speed||{}).map(([k,v])=>`${k} ${v}`).join(', '),
     strength: m.str||10, dexterity: m.dex||10, constitution: m.con||10,
     intelligence: m.int||10, wisdom: m.wis||10, charisma: m.cha||10,
-    saving_throws: m.saving_throws ? (typeof m.saving_throws==='string'?m.saving_throws.split(', ').map(s=>{const p=s.split(' ');return{name:p[0],value:parseInt(p[1])||0}}):[]) : [],
-    skills: m.skills ? (typeof m.skills==='string'?m.skills.split(', ').map(s=>{const p=s.split(' ');return{name:p.slice(0,-1).join(' '),value:parseInt(p[p.length-1])||0}}):[]) : [],
+    saving_throws: m.saving_throws || '',
+    skills: m.skills || '',
     damage_immunities: m.immunities ? m.immunities.split(', ') : [],
     damage_resistances: m.resistances ? m.resistances.split(', ') : [],
     condition_immunities: m.condition_immunities ? m.condition_immunities.split(', ') : [],
     senses: typeof m.senses === 'string' ? {passive_perception: parseInt((m.senses.match(/passive perception (\d+)/i)||[])[1])||10} : (m.senses||{}),
     languages: m.languages || '',
     challenge_rating: m.cr, xp: m.xp || 0,
-    special_abilities: m.traits || [],
+    traits: m.traits || [],
     actions: m.actions || [],
+    bonus_actions: m.bonus_actions || [],
     reactions: m.reactions || [],
     legendary_actions: m.legendary_actions || [],
-    desc_sections: m.desc_sections || null,
   };
 
   const combatant = {
     id: uid(), name: m.name, initiative, ac, hp, maxHP: hp,
     type: 'monster', conditions: [], statBlock, notes: '', tempHP: 0
   };
-  if (m.legendary_actions?.length > 0) {
-    combatant.legendaryMax = m.legendary_actions.length <= 3 ? 3 : m.legendary_actions.length;
+  if (m.legendary_count) {
+    combatant.legendaryMax = m.legendary_count;
     combatant.legendaryUsed = 0;
   }
   init.combatants.push(combatant);
@@ -1360,8 +1344,8 @@ function renderCombatantStatBlock(sb, combatantIdx) {
     html += `<div class="ability-box"><div class="ability-name">${a.slice(0,3).toUpperCase()}</div><div style="font-size:1rem;font-weight:bold;color:var(--gold)">${sb[a]}</div><div class="ability-mod">${abilityMod(sb[a])}</div></div>`;
   });
   html += `</div><hr class="stat-block-divider">`;
-  if (sb.saving_throws?.length) html += `<div><strong>Saving Throws</strong> ${sb.saving_throws.map(s=>`${s.name.replace('Saving Throw: ','')} +${s.value}`).join(', ')}</div>`;
-  if (sb.skills?.length) html += `<div><strong>Skills</strong> ${sb.skills.map(s=>`${s.name.replace('Skill: ','')} +${s.value}`).join(', ')}</div>`;
+  if (sb.saving_throws) html += `<div><strong>Saving Throws</strong> ${esc(sb.saving_throws)}</div>`;
+  if (sb.skills) html += `<div><strong>Skills</strong> ${esc(sb.skills)}</div>`;
   if (sb.damage_resistances?.length) html += `<div><strong>Damage Resistances</strong> ${sb.damage_resistances.join(', ')}</div>`;
   if (sb.damage_immunities?.length) html += `<div><strong>Damage Immunities</strong> ${sb.damage_immunities.join(', ')}</div>`;
   if (sb.condition_immunities?.length) html += `<div><strong>Condition Immunities</strong> ${sb.condition_immunities.join(', ')}</div>`;
@@ -1370,14 +1354,19 @@ function renderCombatantStatBlock(sb, combatantIdx) {
   if (sb.languages) html += `<div><strong>Languages</strong> ${esc(sb.languages)}</div>`;
   if (sb.challenge_rating !== undefined) html += `<div><strong>CR</strong> ${sb.challenge_rating} (${(sb.xp||0).toLocaleString()} XP)</div>`;
   html += `<hr class="stat-block-divider">`;
-  if (sb.special_abilities?.length) {
-    html += `<div class="stat-block-section"><strong>Special Abilities</strong>`;
-    sb.special_abilities.forEach(a => { html += `<div class="stat-block-entry"><em>${esc(a.name)}.</em> ${esc(a.desc||'')}</div>`; });
+  if (sb.traits?.length) {
+    html += `<div class="stat-block-section"><strong>Traits</strong>`;
+    sb.traits.forEach(a => { html += `<div class="stat-block-entry"><em>${esc(a.name)}.</em> ${esc(a.desc||'')}</div>`; });
     html += `</div>`;
   }
   if (sb.actions?.length) {
     html += `<div class="stat-block-section"><strong>Actions</strong>`;
     sb.actions.forEach(a => { html += `<div class="stat-block-entry"><em>${esc(a.name)}.</em> ${esc(a.desc||'')}</div>`; });
+    html += `</div>`;
+  }
+  if (sb.bonus_actions?.length) {
+    html += `<div class="stat-block-section"><strong>Bonus Actions</strong>`;
+    sb.bonus_actions.forEach(a => { html += `<div class="stat-block-entry"><em>${esc(a.name)}.</em> ${esc(a.desc||'')}</div>`; });
     html += `</div>`;
   }
   if (sb.reactions?.length) {
