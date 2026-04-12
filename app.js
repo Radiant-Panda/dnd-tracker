@@ -1036,7 +1036,7 @@ async function openMonsterSearchModal() {
 async function loadMonsterList() {
   if (monsterCache) { populateBookFilter(); searchMonsters(); return; }
   try {
-    const res = await fetch('./data/monsters-index.json');
+    const res = await fetch('./data/monsters-index.json?v=2');
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     monsterCache = await res.json();
     populateBookFilter();
@@ -1113,7 +1113,7 @@ async function loadMonsterStat(idx) {
   if (el) el.innerHTML = `<p class="text-dim" style="text-align:center">Loading...</p>`;
   try {
     if (!monsterFullData) {
-      const res = await fetch('./data/monsters.json');
+      const res = await fetch('./data/monsters.json?v=2');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       monsterFullData = await res.json();
       _applyLimitedFlags();
