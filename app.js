@@ -88,7 +88,6 @@ let currentNpcId = null;
 let currentTab = 'core'; // still used by campaign tabs
 let monsterCache = null;
 let charPanelOpen = false;
-let sheetTab = 'combat';
 let wizardData = {};
 
 // ── Routing & Breadcrumb ───────────────────────────────────────────────────────
@@ -3130,6 +3129,8 @@ function _injectBaseClassResourcesForCh(ch) {
   const factory = BASE_CLASS_RESOURCES[ch.class];
   if (!factory) return;
   if (!ch.resources) ch.resources = [];
+  // Remove old base class resources for this class
+  ch.resources = ch.resources.filter(r => !(r._baseClass === true && r.source === ch.class));
   const toAdd = factory(ch);
   const existingNames = new Set(ch.resources.map(r => r.name));
   toAdd.forEach(def => {
@@ -3426,6 +3427,8 @@ function _injectResourcesForClass(ch, className) {
   const factory = BASE_CLASS_RESOURCES[className];
   if (!factory) return;
   if (!ch.resources) ch.resources = [];
+  // Remove old base class resources for this class
+  ch.resources = ch.resources.filter(r => !(r._baseClass === true && r.source === className));
   const toAdd = factory(ch);
   const existingNames = new Set(ch.resources.map(r => r.name));
   toAdd.forEach(def => {
@@ -3543,20 +3546,6 @@ function removeCharClass(idx) {
   refreshPanels();
 }
 
-let _levelDebounce = null;
-function ch_field_level(value) {
-  const ch = db.characters[currentCharId];
-  ch.classes[0].level = Math.min(20, Math.max(1, parseInt(value)||1));
-  syncClassFields(ch);
-  if (_levelDebounce) clearTimeout(_levelDebounce);
-  _levelDebounce = setTimeout(() => {
-    applySpellSlots(ch);
-    syncSubclassFeatures(currentCharId);
-    renderApp();
-    refreshPanels();
-    setTimeout(() => saveData(db), 0);
-  }, 400);
-}
 function combatField(field, value) {
   db.characters[currentCharId].combat[field] = value;
   if (['maxHP','currentHP'].includes(field)) {
