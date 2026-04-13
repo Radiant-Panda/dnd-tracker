@@ -225,6 +225,7 @@ function renderCampaignDetail() {
         ${tab==='characters'?`<button class="btn btn-primary" onclick="openNewCharModal()">+ Add Character</button>`:''}
         ${tab==='npcs'?`<button class="btn btn-primary" onclick="openNewNpcModal()">+ Add NPC</button>`:''}
         ${tab==='initiative'?`<button class="btn btn-primary" onclick="openAddCombatantModal()">+ Add Combatant</button><button class="btn btn-sm" onclick="nextTurn()">Next Turn &#8594;</button><button class="btn btn-sm btn-danger" onclick="clearInitiative()">End Combat</button>`:''}
+        <button class="btn btn-sm" onclick="openMagicItemRandomizer()">🎲 Magic Items</button>
       </div>
     </div>
     ${campaign.description?`<p class="text-dim" style="margin-bottom:1rem">${esc(campaign.description)}</p>`:''}
@@ -3107,6 +3108,149 @@ function addFeatToChar(featName) {
   saveData(db);
   updateFeatResults();
   renderApp();
+}
+
+// ── Magic Item Randomizer (DM Tool) ───────────────────────────────────────────
+const MAGIC_TYPE_OPTS = ['All Types','Weapon','Armor','Wondrous','Potion','Scroll','Ring','Staff','Wand','Rod'];
+let _randRarities = new Set(['common','uncommon','rare','very rare','legendary']);
+let _randTypeFilter = 'All Types';
+let _randHistory = []; // last 5 rolled items
+let _randCurrent = null;
+
+function openMagicItemRandomizer() {
+  _randHistory = [];
+  _randCurrent = null;
+  openModal(_buildRandModal());
+}
+
+function _buildRandModal() {
+  const campaign = db.campaigns.find(c => c.id === currentCampaignId);
+  const chars = (campaign?.characters || []).map(id => db.characters[id]).filter(Boolean);
+  const rarityBtns = ['common','uncommon','rare','very rare','legendary'].map(r => {
+    const color = MAGIC_RARITY_COLORS[r] || '#9ca3af';
+    const active = _randRarities.has(r);
+    return `<button class="btn btn-sm rand-rarity-btn ${active?'rand-rarity-active':''}"
+      style="border-color:${color};color:${active?'#0d0d1a':color};background:${active?color:'transparent'}"
+      onclick="toggleRandRarity('${r}',this,'${color}')">${MAGIC_RARITY_LABELS[r]}</button>`;
+  }).join('');
+  const typeOpts = MAGIC_TYPE_OPTS.map(t =>
+    `<option value="${esc(t)}" ${_randTypeFilter===t?'selected':''}>${esc(t)}</option>`
+  ).join('');
+  const charOpts = chars.length
+    ? chars.map(ch => `<option value="${esc(ch.id)}">${esc(ch.name||'Unnamed')}</option>`).join('')
+    : `<option disabled>No characters in campaign</option>`;
+
+  const resultHtml = _randCurrent ? _buildRandResultCard(_randCurrent) : `
+    <div class="rand-empty-state">Press <strong>Roll Random Item</strong> to get started</div>`;
+
+  const historyHtml = _randHistory.length > 0 ? `
+    <div class="rand-history-label">Recent Rolls</div>
+    ${_randHistory.map((item, i) => {
+      const color = MAGIC_RARITY_COLORS[item.rarity] || '#9ca3af';
+      return `<div class="rand-history-row">
+        <span class="eq-magic-dot" style="background:${color};margin-top:3px"></span>
+        <span style="flex:1;font-size:0.8rem">${esc(item.name)}</span>
+        <select class="lang-add-select" onchange="awardHistoryItem(${i},this.value);this.value=''">
+          <option value="">Award to…</option>
+          ${charOpts}
+        </select>
+      </div>`;
+    }).join('')}` : '';
+
+  return `<h2>🎲 Magic Item Randomizer</h2>
+    <div style="margin-bottom:0.5rem">
+      <div class="cs-field-label" style="margin-bottom:0.3rem">Rarity</div>
+      <div class="feat-filter-row">${rarityBtns}</div>
+    </div>
+    <div style="display:flex;gap:0.5rem;align-items:center;margin-bottom:0.75rem">
+      <div class="cs-field-label" style="margin:0">Type</div>
+      <select class="lang-add-select" style="font-size:0.8rem;padding:0.25rem 0.5rem" onchange="_randTypeFilter=this.value">${typeOpts}</select>
+    </div>
+    <button class="btn btn-primary" style="width:100%;margin-bottom:0.75rem" onclick="rollRandomItem()">🎲 Roll Random Item</button>
+    <div id="rand-result">${resultHtml}</div>
+    ${_randCurrent ? `<div style="display:flex;gap:0.5rem;margin-top:0.6rem;align-items:center">
+      <button class="btn btn-sm" onclick="rollRandomItem()">🎲 Roll Again</button>
+      <select class="lang-add-select" style="font-size:0.8rem;padding:0.25rem 0.5rem;flex:1" onchange="awardCurrentItem(this.value);this.value=''">
+        <option value="">⊕ Award to Character…</option>
+        ${charOpts}
+      </select>
+    </div>` : ''}
+    ${historyHtml ? `<div class="rand-history">${historyHtml}</div>` : ''}
+  `;
+}
+
+function _buildRandResultCard(item) {
+  const color = MAGIC_RARITY_COLORS[item.rarity] || '#9ca3af';
+  const label = MAGIC_RARITY_LABELS[item.rarity] || item.rarity;
+  const attuneTxt = item.attunement
+    ? `<div style="font-size:0.75rem;color:#f59e0b;margin-top:0.2rem">⟡ ${esc(item.attunement)}</div>` : '';
+  return `<div class="rand-result-card" style="border-color:${color}40;box-shadow:0 0 16px ${color}30">
+    <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.4rem">
+      <span style="font-size:1.05rem;font-weight:700;color:var(--text-main)">${esc(item.name)}</span>
+      <span class="feat-cat-badge" style="border-color:${color};color:${color}">${esc(label)}</span>
+      ${item.type ? `<span style="font-size:0.72rem;color:var(--text-dim)">${esc(item.type)}</span>` : ''}
+    </div>
+    ${attuneTxt}
+    <div style="font-size:0.78rem;color:var(--text-dim);margin-top:0.4rem;line-height:1.5">${esc(item.desc||'')}</div>
+  </div>`;
+}
+
+function toggleRandRarity(rarity, btn, color) {
+  if (_randRarities.has(rarity)) {
+    if (_randRarities.size === 1) return; // keep at least one
+    _randRarities.delete(rarity);
+    btn.classList.remove('rand-rarity-active');
+    btn.style.background = 'transparent';
+    btn.style.color = color;
+  } else {
+    _randRarities.add(rarity);
+    btn.classList.add('rand-rarity-active');
+    btn.style.background = color;
+    btn.style.color = '#0d0d1a';
+  }
+}
+
+function rollRandomItem() {
+  const typeQ = _randTypeFilter === 'All Types' ? '' : _randTypeFilter.toLowerCase();
+  const pool = (FEATS_ITEMS_DATA?.magic_items || []).filter(item => {
+    if (!_randRarities.has(item.rarity)) return false;
+    if (typeQ && !(item.type||'').toLowerCase().includes(typeQ)) return false;
+    return true;
+  });
+  if (!pool.length) { alert('No items match the current filters.'); return; }
+  const item = pool[Math.floor(Math.random() * pool.length)];
+  // Push to history (keep last 5, avoid immediate duplicate at top)
+  if (_randCurrent && (_randHistory.length === 0 || _randHistory[0].name !== _randCurrent.name)) {
+    _randHistory.unshift(_randCurrent);
+    if (_randHistory.length > 5) _randHistory.pop();
+  }
+  _randCurrent = item;
+  // Rebuild the modal content (preserves filter state)
+  openModal(_buildRandModal());
+  // Shimmer animation on result card
+  const card = document.querySelector('.rand-result-card');
+  if (card) { card.classList.add('rand-shimmer'); setTimeout(() => card.classList.remove('rand-shimmer'), 500); }
+}
+
+function awardCurrentItem(charId) {
+  if (!charId || !_randCurrent) return;
+  _awardItemToChar(_randCurrent, charId);
+}
+
+function awardHistoryItem(historyIdx, charId) {
+  if (!charId) return;
+  const item = _randHistory[historyIdx];
+  if (!item) return;
+  _awardItemToChar(item, charId);
+}
+
+function _awardItemToChar(item, charId) {
+  const ch = db.characters[charId];
+  if (!ch) return;
+  ch.equipment = ch.equipment || [];
+  ch.equipment.push({ name: item.name, rarity: item.rarity, type: item.type||'', attunement: item.attunement||'', desc: item.desc||'', _magic: true });
+  saveData(db);
+  showToast(`<strong>${esc(item.name)}</strong> awarded to <strong>${esc(ch.name||'Unnamed')}</strong>`);
 }
 
 // ── Magic Item Browser ─────────────────────────────────────────────────────────

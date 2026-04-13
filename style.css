@@ -2681,6 +2681,34 @@ input.hp-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0;
   flex-shrink: 0;
 }
 
+/* Magic Item Randomizer */
+.rand-result-card {
+  border: 1px solid;
+  border-radius: 10px;
+  padding: 0.75rem 0.9rem;
+  background: rgba(155,109,255,0.06);
+  transition: box-shadow 0.3s;
+}
+.rand-empty-state {
+  text-align: center;
+  padding: 1.5rem;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+}
+.rand-rarity-btn { transition: background 0.15s, color 0.15s; }
+.rand-history { margin-top: 0.9rem; border-top: 1px solid var(--border); padding-top: 0.6rem; }
+.rand-history-label { font-size: 0.7rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-dim); margin-bottom: 0.4rem; }
+.rand-history-row { display: flex; align-items: center; gap: 0.4rem; padding: 0.25rem 0; border-bottom: 1px solid rgba(155,109,255,0.08); }
+
+@keyframes rand-shimmer {
+  0%   { box-shadow: 0 0 0px #9b6dff00; background: rgba(155,109,255,0.06); }
+  35%  { box-shadow: 0 0 28px #9b6dffaa; background: rgba(155,109,255,0.22); }
+  100% { box-shadow: 0 0 16px var(--glow, #9b6dff30); background: rgba(155,109,255,0.06); }
+}
+.rand-shimmer { animation: rand-shimmer 0.5s ease-out forwards; }
+
 /* Magic item equipment entries */
 .eq-item-magic { flex-wrap: wrap; align-items: flex-start; }
 .eq-magic-dot {
