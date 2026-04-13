@@ -5,6 +5,13 @@ function migrateCharacter(ch) {
   if (ch.inspiration === undefined) ch.inspiration = false;
   if (!ch.languages)      ch.languages = '';
   if (!ch.proficiencies)  ch.proficiencies = '';
+  if (!ch.knownLanguages) {
+    const raw = (ch.languages || '').trim();
+    const looksLikeList = raw && raw.split(',').length > 1;
+    ch.knownLanguages = looksLikeList
+      ? raw.split(',').map(s => s.trim()).filter(Boolean)
+      : ['Common'];
+  }
   if (!ch.currency)       ch.currency = { cp:0, sp:0, ep:0, gp:0, pp:0 };
   if (!ch.attacks)        ch.attacks = [];
   if (!ch.skillExpertise) ch.skillExpertise = [];
@@ -1517,6 +1524,11 @@ function profBonus(level) { return Math.ceil(level/4)+1; }
 const ABILITIES = ['str','dex','con','int','wis','cha'];
 const ABILITY_NAMES = {str:'Strength',dex:'Dexterity',con:'Constitution',int:'Intelligence',wis:'Wisdom',cha:'Charisma'};
 const ABILITY_SHORT = {str:'STR',dex:'DEX',con:'CON',int:'INT',wis:'WIS',cha:'CHA'};
+const STANDARD_LANGUAGES = {
+  standard: ['Common','Common Sign Language','Dwarvish','Elvish','Giant','Gnomish','Goblin','Halfling','Orc'],
+  exotic:   ['Abyssal','Celestial','Deep Speech','Draconic','Infernal','Primordial','Sylvan','Undercommon'],
+  secret:   ['Druidic',"Thieves' Cant"],
+};
 const SKILLS = [
   {name:'Acrobatics',ability:'dex'},{name:'Animal Handling',ability:'wis'},{name:'Arcana',ability:'int'},
   {name:'Athletics',ability:'str'},{name:'Deception',ability:'cha'},{name:'History',ability:'int'},
@@ -3052,6 +3064,25 @@ function toggleSfCard(id, headerEl) {
   if (toggle) toggle.textContent = hidden ? '▼' : '▲';
 }
 
+function addLanguage(lang) {
+  const ch = db.characters[currentCharId];
+  if (!ch) return;
+  ch.knownLanguages = ch.knownLanguages || ['Common'];
+  if (!ch.knownLanguages.includes(lang)) {
+    ch.knownLanguages.push(lang);
+    saveData(db);
+    renderApp();
+  }
+}
+
+function removeLanguage(lang) {
+  const ch = db.characters[currentCharId];
+  if (!ch) return;
+  ch.knownLanguages = (ch.knownLanguages || []).filter(l => l !== lang);
+  saveData(db);
+  renderApp();
+}
+
 function renderProficienciesLanguages(ch) {
   const extraClasses = (ch.classes || []).slice(1);
   const mcNote = extraClasses.length > 0 ? `
@@ -3067,13 +3098,39 @@ function renderProficienciesLanguages(ch) {
         </div>`;
       }).join('')}
     </div>` : '';
+
+  const known = ch.knownLanguages || ['Common'];
+  const allKnown = new Set(known);
+  const pills = known.map(l =>
+    `<span class="lang-pill">${esc(l)}<button class="lang-pill-remove" onclick="removeLanguage(${JSON.stringify(l)})" title="Remove">×</button></span>`
+  ).join('');
+
+  const allLangs = [...STANDARD_LANGUAGES.standard, ...STANDARD_LANGUAGES.exotic, ...STANDARD_LANGUAGES.secret];
+  const stdOpts = STANDARD_LANGUAGES.standard.filter(l => !allKnown.has(l))
+    .map(l => `<option value="${esc(l)}">${esc(l)}</option>`).join('');
+  const exoOpts = STANDARD_LANGUAGES.exotic.filter(l => !allKnown.has(l))
+    .map(l => `<option value="${esc(l)}">${esc(l)}</option>`).join('');
+  const secOpts = STANDARD_LANGUAGES.secret.filter(l => !allKnown.has(l))
+    .map(l => `<option value="${esc(l)}">${esc(l)}</option>`).join('');
+
+  const hasOptions = stdOpts || exoOpts || secOpts;
+  const dropdown = hasOptions ? `
+    <select class="lang-add-select" onchange="if(this.value){addLanguage(this.value);this.value=''}">
+      <option value="">+ Add language…</option>
+      ${stdOpts ? `<optgroup label="Standard">${stdOpts}</optgroup>` : ''}
+      ${exoOpts ? `<optgroup label="Exotic">${exoOpts}</optgroup>` : ''}
+      ${secOpts ? `<optgroup label="Secret">${secOpts}</optgroup>` : ''}
+    </select>` : '';
+
   return `<div class="sheet-panel" style="margin-top:0.6rem">
     <div class="cs-section-label">Proficiencies &amp; Languages</div>
     <div class="cs-field-label" style="margin-bottom:0.3rem">Proficiencies</div>
     <textarea class="sheet-textarea" rows="3" placeholder="Weapons, armor, tools..." oninput="ch_field('proficiencies',this.value)">${esc(ch.proficiencies||'')}</textarea>
     ${mcNote}
     <div class="cs-field-label" style="margin:0.6rem 0 0.3rem">Languages</div>
-    <textarea class="sheet-textarea" rows="2" placeholder="Common, Elvish, Dwarvish..." oninput="ch_field('languages',this.value)">${esc(ch.languages||'')}</textarea>
+    <div class="lang-pills-row">${pills}${dropdown}</div>
+    <div class="cs-field-label" style="margin:0.5rem 0 0.2rem;font-size:0.72rem;opacity:0.7">Additional Notes</div>
+    <textarea class="sheet-textarea" rows="2" placeholder="Custom languages, dialects, notes…" oninput="ch_field('languages',this.value)">${esc(ch.languages||'')}</textarea>
   </div>`;
 }
 
