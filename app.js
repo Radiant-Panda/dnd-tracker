@@ -2857,6 +2857,22 @@ function renderFeaturesSection(ch) {
   const customRows = customFeatures.map(f => {
     const i = allFeatures.indexOf(f);
     const idKey = `cf-desc-${i}`;
+    // Feat/background entries are read-only collapsed cards
+    if (f._feat || f._background) {
+      const srcInfo = f._feat ? (FEAT_SOURCE_COLORS[f._featSource] || { abbr: f._featSource || 'Feat', color: '#9b6dff' }) : { abbr: 'Background', color: '#22c55e' };
+      return `
+        <div class="sf-card cf-card" id="feat-row-${i}">
+          <div class="sf-card-header" onclick="toggleSfCard('${idKey}', this)">
+            <span class="sf-source-badge" style="background:${srcInfo.color};color:#fff;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.65rem;font-weight:bold">${srcInfo.abbr}</span>
+            <span class="sf-name">${esc(f.name)}</span>
+            <span class="sf-toggle">▼</span>
+            <button class="feature-del-btn cf-del-btn" onclick="event.stopPropagation();removeFeature(${i})" title="Remove">&times;</button>
+          </div>
+          <div class="sf-card-body hidden" id="${idKey}">
+            <p class="sf-desc">${esc(f.desc || 'No description.')}</p>
+          </div>
+        </div>`;
+    }
     return `
       <div class="sf-card cf-card" id="feat-row-${i}">
         <div class="sf-card-header cf-card-header" onclick="toggleSfCard('${idKey}', this)">
@@ -2887,6 +2903,7 @@ function renderFeaturesSection(ch) {
     </div>
     <div class="feature-add-row">
       <button class="btn btn-sm feature-add-btn" onclick="addFeatureInline()">+ Add Feature</button>
+      <button class="btn btn-sm" onclick="openFeatBrowser()">✦ Browse Feats</button>
     </div>`;
 
   return `<div class="sheet-panel features-panel" style="margin-top:0.6rem">
@@ -2894,6 +2911,137 @@ function renderFeaturesSection(ch) {
     ${subSection}
     ${customSection}
   </div>`;
+}
+
+// ── Feat Browser ──────────────────────────────────────────────────────────────
+const FEAT_SOURCE_COLORS = {
+  'PHB 2024':    { abbr: 'PHB24', color: '#c084fc' },
+  'PHB 2014':    { abbr: 'PHB14', color: '#6d7b9b' },
+  "Xanathar's":  { abbr: 'XGE',   color: '#14b8a6' },
+  "Tasha's":     { abbr: 'TCE',   color: '#22c55e' },
+  "Bigby's":     { abbr: 'BGG',   color: '#f59e0b' },
+  'Dragonlance': { abbr: 'DSotDQ',color: '#ef4444' },
+};
+const FEAT_CAT_COLORS = {
+  'General': '#9b6dff', 'Origin': '#f59e0b',
+  'Fighting Style': '#ef4444', 'FS:P': '#ef4444', 'FS:R': '#ef4444',
+  'EB': '#c084fc',
+};
+const FEAT_CAT_LABELS = { 'EB': 'Epic Boon', 'FS:P': 'Fighting Style', 'FS:R': 'Fighting Style' };
+
+let _featSearch = '', _featCatFilter = 'All', _featSrcFilter = 'All', _featShowCount = 50;
+
+function openFeatBrowser() {
+  _featSearch = ''; _featCatFilter = 'All'; _featSrcFilter = 'All'; _featShowCount = 50;
+  const catBtns = ['All','General','Origin','Fighting Style','Epic Boon']
+    .map(c => `<button class="btn btn-sm ${c==='All'?'btn-primary':''}" onclick="setFeatFilter('cat',${JSON.stringify(c)},this)">${c}</button>`).join('');
+  const srcBtns = ['All','PHB 2024','PHB 2014',"Xanathar's","Tasha's"]
+    .map(s => `<button class="btn btn-sm ${s==='All'?'btn-primary':''}" onclick="setFeatFilter('src',${JSON.stringify(s)},this)">${s}</button>`).join('');
+  openModal(`<h2>✦ Browse Feats</h2>
+    <input type="text" id="feat-search" placeholder="Search feats..." style="width:100%;margin-bottom:0.4rem" oninput="_featSearch=this.value;_featShowCount=50;updateFeatResults()">
+    <div class="feat-filter-row" id="feat-cat-filters">${catBtns}</div>
+    <div class="feat-filter-row" style="margin-top:0.25rem;margin-bottom:0.4rem" id="feat-src-filters">${srcBtns}</div>
+    <div style="font-size:0.7rem;color:var(--text-dim);margin-bottom:0.3rem" id="feat-count"></div>
+    <div id="feat-results" style="max-height:52vh;overflow-y:auto"></div>`);
+  setTimeout(() => { updateFeatResults(); document.getElementById('feat-search')?.focus(); }, 20);
+}
+
+function setFeatFilter(type, value, btn) {
+  if (type === 'cat') {
+    _featCatFilter = value;
+    document.querySelectorAll('#feat-cat-filters .btn').forEach(b => b.classList.remove('btn-primary'));
+  } else {
+    _featSrcFilter = value;
+    document.querySelectorAll('#feat-src-filters .btn').forEach(b => b.classList.remove('btn-primary'));
+  }
+  btn.classList.add('btn-primary');
+  _featShowCount = 50;
+  updateFeatResults();
+}
+
+function updateFeatResults() {
+  const el = document.getElementById('feat-results');
+  const countEl = document.getElementById('feat-count');
+  if (!el) return;
+  const ch = db.characters[currentCharId];
+  const added = new Set((ch?.featuresList || []).filter(f => f._feat).map(f => f.name));
+  const q = _featSearch.toLowerCase();
+  const all = FEATS_ITEMS_DATA?.feats || [];
+  const filtered = all.filter(f => {
+    if (q && !f.name.toLowerCase().includes(q) && !(f.desc||'').toLowerCase().includes(q)) return false;
+    if (_featCatFilter !== 'All') {
+      const match = _featCatFilter === 'Fighting Style'
+        ? (f.category === 'Fighting Style' || f.category === 'FS:P' || f.category === 'FS:R')
+        : _featCatFilter === 'Epic Boon' ? f.category === 'EB' : f.category === _featCatFilter;
+      if (!match) return false;
+    }
+    if (_featSrcFilter !== 'All' && f.source !== _featSrcFilter) return false;
+    return true;
+  });
+  if (countEl) countEl.textContent = `${filtered.length} feat${filtered.length !== 1 ? 's' : ''}`;
+  if (filtered.length === 0) { el.innerHTML = '<p style="color:var(--text-dim);padding:0.5rem 0">No feats match.</p>'; return; }
+  const show = filtered.slice(0, _featShowCount);
+  const remaining = filtered.length - show.length;
+  el.innerHTML = show.map(f => {
+    const src = FEAT_SOURCE_COLORS[f.source] || { abbr: (f.source||'?').split(' ')[0], color: '#7b6d8d' };
+    const catColor = FEAT_CAT_COLORS[f.category] || '#9b6dff';
+    const catLabel = FEAT_CAT_LABELS[f.category] || f.category || '';
+    const isAdded = added.has(f.name);
+    const uid = 'fd-' + f.name.replace(/[^a-z0-9]/gi, '-');
+    // Format ability bonus
+    let abLine = '';
+    if (f.ability_bonus && Object.keys(f.ability_bonus).length) {
+      const ab = f.ability_bonus;
+      if (ab.choose) {
+        const from = (ab.choose.from||[]).map(s=>s.toUpperCase()).join(', ');
+        abLine = `+${ab.choose.amount} to ${ab.choose.count > 1 ? ab.choose.count + ' of' : 'one from'} [${from}]`;
+      } else {
+        abLine = Object.entries(ab).map(([k,v])=>`+${v} ${k.toUpperCase()}`).join(', ');
+      }
+    }
+    return `<div class="spell-browser-row" style="flex-wrap:wrap">
+      <div class="spell-browser-left">
+        <span style="font-size:0.82rem;font-weight:600">${esc(f.name)}</span>
+        <span class="spell-source-badge" style="background:${src.color}">${src.abbr}</span>
+        <span class="spell-badge" style="border-color:${catColor};color:${catColor}">${catLabel}</span>
+        ${f.prerequisite ? `<span style="font-size:0.68rem;color:var(--text-dim)">${esc(f.prerequisite)}</span>` : ''}
+      </div>
+      <div style="display:flex;gap:0.3rem;flex-shrink:0">
+        <button class="btn btn-sm" onclick="toggleFeatDesc(${JSON.stringify(uid)})">▾</button>
+        ${isAdded
+          ? `<button class="btn btn-sm btn-primary" disabled style="opacity:0.7">✓ Added</button>`
+          : `<button class="btn btn-sm" onclick="addFeatToChar(${JSON.stringify(f.name)})">+ Add</button>`}
+      </div>
+      <div id="${uid}" class="hidden" style="width:100%;padding:0.3rem 0.25rem 0.4rem;font-size:0.78rem;color:var(--text-dim);border-top:1px solid rgba(155,109,255,0.15);margin-top:0.2rem">
+        <p style="margin:0 0 0.3rem">${esc(f.desc || '')}</p>
+        ${abLine ? `<div style="color:var(--gold-lt);font-size:0.74rem">Ability bonus: ${esc(abLine)}</div>` : ''}
+      </div>
+    </div>`;
+  }).join('') + (remaining > 0 ? `<button class="btn btn-sm" style="width:100%;margin-top:0.4rem" onclick="_featShowCount+=${Math.min(remaining,100)};updateFeatResults()">Show more (${remaining} remaining)</button>` : '');
+}
+
+function toggleFeatDesc(uid) {
+  const el = document.getElementById(uid);
+  if (!el) return;
+  el.classList.toggle('hidden');
+  // Flip the ▾/▴ on the adjacent button
+  const row = el.previousElementSibling;
+  if (row) {
+    const btn = row.querySelector('button');
+    if (btn) btn.textContent = el.classList.contains('hidden') ? '▾' : '▴';
+  }
+}
+
+function addFeatToChar(featName) {
+  const ch = db.characters[currentCharId];
+  if (!ch) return;
+  const f = (FEATS_ITEMS_DATA?.feats || []).find(x => x.name === featName);
+  if (!f) return;
+  ch.featuresList = ch.featuresList || [];
+  ch.featuresList.push({ name: f.name, desc: f.desc || '', _feat: true, _featSource: f.source });
+  saveData(db);
+  updateFeatResults();
+  renderApp();
 }
 
 function toggleSfCard(id, headerEl) {

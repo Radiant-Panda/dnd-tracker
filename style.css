@@ -2670,6 +2670,13 @@ input.hp-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0;
   margin-bottom: 0.6rem;
 }
 
+/* Feat browser */
+.feat-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
 /* ── Responsive ── */
 @media (max-width: 500px) {
   .header-inner { padding: 0.5rem; }
