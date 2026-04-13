@@ -2562,11 +2562,7 @@ function confirmCast(spellName, slotLevel) {
   if (isConc) ch.activeConcentration = { spellName, castLevel: slotLevel };
   saveData(db);
   closeModal();
-  renderSpellTabContent();
-  if (isConc) renderApp(); // refresh combat section to show pill
-  // Flash the slot grid
-  const slotEl = document.querySelector(`.spell-slot-row:nth-child(${slotLevel}) .spell-slot-bubbles`);
-  if (slotEl) { slotEl.style.transition='opacity 0.1s'; slotEl.style.opacity='0.3'; setTimeout(()=>slotEl.style.opacity='1', 200); }
+  renderApp(); // refresh slots, combat pill, everything
 }
 
 // ── Custom Spell ──────────────────────────────────────────────────────────────
