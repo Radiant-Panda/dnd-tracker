@@ -2064,6 +2064,13 @@ const PACT_MAGIC_TABLE = [null,
   {slots:3,level:5},{slots:3,level:5},{slots:3,level:5},{slots:3,level:5},
   {slots:4,level:5},{slots:4,level:5},{slots:4,level:5},{slots:4,level:5}
 ];
+const PREPARED_SPELL_LIMIT = {
+  Wizard: (level, intMod) => level + intMod,
+  Cleric: (level, wisMod) => level + wisMod,
+  Druid: (level, wisMod) => level + wisMod,
+  Paladin: (level, chaMod) => Math.max(1, Math.floor(level/2) + chaMod),
+  Artificer: (level, intMod) => Math.max(1, Math.ceil(level/2) + intMod)
+};
 
 function _classCasterType(entry) {
   const ct = CASTER_TYPE[entry.class];
@@ -2640,6 +2647,20 @@ function renderSpellsSection(ch) {
     return subs && subs.includes(c.subclass);
   });
 
+  // Calculate prepared spell limit for applicable classes
+  let preparedLimit = null;
+  let prepareLimitFormula = '';
+  const classesWithLimit = (ch.classes||[]).filter(c => PREPARED_SPELL_LIMIT[c.class]);
+  if (classesWithLimit.length > 0) {
+    const c = classesWithLimit[0]; // Use first class with limit
+    const ab = SPELL_ABILITY[c.class];
+    const abilityMod = mod(ch.abilities[ab]);
+    preparedLimit = PREPARED_SPELL_LIMIT[c.class](c.level, abilityMod);
+    const abilityName = ABILITY_SHORT[ab].toUpperCase();
+    const abilityModStr = abilityMod >= 0 ? `+ ${ABILITY_SHORT[ab]} +${abilityMod}` : `+ ${ABILITY_SHORT[ab]} ${abilityMod}`;
+    prepareLimitFormula = `Prepare up to ${preparedLimit} spells (level ${c.level} ${abilityModStr})`;
+  }
+
   // Build per-class spellcasting stat rows
   let headerStats = '';
   if (isSpellcaster) {
@@ -2654,11 +2675,12 @@ function renderSpellsSection(ch) {
       const sMod = mod(ch.abilities[ab]);
       const dc = 8 + pb + sMod;
       const atk = pb + sMod;
+      const limitNote = PREPARED_SPELL_LIMIT[c.class] ? `<div style="font-size:0.7rem;color:var(--text-dim);margin-top:0.3rem">${prepareLimitFormula}</div>` : '';
       return `<div class="spell-stat-row">
         <div class="spell-stat-box"><div class="spell-stat-label">${esc(c.class)}</div><div class="spell-stat-val">${ABILITY_SHORT[ab]}</div></div>
         <div class="spell-stat-box"><div class="spell-stat-label">Spell Save DC</div><div class="spell-stat-val">${dc}</div></div>
         <div class="spell-stat-box"><div class="spell-stat-label">Spell Attack</div><div class="spell-stat-val">${atk>=0?'+':''}${atk}</div></div>
-      </div>`;
+      </div>${limitNote}`;
     }).filter(Boolean);
     headerStats = statRows.join('');
   } else {
@@ -2719,7 +2741,7 @@ function renderSpellsSection(ch) {
     <div class="spell-tabs">
       <button class="spell-tab${spellViewTab==='all'?' active':''}" data-tab="all" onclick="switchSpellTab('all')">✿ All Spells</button>
       <button class="spell-tab${spellViewTab==='known'?' active':''}" data-tab="known" onclick="switchSpellTab('known')">Known <span class="spell-count">${known}</span></button>
-      <button class="spell-tab${spellViewTab==='prepared'?' active':''}" data-tab="prepared" onclick="switchSpellTab('prepared')">Prepared <span class="spell-count">${prepared}</span></button>
+      <button class="spell-tab${spellViewTab==='prepared'?' active':''}" data-tab="prepared" onclick="switchSpellTab('prepared')">Prepared <span class="spell-count" style="${preparedLimit && prepared > preparedLimit ? 'color:var(--red-lt)' : ''}">${prepared}${preparedLimit ? `/${preparedLimit}` : ''}</span></button>
     </div>
     <div id="spell-tab-content"></div>
   </div>`;
