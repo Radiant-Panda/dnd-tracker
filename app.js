@@ -2236,7 +2236,21 @@ function renderSpellTabContent() {
     const badge = btn.querySelector('.spell-count');
     if (!badge) return;
     if (tab === 'known')    badge.textContent = (ch.spells.known    || []).length;
-    if (tab === 'prepared') badge.textContent = (ch.spells.prepared || []).length;
+    if (tab === 'prepared') {
+      const prepared = (ch.spells.prepared || []).length;
+      // Calculate prepared spell limit if applicable
+      const classesWithLimit = (ch.classes||[]).filter(c => PREPARED_SPELL_LIMIT[c.class]);
+      if (classesWithLimit.length > 0) {
+        const c = classesWithLimit[0];
+        const ab = SPELL_ABILITY[c.class];
+        const abilityMod = mod(ch.abilities[ab]);
+        const limit = PREPARED_SPELL_LIMIT[c.class](c.level, abilityMod);
+        badge.textContent = `${prepared}/${limit}`;
+        badge.style.color = prepared > limit ? 'var(--red-lt)' : '';
+      } else {
+        badge.textContent = prepared;
+      }
+    }
   });
 }
 
