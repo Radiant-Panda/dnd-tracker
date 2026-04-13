@@ -5,6 +5,10 @@ function migrateCharacter(ch) {
   if (ch.inspiration === undefined) ch.inspiration = false;
   if (!ch.languages)      ch.languages = '';
   if (!ch.proficiencies)  ch.proficiencies = '';
+  if (ch.attunedItems === undefined) ch.attunedItems = [];
+  // Ensure equipment is always an array of strings or valid objects
+  if (!ch.equipment) ch.equipment = [];
+  ch.equipment = ch.equipment.map(e => (e === null || e === undefined) ? '' : e).filter(Boolean);
   if (!ch.knownLanguages) {
     const raw = (ch.languages || '').trim();
     const looksLikeList = raw && raw.split(',').length > 1;
@@ -1846,14 +1850,29 @@ function renderAttacksSection(ch) {
 }
 
 function renderEquipmentCurrency(ch) {
+  const eqRows = (ch.equipment||[]).map((item, i) => {
+    if (item && typeof item === 'object' && item._magic) {
+      const color = MAGIC_RARITY_COLORS[item.rarity] || '#9ca3af';
+      const attuneTxt = item.attunement ? ` <span style="font-size:0.65rem;color:#f59e0b">⟡</span>` : '';
+      const descBtn = item.desc ? `<button id="eqbt-${i}" class="btn btn-icon" onclick="toggleEquipDesc(${i})" style="font-size:0.7rem;padding:0 0.25rem">▾</button>` : '';
+      return `<li class="eq-item eq-item-magic">
+        <span class="eq-magic-dot" style="background:${color}" title="${esc(MAGIC_RARITY_LABELS[item.rarity]||item.rarity)}"></span>
+        <span class="eq-name">${esc(item.name)}${attuneTxt}</span>
+        ${descBtn}
+        <button class="btn btn-icon btn-danger" onclick="removeEquipment(${i})">&times;</button>
+        ${item.desc ? `<div id="eqdesc-${i}" style="display:none;width:100%;font-size:0.75rem;color:var(--text-dim);padding:0.25rem 0 0.1rem;border-top:1px solid var(--border);margin-top:0.2rem">${esc(item.desc)}</div>` : ''}
+      </li>`;
+    }
+    const label = typeof item === 'object' ? (item.name || '?') : item;
+    return `<li class="eq-item"><span class="eq-name">${esc(label)}</span><button class="btn btn-icon btn-danger" onclick="removeEquipment(${i})">&times;</button></li>`;
+  }).join('');
   return `<div class="sheet-panel" style="margin-top:0.6rem">
     <div class="cs-section-label">Equipment</div>
-    <ul class="eq-list" style="max-height:140px;overflow-y:auto">
-      ${(ch.equipment||[]).map((item,i)=>`<li class="eq-item"><span class="eq-name">${esc(item)}</span><button class="btn btn-icon btn-danger" onclick="removeEquipment(${i})">&times;</button></li>`).join('')}
-    </ul>
+    <ul class="eq-list" style="max-height:200px;overflow-y:auto">${eqRows}</ul>
     <div class="eq-add-row">
       <input type="text" id="eq-input" placeholder="Add item..." onkeydown="if(event.key==='Enter')addEquipment()">
       <button class="btn btn-sm" onclick="addEquipment()">Add</button>
+      <button class="btn btn-sm" onclick="openMagicItemBrowser()">⚔ Magic Item</button>
     </div>
     <div style="margin-top:0.8rem">
       <div class="cs-field-label" style="color:var(--gold);margin-bottom:0.4rem">Currency</div>
@@ -2964,6 +2983,22 @@ let _featSearch = '', _featCatFilter = 'All', _featSrcFilter = 'All', _featShowC
 const FEAT_CAT_OPTS = ['All','General','Origin','Fighting Style','Epic Boon'];
 const FEAT_SRC_OPTS = ['All','PHB 2024','PHB 2014',"Xanathar's","Tasha's"];
 
+// Magic item browser
+const MAGIC_RARITY_OPTS = ['All','common','uncommon','rare','very rare','legendary'];
+const MAGIC_RARITY_COLORS = {
+  common:     '#9ca3af',
+  uncommon:   '#22c55e',
+  rare:       '#3b82f6',
+  'very rare':'#a855f7',
+  legendary:  '#f59e0b',
+  artifact:   '#ef4444',
+};
+const MAGIC_RARITY_LABELS = {
+  common:'Common', uncommon:'Uncommon', rare:'Rare',
+  'very rare':'Very Rare', legendary:'Legendary', artifact:'Artifact',
+};
+let _magicSearch = '', _magicRarityFilter = 'All', _magicShowCount = 50;
+
 function openFeatBrowser() {
   _featSearch = ''; _featCatFilter = 'All'; _featSrcFilter = 'All'; _featShowCount = 50;
   const catBtns = FEAT_CAT_OPTS.map((c,i) =>
@@ -3072,6 +3107,121 @@ function addFeatToChar(featName) {
   saveData(db);
   updateFeatResults();
   renderApp();
+}
+
+// ── Magic Item Browser ─────────────────────────────────────────────────────────
+function openMagicItemBrowser() {
+  _magicSearch = ''; _magicRarityFilter = 'All'; _magicShowCount = 50;
+  const rarityBtns = MAGIC_RARITY_OPTS.map((r, i) => {
+    const color = MAGIC_RARITY_COLORS[r] || 'var(--text-dim)';
+    const style = i === 0 ? '' : `border-color:${color};color:${color}`;
+    return `<button class="btn btn-sm ${i===0?'btn-primary':''}" style="${style}" onclick="setMagicFilter(${i},this)">${i===0?'All':MAGIC_RARITY_LABELS[r]}</button>`;
+  }).join('');
+  openModal(`<h2>⚔ Magic Items</h2>
+    <input type="text" id="magic-search" placeholder="Search magic items..." style="width:100%;margin-bottom:0.4rem" oninput="_magicSearch=this.value;_magicShowCount=50;updateMagicResults()">
+    <div class="feat-filter-row" id="magic-rarity-filters" style="margin-bottom:0.5rem">${rarityBtns}</div>
+    <div id="magic-results" style="max-height:360px;overflow-y:auto"></div>
+  `);
+  updateMagicResults();
+}
+
+function setMagicFilter(idx, btn) {
+  _magicRarityFilter = MAGIC_RARITY_OPTS[idx] || 'All';
+  _magicShowCount = 50;
+  document.querySelectorAll('#magic-rarity-filters .btn').forEach(b => b.classList.remove('btn-primary'));
+  btn.classList.add('btn-primary');
+  updateMagicResults();
+}
+
+function updateMagicResults() {
+  const container = document.getElementById('magic-results');
+  if (!container) return;
+  const ch = db.characters[currentCharId];
+  const addedNames = new Set((ch?.equipment || []).filter(e => typeof e === 'object' && e._magic).map(e => e.name));
+
+  const q = _magicSearch.toLowerCase();
+  let items = (FEATS_ITEMS_DATA?.magic_items || []).filter(item => {
+    if (_magicRarityFilter !== 'All' && item.rarity !== _magicRarityFilter) return false;
+    if (q && !item.name.toLowerCase().includes(q) && !(item.type||'').toLowerCase().includes(q)) return false;
+    return true;
+  });
+
+  // Deduplicate by name+rarity (keep first)
+  const seen = new Set();
+  items = items.filter(item => {
+    const key = item.name + '|' + item.rarity;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  const total = items.length;
+  const visible = items.slice(0, _magicShowCount);
+  const remaining = total - visible.length;
+
+  container.innerHTML = visible.map((item, i) => {
+    const uid = 'mi-' + i + '-' + item.name.replace(/\W/g,'').slice(0,8);
+    const color = MAGIC_RARITY_COLORS[item.rarity] || '#9ca3af';
+    const label = MAGIC_RARITY_LABELS[item.rarity] || item.rarity;
+    const isAdded = addedNames.has(item.name);
+    const attuneTxt = item.attunement ? `<span style="font-size:0.68rem;color:#f59e0b">⟡ ${esc(item.attunement)}</span>` : '';
+    return `<div style="border:1px solid var(--border);border-radius:6px;padding:0.35rem 0.5rem;margin-bottom:0.3rem">
+      <div style="display:flex;align-items:center;gap:0.4rem;flex-wrap:wrap">
+        <span style="font-size:0.82rem;font-weight:600">${esc(item.name)}</span>
+        <span class="feat-cat-badge" style="border-color:${color};color:${color}">${esc(label)}</span>
+        ${item.type ? `<span style="font-size:0.68rem;color:var(--text-dim)">${esc(item.type)}</span>` : ''}
+        ${attuneTxt}
+        <div style="display:flex;gap:0.3rem;flex-shrink:0;margin-left:auto">
+          <button id="mibt-${uid}" class="btn btn-sm" onclick="toggleMagicDesc('${uid}')">▾</button>
+          ${isAdded
+            ? `<button class="btn btn-sm btn-primary" disabled style="opacity:0.7">✓ Added</button>`
+            : `<button class="btn btn-sm" onclick="addMagicItemToChar(${JSON.stringify(item.name)},${JSON.stringify(item.rarity)})">+ Add</button>`}
+        </div>
+      </div>
+      <div id="${uid}" style="display:none;width:100%;padding:0.3rem 0.25rem 0.4rem;font-size:0.78rem;color:var(--text-dim);border-top:1px solid rgba(155,109,255,0.15);margin-top:0.2rem">
+        ${esc(item.desc || 'No description available.')}
+      </div>
+    </div>`;
+  }).join('') + (remaining > 0
+    ? `<button class="btn btn-sm" style="width:100%;margin-top:0.4rem" onclick="_magicShowCount+=50;updateMagicResults()">Show more (${remaining} remaining)</button>`
+    : '');
+}
+
+function toggleMagicDesc(uid) {
+  const el = document.getElementById(uid);
+  if (!el) return;
+  const hidden = el.style.display === 'none';
+  el.style.display = hidden ? 'block' : 'none';
+  const btn = document.getElementById('mibt-' + uid);
+  if (btn) btn.textContent = hidden ? '▴' : '▾';
+}
+
+function addMagicItemToChar(itemName, itemRarity) {
+  const ch = db.characters[currentCharId];
+  if (!ch) return;
+  const item = (FEATS_ITEMS_DATA?.magic_items || []).find(x => x.name === itemName && x.rarity === itemRarity);
+  if (!item) return;
+  ch.equipment = ch.equipment || [];
+  ch.equipment.push({ name: item.name, rarity: item.rarity, type: item.type || '', attunement: item.attunement || '', desc: item.desc || '', _magic: true });
+  // Prompt to attune if needed
+  if (item.attunement && ch.attunedItems !== undefined) {
+    if (confirm(`"${item.name}" ${item.attunement}. Add to attuned items?`)) {
+      ch.attunedItems = ch.attunedItems || [];
+      if (!ch.attunedItems.includes(item.name)) ch.attunedItems.push(item.name);
+    }
+  }
+  saveData(db);
+  updateMagicResults();
+  renderApp();
+}
+
+function toggleEquipDesc(idx) {
+  const el = document.getElementById('eqdesc-' + idx);
+  if (!el) return;
+  const hidden = el.style.display === 'none';
+  el.style.display = hidden ? 'block' : 'none';
+  const btn = document.getElementById('eqbt-' + idx);
+  if (btn) btn.textContent = hidden ? '▴' : '▾';
 }
 
 function toggleSfCard(id, headerEl) {

@@ -2681,6 +2681,13 @@ input.hp-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0;
   flex-shrink: 0;
 }
 
+/* Magic item equipment entries */
+.eq-item-magic { flex-wrap: wrap; align-items: flex-start; }
+.eq-magic-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+  margin-top: 3px;
+}
+
 /* Starting proficiencies modal */
 .sp-saves-list { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.25rem; }
 .sp-save-row {
