@@ -1554,6 +1554,24 @@ const CLASS_SAVE_PROFS = {
   Sorcerer:['con','cha'], Warlock:['wis','cha'], Wizard:['int','wis'],
   Artificer:['con','int'], 'Blood Hunter':['dex','int']
 };
+// Starting skill proficiency choices per class (2024 PHB)
+const CLASS_STARTING_PROFICIENCIES = {
+  Barbarian:    { saves:['str','con'], choose:2, skills:['Animal Handling','Athletics','Intimidation','Nature','Perception','Survival'] },
+  Bard:         { saves:['dex','cha'], choose:3, skills:['Acrobatics','Animal Handling','Arcana','Athletics','Deception','History','Insight','Intimidation','Investigation','Medicine','Nature','Perception','Performance','Persuasion','Religion','Sleight of Hand','Stealth','Survival'] },
+  Cleric:       { saves:['wis','cha'], choose:2, skills:['History','Insight','Medicine','Persuasion','Religion'] },
+  Druid:        { saves:['int','wis'], choose:2, skills:['Arcana','Animal Handling','Insight','Medicine','Nature','Perception','Religion','Survival'] },
+  Fighter:      { saves:['str','con'], choose:2, skills:['Acrobatics','Animal Handling','Athletics','History','Insight','Intimidation','Perception','Survival'] },
+  Monk:         { saves:['str','dex'], choose:2, skills:['Acrobatics','Athletics','History','Insight','Religion','Stealth'] },
+  Paladin:      { saves:['wis','cha'], choose:2, skills:['Athletics','Insight','Intimidation','Medicine','Persuasion','Religion'] },
+  Ranger:       { saves:['str','dex'], choose:3, skills:['Animal Handling','Athletics','Insight','Investigation','Nature','Perception','Stealth','Survival'] },
+  Rogue:        { saves:['dex','int'], choose:4, skills:['Acrobatics','Athletics','Deception','Insight','Intimidation','Investigation','Perception','Performance','Persuasion','Sleight of Hand','Stealth'] },
+  Sorcerer:     { saves:['con','cha'], choose:2, skills:['Arcana','Deception','Insight','Intimidation','Persuasion','Religion'] },
+  Warlock:      { saves:['wis','cha'], choose:2, skills:['Arcana','Deception','History','Intimidation','Investigation','Nature','Religion'] },
+  Wizard:       { saves:['int','wis'], choose:2, skills:['Arcana','History','Insight','Investigation','Medicine','Religion'] },
+  Artificer:    { saves:['con','int'], choose:2, skills:['Arcana','History','Investigation','Medicine','Nature','Perception','Sleight of Hand'] },
+  'Blood Hunter':{ saves:['dex','int'], choose:2, skills:['Acrobatics','Arcana','Athletics','History','Insight','Investigation','Perception','Survival'] },
+};
+
 // Proficiencies gained when multiclassing INTO a class (5e rules)
 const CLASS_MC_PROFS = {
   Barbarian: 'Shields, simple weapons, martial weapons',
@@ -4042,6 +4060,16 @@ function chClassField(idx, field, value) {
     ch.classes[idx].subclass = '';
     syncClassFields(ch);
     _injectResourcesForClass(ch, value);
+    // Clear old primary class proficiencies and prompt for new ones
+    if (idx === 0) {
+      ch.saveProficiencies = (ch.saveProficiencies || []).filter(s => {
+        // Keep saves not granted by old class
+        return !(CLASS_STARTING_PROFICIENCIES[oldClass]?.saves || []).includes(s);
+      });
+      ch.skillProficiencies = (ch.skillProficiencies || []).filter(e =>
+        (typeof e === 'object' ? e._class : null) !== oldClass
+      );
+    }
   } else if (field === 'level') {
     const newLvl = Math.min(20, Math.max(1, parseInt(value)||1));
     const otherSum = ch.classes.reduce((s, c, i) => i === idx ? s : s + c.level, 0);
@@ -4056,6 +4084,10 @@ function chClassField(idx, field, value) {
   saveData(db);
   renderApp();
   refreshPanels();
+  // After primary class change, prompt for starting proficiencies
+  if (field === 'class' && idx === 0) {
+    openStartingProfsModal(ch);
+  }
 }
 
 function addCharClass() {
@@ -5150,8 +5182,85 @@ function wizardFinish() {
   (c.characters = c.characters || []).push(ch.id);
   if (!c.activeCharId) c.activeCharId = ch.id;
   saveData(db);
-  closeModal();
   switchToCharacter(ch.id);
+  // Open starting proficiencies picker
+  openStartingProfsModal(ch);
+}
+
+// ── Starting Proficiencies Modal ───────────────────────────────────────────────
+function openStartingProfsModal(ch) {
+  const cls = ch.classes[0].class;
+  const data = CLASS_STARTING_PROFICIENCIES[cls];
+  if (!data) return;
+  const color = CLASS_BADGE_COLORS[cls] || '#9b6dff';
+  const saveRows = data.saves.map(a =>
+    `<label class="sp-save-row sp-save-granted">
+      <input type="checkbox" checked disabled>
+      <span>${ABILITY_NAMES[a]}</span>
+      <span class="sp-granted-label">saving throw</span>
+    </label>`
+  ).join('');
+  const skillBoxes = data.skills.map(s =>
+    `<label class="sp-skill-row">
+      <input type="checkbox" class="sp-skill-cb" value="${esc(s)}" onchange="spUpdateCounter()">
+      <span>${esc(s)}</span>
+    </label>`
+  ).join('');
+  openModal(`
+    <h2 style="color:${color}">${CLASS_ICONS[cls]||''} ${cls} Starting Proficiencies</h2>
+    <p style="font-size:0.8rem;color:var(--text-dim);margin:0 0 0.75rem">These proficiencies are granted at character creation.</p>
+    <div class="cs-field-label" style="margin-bottom:0.35rem">Saving Throws <span style="font-size:0.7rem;opacity:0.6">(granted)</span></div>
+    <div class="sp-saves-list">${saveRows}</div>
+    <div class="cs-field-label" style="margin:0.75rem 0 0.35rem">
+      Skills —
+      <span id="sp-counter" style="color:${color}">Choose ${data.choose} of ${data.skills.length}</span>
+    </div>
+    <div class="sp-skills-grid">${skillBoxes}</div>
+    <div style="display:flex;justify-content:flex-end;gap:0.5rem;margin-top:1rem">
+      <button class="btn" onclick="closeModal()">Skip</button>
+      <button class="btn btn-primary" id="sp-confirm-btn" onclick="confirmStartingProfs()" disabled>Confirm</button>
+    </div>
+  `);
+  // Store target on window for confirmStartingProfs
+  window._spCharId = ch.id;
+  window._spClass = cls;
+  window._spChoose = data.choose;
+  spUpdateCounter();
+}
+
+function spUpdateCounter() {
+  const choose = window._spChoose || 0;
+  const checked = document.querySelectorAll('.sp-skill-cb:checked').length;
+  const counter = document.getElementById('sp-counter');
+  const confirmBtn = document.getElementById('sp-confirm-btn');
+  if (counter) counter.textContent = `${checked} / ${choose} chosen`;
+  if (confirmBtn) confirmBtn.disabled = checked !== choose;
+  // Disable unchecked boxes when at limit
+  document.querySelectorAll('.sp-skill-cb').forEach(cb => {
+    if (!cb.checked) cb.disabled = checked >= choose;
+  });
+}
+
+function confirmStartingProfs() {
+  const ch = db.characters[window._spCharId];
+  if (!ch) return;
+  const cls = window._spClass;
+  const data = CLASS_STARTING_PROFICIENCIES[cls];
+  if (!data) return;
+  // Write save proficiencies (remove any old _class entries for this class first)
+  ch.saveProficiencies = (ch.saveProficiencies || []).filter(s => s !== data.saves[0] && s !== data.saves[1]);
+  data.saves.forEach(a => { if (!ch.saveProficiencies.includes(a)) ch.saveProficiencies.push(a); });
+  // Write chosen skill proficiencies
+  ch.skillProficiencies = (ch.skillProficiencies || []).filter(e => {
+    const src = typeof e === 'object' ? e._class : null;
+    return src !== cls;
+  });
+  document.querySelectorAll('.sp-skill-cb:checked').forEach(cb => {
+    ch.skillProficiencies.push({ name: cb.value, _class: cls });
+  });
+  saveData(db);
+  closeModal();
+  renderApp();
 }
 
 // ── Modal ──────────────────────────────────────────────────────────────────────
