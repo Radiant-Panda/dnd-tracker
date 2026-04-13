@@ -1916,7 +1916,6 @@ function renderCombatSection(ch) {
 
 function renderAttacksSection(ch) {
   const rows = ch.attacks||[];
-  const emptyCount = Math.max(0, 3-rows.length);
   return `<div class="sheet-panel" style="margin-top:0.6rem">
     <div class="cs-section-label">Attacks &amp; Spellcasting</div>
     <table class="attacks-table">
@@ -1928,6 +1927,7 @@ function renderAttacksSection(ch) {
         <th style="width:18%"></th>
       </tr></thead>
       <tbody>
+        ${rows.length === 0 ? `<tr><td colspan="5" style="text-align:center;color:var(--text-dim);font-style:italic;padding:0.8rem">No attacks added yet.</td></tr>` : ''}
         ${rows.map((atk,i)=>`<tr>
           <td><input class="attack-input" value="${esc(atk.name)}" placeholder="Longsword" oninput="updateAttack(${i},'name',this.value)"></td>
           <td><select class="attack-type-select" onchange="autoCalcAttackBonus(${i},this.value)">
@@ -1944,13 +1944,6 @@ function renderAttacksSection(ch) {
             <button class="btn btn-icon" onclick="rollDamage(${i})" title="Roll damage">⚄</button>
             <button class="btn btn-icon btn-danger" onclick="removeAttack(${i})">&times;</button>
           </td>
-        </tr>`).join('')}
-        ${Array.from({length:emptyCount},()=>`<tr>
-          <td><input class="attack-input" placeholder="—"></td>
-          <td class="text-dim" style="font-size:0.75rem;padding:0.2rem 0.3rem">—</td>
-          <td><input class="attack-input" placeholder="—"></td>
-          <td><input class="attack-input" placeholder="—"></td>
-          <td></td>
         </tr>`).join('')}
       </tbody>
     </table>
