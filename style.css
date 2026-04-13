@@ -2671,10 +2671,14 @@ input.hp-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0;
 }
 
 /* Feat browser */
-.feat-filter-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem;
+.feat-filter-row { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+.feat-cat-badge {
+  font-size: 0.6rem;
+  border: 1px solid;
+  border-radius: 99px;
+  padding: 1px 0.45rem;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 /* ── Responsive ── */

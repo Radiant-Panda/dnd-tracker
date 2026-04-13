@@ -2931,12 +2931,15 @@ const FEAT_CAT_LABELS = { 'EB': 'Epic Boon', 'FS:P': 'Fighting Style', 'FS:R': '
 
 let _featSearch = '', _featCatFilter = 'All', _featSrcFilter = 'All', _featShowCount = 50;
 
+const FEAT_CAT_OPTS = ['All','General','Origin','Fighting Style','Epic Boon'];
+const FEAT_SRC_OPTS = ['All','PHB 2024','PHB 2014',"Xanathar's","Tasha's"];
+
 function openFeatBrowser() {
   _featSearch = ''; _featCatFilter = 'All'; _featSrcFilter = 'All'; _featShowCount = 50;
-  const catBtns = ['All','General','Origin','Fighting Style','Epic Boon']
-    .map(c => `<button class="btn btn-sm ${c==='All'?'btn-primary':''}" onclick="setFeatFilter('cat',${JSON.stringify(c)},this)">${c}</button>`).join('');
-  const srcBtns = ['All','PHB 2024','PHB 2014',"Xanathar's","Tasha's"]
-    .map(s => `<button class="btn btn-sm ${s==='All'?'btn-primary':''}" onclick="setFeatFilter('src',${JSON.stringify(s)},this)">${s}</button>`).join('');
+  const catBtns = FEAT_CAT_OPTS.map((c,i) =>
+    `<button class="btn btn-sm ${i===0?'btn-primary':''}" onclick="setFeatFilter('cat',${i},this)">${esc(c)}</button>`).join('');
+  const srcBtns = FEAT_SRC_OPTS.map((s,i) =>
+    `<button class="btn btn-sm ${i===0?'btn-primary':''}" onclick="setFeatFilter('src',${i},this)">${esc(s)}</button>`).join('');
   openModal(`<h2>✦ Browse Feats</h2>
     <input type="text" id="feat-search" placeholder="Search feats..." style="width:100%;margin-bottom:0.4rem" oninput="_featSearch=this.value;_featShowCount=50;updateFeatResults()">
     <div class="feat-filter-row" id="feat-cat-filters">${catBtns}</div>
@@ -2946,12 +2949,12 @@ function openFeatBrowser() {
   setTimeout(() => { updateFeatResults(); document.getElementById('feat-search')?.focus(); }, 20);
 }
 
-function setFeatFilter(type, value, btn) {
+function setFeatFilter(type, idx, btn) {
   if (type === 'cat') {
-    _featCatFilter = value;
+    _featCatFilter = FEAT_CAT_OPTS[idx] || 'All';
     document.querySelectorAll('#feat-cat-filters .btn').forEach(b => b.classList.remove('btn-primary'));
   } else {
-    _featSrcFilter = value;
+    _featSrcFilter = FEAT_SRC_OPTS[idx] || 'All';
     document.querySelectorAll('#feat-src-filters .btn').forEach(b => b.classList.remove('btn-primary'));
   }
   btn.classList.add('btn-primary');
@@ -3003,16 +3006,16 @@ function updateFeatResults() {
       <div class="spell-browser-left">
         <span style="font-size:0.82rem;font-weight:600">${esc(f.name)}</span>
         <span class="spell-source-badge" style="background:${src.color}">${src.abbr}</span>
-        <span class="spell-badge" style="border-color:${catColor};color:${catColor}">${catLabel}</span>
+        <span class="feat-cat-badge" style="border-color:${catColor};color:${catColor}">${catLabel}</span>
         ${f.prerequisite ? `<span style="font-size:0.68rem;color:var(--text-dim)">${esc(f.prerequisite)}</span>` : ''}
       </div>
       <div style="display:flex;gap:0.3rem;flex-shrink:0">
-        <button class="btn btn-sm" onclick="toggleFeatDesc(${JSON.stringify(uid)})">▾</button>
+        <button id="fbt-${uid}" class="btn btn-sm" onclick="toggleFeatDesc('${uid}')">▾</button>
         ${isAdded
           ? `<button class="btn btn-sm btn-primary" disabled style="opacity:0.7">✓ Added</button>`
           : `<button class="btn btn-sm" onclick="addFeatToChar(${JSON.stringify(f.name)})">+ Add</button>`}
       </div>
-      <div id="${uid}" class="hidden" style="width:100%;padding:0.3rem 0.25rem 0.4rem;font-size:0.78rem;color:var(--text-dim);border-top:1px solid rgba(155,109,255,0.15);margin-top:0.2rem">
+      <div id="${uid}" style="display:none;width:100%;padding:0.3rem 0.25rem 0.4rem;font-size:0.78rem;color:var(--text-dim);border-top:1px solid rgba(155,109,255,0.15);margin-top:0.2rem">
         <p style="margin:0 0 0.3rem">${esc(f.desc || '')}</p>
         ${abLine ? `<div style="color:var(--gold-lt);font-size:0.74rem">Ability bonus: ${esc(abLine)}</div>` : ''}
       </div>
@@ -3023,13 +3026,10 @@ function updateFeatResults() {
 function toggleFeatDesc(uid) {
   const el = document.getElementById(uid);
   if (!el) return;
-  el.classList.toggle('hidden');
-  // Flip the ▾/▴ on the adjacent button
-  const row = el.previousElementSibling;
-  if (row) {
-    const btn = row.querySelector('button');
-    if (btn) btn.textContent = el.classList.contains('hidden') ? '▾' : '▴';
-  }
+  const hidden = el.style.display === 'none';
+  el.style.display = hidden ? 'block' : 'none';
+  const btn = document.getElementById('fbt-' + uid);
+  if (btn) btn.textContent = hidden ? '▴' : '▾';
 }
 
 function addFeatToChar(featName) {
