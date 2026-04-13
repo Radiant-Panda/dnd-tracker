@@ -105,6 +105,7 @@ let currentNpcId = null;
 let currentTab = 'core'; // still used by campaign tabs
 let monsterCache = null;
 let charPanelOpen = false;
+let _combatLogOpen = false;
 let wizardData = {};
 
 // ── Routing & Breadcrumb ───────────────────────────────────────────────────────
@@ -625,7 +626,26 @@ function getConditionClass(cond) {
 }
 
 function getCampaign() { return db.campaigns.find(c => c.id === currentCampaignId); }
-function getInitiative() { const c=getCampaign(); if(!c.initiative) c.initiative={round:1,currentIndex:0,combatants:[]}; c.initiative.combatants.forEach(cb => { if(typeof cb.tempHP === 'undefined') cb.tempHP = 0; }); return c.initiative; }
+function getInitiative() { const c=getCampaign(); if(!c.initiative) c.initiative={round:1,currentIndex:0,combatants:[],log:[]}; c.initiative.combatants.forEach(cb => { if(typeof cb.tempHP === 'undefined') cb.tempHP = 0; }); if(!c.initiative.log) c.initiative.log=[]; return c.initiative; }
+
+function combatLog(text) {
+  const init = getInitiative();
+  init.log.push({ round: init.round||1, text, ts: Date.now() });
+  saveData(db);
+  // Update log panel in-place if visible — no full re-render needed
+  const panel = document.getElementById('combat-log-entries');
+  if (panel) panel.innerHTML = _renderCombatLogEntries(init);
+}
+function _renderCombatLogEntries(init) {
+  const log = [...(init.log||[])].reverse();
+  if (!log.length) return `<p style="color:var(--text-dim);font-size:0.78rem;text-align:center;padding:0.4rem">No events yet.</p>`;
+  return log.map(e =>
+    `<div style="display:flex;align-items:baseline;gap:0.4rem;padding:0.15rem 0">
+      <span style="font-size:0.6rem;background:rgba(155,109,255,0.25);color:#c4b5fd;border:1px solid rgba(155,109,255,0.35);border-radius:99px;padding:1px 5px;flex-shrink:0;white-space:nowrap">R${e.round}</span>
+      <span style="font-size:0.75rem;color:var(--text-dim)">${esc(e.text)}</span>
+    </div>`
+  ).join('');
+}
 
 function renderInitiativeTracker(campaign) {
   const init = campaign.initiative || {round:1,currentIndex:0,combatants:[]};
@@ -646,6 +666,7 @@ function renderInitiativeTracker(campaign) {
         <button class="btn btn-sm" onclick="openAoeDamageModal()">&#128165; AoE Damage</button>
         <button class="btn btn-sm" onclick="addAllPcsToInitiative()">Add All PCs</button>
         <button class="btn btn-sm" onclick="sortInitiative()">Sort &#8595;</button>
+        <button class="btn btn-sm${_combatLogOpen?' btn-primary':''}" onclick="toggleCombatLog()">📜 Log${(init.log||[]).length>0?` (${init.log.length})`:''}</button>
       </div>
     </div>
     <div class="initiative-list">
@@ -693,6 +714,16 @@ function renderInitiativeTracker(campaign) {
         </div>`;
       }).join('')}
     </div>
+    ${_combatLogOpen ? `<div id="combat-log-panel" style="margin-top:0.75rem;background:rgba(0,0,0,0.25);border:1px solid rgba(155,109,255,0.25);border-radius:6px;padding:0.5rem 0.6rem">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.35rem">
+        <span style="font-size:0.72rem;font-weight:700;color:#c4b5fd;letter-spacing:0.05em">COMBAT LOG</span>
+        <div style="display:flex;gap:0.3rem">
+          <button class="btn btn-sm" onclick="copyCombatLog()" title="Copy to clipboard">📋 Copy</button>
+          <button class="btn btn-sm btn-danger" onclick="clearCombatLog()" style="padding:0.15rem 0.4rem;font-size:0.72rem">Clear</button>
+        </div>
+      </div>
+      <div id="combat-log-entries" style="max-height:200px;overflow-y:auto">${_renderCombatLogEntries(init)}</div>
+    </div>` : ''}
     <div style="margin-top:1rem;display:flex;gap:0.5rem;flex-wrap:wrap">
       <button class="btn btn-primary" onclick="nextTurn()">Next Turn &#8594;</button>
       <button class="btn btn-sm" onclick="openAddCombatantModal()">+ Add Combatant</button>
@@ -724,7 +755,9 @@ function openAddCombatantModal() {
 }
 function addCombatant() {
   const init = getInitiative();
-  init.combatants.push({ id:uid(), name:document.getElementById('cb-name').value.trim()||'Unknown', initiative:parseInt(document.getElementById('cb-init').value)||1, ac:parseInt(document.getElementById('cb-ac').value)||10, hp:parseInt(document.getElementById('cb-hp').value)||10, maxHP:parseInt(document.getElementById('cb-hp').value)||10, type:document.getElementById('cb-type').value, conditions:[], notes:'', tempHP:0 });
+  const name = document.getElementById('cb-name').value.trim()||'Unknown';
+  init.combatants.push({ id:uid(), name, initiative:parseInt(document.getElementById('cb-init').value)||1, ac:parseInt(document.getElementById('cb-ac').value)||10, hp:parseInt(document.getElementById('cb-hp').value)||10, maxHP:parseInt(document.getElementById('cb-hp').value)||10, type:document.getElementById('cb-type').value, conditions:[], notes:'', tempHP:0 });
+  combatLog(`${name} added to combat`);
   saveData(db); closeModal(); renderApp();
 }
 function quickAddCombatant(entityId, type) {
@@ -741,6 +774,7 @@ function quickAddCombatant(entityId, type) {
   if (raw === null) return; // cancelled
   const initiative = parseInt(raw) || rolled;
   getInitiative().combatants.push({ id:uid(), charId, name, initiative, ac, hp, maxHP, type, conditions:[], notes:'', tempHP:0 });
+  combatLog(`${name} added to combat (init ${initiative})`);
   saveData(db); closeModal(); renderApp();
 }
 function addAllPcsToInitiative() {
@@ -768,6 +802,7 @@ function _checkConcentration(i, dmg) {
   const dc = Math.max(10, Math.floor(dmg / 2));
   cb._concCheck = { dc, spell, dmg };
   saveData(db);
+  combatLog(`${cb.name}: Concentration check DC ${dc} (${spell})`);
   showToast(`<strong>${esc(cb.name)}</strong>: Concentration check — DC ${dc} (${esc(spell)})`);
 }
 
@@ -841,13 +876,23 @@ function nextTurn() {
 function updateCombatantHP(i,val) {
   const cb=getInitiative().combatants[i];
   const oldHP = cb ? cb.hp : 0;
-  CharacterStore.updateInitiativeHP(currentCampaignId,i,+val,cb.tempHP);
-  if (cb && +val < oldHP) _checkConcentration(i, oldHP - +val);
+  const newHP = +val;
+  CharacterStore.updateInitiativeHP(currentCampaignId,i,newHP,cb.tempHP);
+  if (cb && newHP !== oldHP) {
+    const diff = Math.abs(newHP - oldHP);
+    if (newHP < oldHP) {
+      combatLog(`${cb.name} took ${diff} damage (HP ${oldHP}→${newHP})`);
+      _checkConcentration(i, diff);
+    } else {
+      combatLog(`${cb.name} healed ${diff} HP (HP ${oldHP}→${newHP})`);
+    }
+  }
 }
 function updateCombatantInitiative(i,val) { if(!val||isNaN(val)) return; getInitiative().combatants[i].initiative=val; saveData(db); }
 function damageCombatant(i,amt) {
   const cb=getInitiative().combatants[i];
   if (!cb || amt <= 0) return;
+  const oldHP = cb.hp;
   let remaining = amt;
   // Temp HP absorbs first
   if (cb.tempHP > 0) {
@@ -858,14 +903,17 @@ function damageCombatant(i,amt) {
   // Remaining damage applies to real HP
   const newHP = Math.max(0, cb.hp - remaining);
   CharacterStore.updateInitiativeHP(currentCampaignId,i,newHP,cb.tempHP);
+  combatLog(`${cb.name} took ${amt} damage (HP ${oldHP}→${newHP})`);
   _checkConcentration(i,amt);
   renderApp();
 }
 function healCombatant(i,amt) {
   const cb=getInitiative().combatants[i];
   if (!cb || amt <= 0) return;
+  const oldHP = cb.hp;
   const newHP = Math.min(cb.maxHP, cb.hp + amt);
   CharacterStore.updateInitiativeHP(currentCampaignId,i,newHP,cb.tempHP);
+  combatLog(`${cb.name} healed ${amt} HP (HP ${oldHP}→${newHP})`);
   renderApp();
 }
 function openTempHPInput(i) {
@@ -888,14 +936,18 @@ function setTempHP(i, amount) {
     renderApp();
   }
 }
-function removeCombatant(i) { const init=getInitiative(); init.combatants.splice(i,1); if(init.currentIndex>=init.combatants.length) init.currentIndex=0; saveData(db); renderApp(); }
+function removeCombatant(i) { const init=getInitiative(); const name=init.combatants[i]?.name||'Unknown'; init.combatants.splice(i,1); if(init.currentIndex>=init.combatants.length) init.currentIndex=0; combatLog(`${name} removed from combat`); saveData(db); renderApp(); }
 function spendLegendary(i, pipIdx) {
   const cb = getInitiative().combatants[i];
   if (!cb || !cb.legendaryMax) return;
   // Clicking a filled pip sets legendaryUsed to pipIdx+1 (spend that many)
   const newUsed = pipIdx + 1;
   if (newUsed <= (cb.legendaryUsed||0)) return; // already spent
+  const prev = cb.legendaryUsed||0;
   cb.legendaryUsed = Math.min(newUsed, cb.legendaryMax);
+  const spent = cb.legendaryUsed - prev;
+  const remaining = cb.legendaryMax - cb.legendaryUsed;
+  combatLog(`${cb.name} used ${spent} legendary action${spent!==1?'s':''} (${remaining} remaining)`);
   saveData(db); renderApp();
 }
 function resetLegendary(i) {
@@ -904,7 +956,20 @@ function resetLegendary(i) {
   cb.legendaryUsed = 0;
   saveData(db); renderApp();
 }
-function clearInitiative() { if(!confirm('End combat and clear all combatants?')) return; getCampaign().initiative={round:1,currentIndex:0,combatants:[]}; saveData(db); renderApp(); }
+function toggleCombatLog() { _combatLogOpen = !_combatLogOpen; renderApp(); }
+function clearCombatLog() { const init=getInitiative(); init.log=[]; saveData(db); renderApp(); }
+function copyCombatLog() {
+  const init=getInitiative();
+  const text = [...(init.log||[])].map(e=>`[Round ${e.round}] ${e.text}`).join('\n');
+  if (!text) { showToast('Combat log is empty.'); return; }
+  navigator.clipboard.writeText(text).then(()=>showToast('Combat log copied to clipboard!')).catch(()=>showToast('Copy failed — try a different browser.'));
+}
+function clearInitiative() {
+  if(!confirm('End combat and clear all combatants?')) return;
+  _combatLogOpen = false;
+  getCampaign().initiative={round:1,currentIndex:0,combatants:[],log:[]};
+  saveData(db); renderApp();
+}
 
 function openAoeDamageModal() {
   const combatants = getInitiative().combatants;
@@ -1016,10 +1081,12 @@ function toggleCondition(i, cond) {
   const existIdx = cb.conditions.findIndex(c => condName(c) === cond);
   if (existIdx >= 0) {
     cb.conditions.splice(existIdx, 1);
+    combatLog(`${cb.name}: ${cond} removed`);
   } else {
     const durInput = document.querySelector(`.cond-dur-input[data-cond="${cond}"]`);
     const dur = durInput ? parseInt(durInput.value) : 0;
     cb.conditions.push(dur > 0 ? { name: cond, duration: dur } : cond);
+    combatLog(`${cb.name}: ${cond} applied${dur>0?` (${dur} rounds)`:''}`);
   }
   saveData(db);
   const isActive = cb.conditions.some(c => condName(c) === cond);
@@ -1052,7 +1119,9 @@ function _conditionRowHtml(i, conditions) {
   }).join('')}<button class="btn btn-sm" onclick="openConditionPicker(${i})">+ Condition</button>`;
 }
 function removeCondition(i,cond) {
-  const init=getInitiative(); init.combatants[i].conditions=(init.combatants[i].conditions||[]).filter(c=>condName(c)!==cond);
+  const init=getInitiative(); const cb=init.combatants[i];
+  cb.conditions=(cb.conditions||[]).filter(c=>condName(c)!==cond);
+  combatLog(`${cb.name}: ${cond} removed`);
   saveData(db); renderApp();
 }
 function openConditionRef(cond, combatantIdx) {
