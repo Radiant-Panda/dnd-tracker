@@ -81,6 +81,7 @@ function loadData() {
       if (!c.initiative) c.initiative = null;
       if (!c.campaignTab) c.campaignTab = 'characters';
       if (c.activeCharId === undefined) c.activeCharId = (c.characters||[])[0] || null;
+      if (!c.journal) c.journal = [];
     });
     Object.values(raw.characters).forEach(ch => migrateCharacter(ch));
     return raw;
@@ -200,7 +201,7 @@ function openEditCampaignModal(id) {
 function createCampaign() {
   const name = document.getElementById('camp-name').value.trim();
   if (!name) { alert('Please enter a campaign name.'); return; }
-  db.campaigns.push({ id:uid(), name, description:document.getElementById('camp-desc').value.trim(), characters:[], npcs:[], initiative:null, campaignTab:'characters', activeCharId:null, createdAt:Date.now() });
+  db.campaigns.push({ id:uid(), name, description:document.getElementById('camp-desc').value.trim(), characters:[], npcs:[], initiative:null, campaignTab:'characters', activeCharId:null, journal:[], createdAt:Date.now() });
   saveData(db); closeModal(); renderApp();
 }
 function updateCampaign(id) {
@@ -230,6 +231,7 @@ function renderCampaignDetail() {
         ${tab==='characters'?`<button class="btn btn-primary" onclick="openNewCharModal()">+ Add Character</button>`:''}
         ${tab==='npcs'?`<button class="btn btn-primary" onclick="openNewNpcModal()">+ Add NPC</button>`:''}
         ${tab==='initiative'?`<button class="btn btn-primary" onclick="openAddCombatantModal()">+ Add Combatant</button><button class="btn btn-sm" onclick="nextTurn()">Next Turn &#8594;</button><button class="btn btn-sm btn-danger" onclick="clearInitiative()">End Combat</button>`:''}
+        ${tab==='journal'?`<button class="btn btn-primary" onclick="addJournalEntry()">+ New Entry</button>`:''}
         <button class="btn btn-sm" onclick="openMagicItemRandomizer()">🎲 Magic Items</button>
       </div>
     </div>
@@ -238,10 +240,12 @@ function renderCampaignDetail() {
       <div class="tab ${tab==='characters'?'active':''}" onclick="showCampaign('${campaign.id}','characters')">Characters</div>
       <div class="tab ${tab==='npcs'?'active':''}" onclick="showCampaign('${campaign.id}','npcs')">NPCs</div>
       <div class="tab ${tab==='initiative'?'active':''}" onclick="showCampaign('${campaign.id}','initiative')">&#9876; Initiative</div>
+      <div class="tab ${tab==='journal'?'active':''}" onclick="showCampaign('${campaign.id}','journal')">📖 Journal ${(campaign.journal||[]).length>0?`<span class="spell-count">${(campaign.journal||[]).length}</span>`:''}</div>
     </div>
     ${tab==='characters' ? renderCharacterCards(campaign) : ''}
     ${tab==='npcs'       ? renderNpcCards(campaign) : ''}
-    ${tab==='initiative' ? renderInitiativeTracker(campaign) : ''}`;
+    ${tab==='initiative' ? renderInitiativeTracker(campaign) : ''}
+    ${tab==='journal'    ? renderJournalTab(campaign) : ''}`;
 }
 
 // ── Characters Tab ────────────────────────────────────────────────────────────
@@ -333,6 +337,81 @@ function deleteNpc(id) {
   if (c) c.npcs = c.npcs.filter(nid => nid !== id);
   saveData(db); renderApp();
 }
+
+// ── Session Journal ───────────────────────────────────────────────────────────
+function todayISO() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
+function addJournalEntry() {
+  const c = db.campaigns.find(c => c.id === currentCampaignId);
+  if (!c) return;
+  c.journal = c.journal || [];
+  const entry = { id: uid(), date: todayISO(), title: '', body: '', createdAt: Date.now() };
+  c.journal.unshift(entry);
+  saveData(db); renderApp();
+  // Scroll to first entry
+  setTimeout(() => document.getElementById(`jentry-${entry.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+}
+
+function updateJournalEntry(campaignId, entryId, field, value) {
+  const c = db.campaigns.find(c => c.id === campaignId);
+  if (!c) return;
+  const entry = (c.journal||[]).find(e => e.id === entryId);
+  if (entry) { entry[field] = value; saveData(db); }
+}
+
+function deleteJournalEntry(campaignId, entryId) {
+  if (!confirm('Delete this journal entry?')) return;
+  const c = db.campaigns.find(c => c.id === campaignId);
+  if (!c) return;
+  c.journal = (c.journal||[]).filter(e => e.id !== entryId);
+  saveData(db); renderApp();
+}
+
+function toggleJournalEntry(id) {
+  const body = document.getElementById(`jbody-${id}`);
+  const chevron = document.getElementById(`jchev-${id}`);
+  if (!body) return;
+  const collapsed = body.style.display === 'none';
+  body.style.display = collapsed ? '' : 'none';
+  if (chevron) chevron.textContent = collapsed ? '▴' : '▾';
+}
+
+function renderJournalTab(campaign) {
+  const entries = [...(campaign.journal||[])].sort((a,b) => b.createdAt - a.createdAt);
+  if (entries.length === 0) {
+    return `<div class="empty"><div class="empty-icon">📖</div><p>No journal entries yet.<br><button class="btn btn-primary" style="margin-top:0.6rem" onclick="addJournalEntry()">+ New Entry</button></p></div>`;
+  }
+  return `<div class="journal-list">${entries.map((entry, i) => {
+    const isNewest = i === 0;
+    const cid = esc(campaign.id);
+    const eid = esc(entry.id);
+    const displayDate = entry.date ? entry.date.replace(/-/g,'/') : '—';
+    return `<div class="sheet-panel journal-entry" id="jentry-${eid}" style="margin-bottom:0.75rem;padding:0.6rem 0.75rem 0.6rem 1rem">
+      <div class="journal-header" onclick="toggleJournalEntry('${eid}')" style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;user-select:none">
+        <input type="date" class="journal-date-input" value="${esc(entry.date||'')}"
+          onclick="event.stopPropagation()"
+          oninput="updateJournalEntry('${cid}','${eid}','date',this.value)"
+          style="background:none;border:none;color:var(--gold);font-size:0.78rem;cursor:pointer;padding:0;width:120px;flex-shrink:0">
+        <input type="text" class="journal-title-input" value="${esc(entry.title||'')}" placeholder="Session title…"
+          onclick="event.stopPropagation()"
+          oninput="updateJournalEntry('${cid}','${eid}','title',this.value)"
+          style="flex:1;background:none;border:none;font-size:0.92rem;font-weight:600;color:var(--text);padding:0">
+        <button class="btn btn-icon btn-danger" onclick="event.stopPropagation();deleteJournalEntry('${cid}','${eid}')" style="flex-shrink:0">&times;</button>
+        <span id="jchev-${eid}" style="color:var(--text-dim);font-size:0.75rem;flex-shrink:0">${isNewest?'▴':'▾'}</span>
+      </div>
+      <div id="jbody-${eid}" style="display:${isNewest?'':'none'};margin-top:0.5rem">
+        <textarea class="journal-body-input" placeholder="What happened this session…"
+          oninput="updateJournalEntry('${cid}','${eid}','body',this.value)"
+          style="width:100%;min-height:140px;resize:vertical;background:rgba(0,0,0,0.2);border:1px solid var(--border);border-radius:4px;padding:0.5rem;color:var(--text);font-size:0.85rem;line-height:1.5;font-family:inherit"
+        >${esc(entry.body||'')}</textarea>
+      </div>
+    </div>`;
+  }).join('')}</div>`;
+}
+
 function renderNpcSheet() {
   const npc = db.npcs[currentNpcId];
   if (!npc) return '<p>NPC not found.</p>';

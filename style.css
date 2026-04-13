@@ -2700,6 +2700,13 @@ input.hp-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0;
   border-color: rgba(155, 109, 255, 0.4) !important;
 }
 
+/* Journal */
+.journal-entry { border-left: 3px solid rgba(155,109,255,0.4); }
+.journal-header:hover { opacity: 0.85; }
+.journal-date-input::-webkit-calendar-picker-indicator { filter: invert(0.6) sepia(1) saturate(3) hue-rotate(5deg); cursor: pointer; }
+.journal-title-input:focus, .journal-date-input:focus { outline: none; border-bottom: 1px solid var(--border); }
+.journal-body-input:focus { outline: none; border-color: rgba(155,109,255,0.5); }
+
 /* Concentration tracker */
 .conc-tracker {
   display: flex; align-items: center; gap: 0.4rem;
