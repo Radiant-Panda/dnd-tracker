@@ -6,6 +6,9 @@ function migrateCharacter(ch) {
   if (!ch.languages)      ch.languages = '';
   if (!ch.proficiencies)  ch.proficiencies = '';
   if (ch.attunedItems === undefined) ch.attunedItems = [];
+  if (ch.portraitZoom === undefined) ch.portraitZoom = 100;
+  if (ch.portraitX    === undefined) ch.portraitX    = 50;
+  if (ch.portraitY    === undefined) ch.portraitY    = 50;
   // Ensure equipment is always an array of strings or valid objects
   if (!ch.equipment) ch.equipment = [];
   ch.equipment = ch.equipment.map(e => (e === null || e === undefined) ? '' : e).filter(Boolean);
@@ -1621,20 +1624,27 @@ function passivePerception(ch, pb) {
 function renderPortraitCard(ch) {
   const icon = CLASS_ICONS[ch.class] || '⚔';
   const hasPortrait = !!ch.portrait;
+  const zoom = ch.portraitZoom || 100;
+  const px = ch.portraitX !== undefined ? ch.portraitX : 50;
+  const py = ch.portraitY !== undefined ? ch.portraitY : 50;
+  const portraitInner = hasPortrait
+    ? `<div class="portrait-img-wrap">
+        <img src="${ch.portrait}" style="width:100%;height:100%;object-fit:cover;object-position:${px}% ${py}%;transform:scale(${zoom/100});transform-origin:${px}% ${py}%">
+      </div>`
+    : `<span class="portrait-icon">${icon}</span>`;
   return `<div class="portrait-card">
-    <div class="portrait-frame" ${hasPortrait ? `style="background-image:url(${ch.portrait})"` : ''}>
-      ${hasPortrait ? '' : `<span class="portrait-icon">${icon}</span>`}
-    </div>
+    <div class="portrait-frame">${portraitInner}</div>
     <div class="portrait-info">
       <div class="portrait-name">${esc(ch.name)}</div>
       <div class="portrait-meta">${esc(ch.race || '—')} ${formatClassLine(ch)} &bull; Lv ${ch.level}</div>
     </div>
-    <div class="flex gap-1">
+    <div class="flex gap-1" style="flex-wrap:wrap;justify-content:center">
       <label class="btn btn-sm portrait-upload-btn">
         ${hasPortrait ? 'Change' : 'Upload Portrait'}
         <input type="file" accept="image/*" onchange="uploadPortrait(event)" style="display:none">
       </label>
-      ${hasPortrait ? '<button class="btn btn-sm portrait-upload-btn" onclick="removePortrait()">Remove</button>' : ''}
+      ${hasPortrait ? `<button class="btn btn-sm portrait-upload-btn" onclick="openPortraitFramer(null)">Adjust</button>` : ''}
+      ${hasPortrait ? `<button class="btn btn-sm portrait-upload-btn" onclick="removePortrait()">Remove</button>` : ''}
     </div>
   </div>`;
 }
@@ -1643,14 +1653,82 @@ function uploadPortrait(event) {
   const file = event.target.files[0]; if (!file) return;
   const reader = new FileReader();
   reader.onload = function(e) {
-    db.characters[currentCharId].portrait = e.target.result;
-    saveData(db); renderApp();
+    openPortraitFramer(e.target.result);
   };
   reader.readAsDataURL(file);
 }
 
+function openPortraitFramer(newDataUrl) {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  const src = newDataUrl || ch.portrait;
+  if (!src) return;
+  const zoom = newDataUrl ? 100 : (ch.portraitZoom || 100);
+  const px   = newDataUrl ? 50  : (ch.portraitX !== undefined ? ch.portraitX : 50);
+  const py   = newDataUrl ? 50  : (ch.portraitY !== undefined ? ch.portraitY : 50);
+  // Store pending src on window so sliders can read it
+  window._pfSrc = src;
+  openModal(`<h2>Frame Your Portrait ✦</h2>
+    <div style="display:flex;flex-direction:column;align-items:center;gap:0.75rem">
+      <div class="portrait-frame" style="overflow:hidden;position:relative">
+        <img id="pf-img" src="${src}"
+          style="width:100%;height:100%;object-fit:cover;
+                 object-position:${px}% ${py}%;
+                 transform:scale(${zoom/100});
+                 transform-origin:${px}% ${py}%">
+      </div>
+      <div style="width:100%;max-width:320px">
+        <div class="pf-slider-row">
+          <label class="pf-label">Zoom</label>
+          <input type="range" id="pf-zoom" min="100" max="300" value="${zoom}" step="1"
+            oninput="pfUpdate()" style="accent-color:#9b6dff;flex:1">
+          <span id="pf-zoom-val" class="pf-val">${zoom}%</span>
+        </div>
+        <div class="pf-slider-row">
+          <label class="pf-label">Horizontal</label>
+          <input type="range" id="pf-x" min="0" max="100" value="${px}" step="1"
+            oninput="pfUpdate()" style="accent-color:#9b6dff;flex:1">
+        </div>
+        <div class="pf-slider-row">
+          <label class="pf-label">Vertical</label>
+          <input type="range" id="pf-y" min="0" max="100" value="${py}" step="1"
+            oninput="pfUpdate()" style="accent-color:#9b6dff;flex:1">
+        </div>
+      </div>
+      <div style="display:flex;gap:0.5rem;width:100%;max-width:320px">
+        <button class="btn" style="flex:1" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" style="flex:2" onclick="savePortrait()">Save Portrait</button>
+      </div>
+    </div>
+  `);
+}
+
+function pfUpdate() {
+  const img = document.getElementById('pf-img'); if (!img) return;
+  const zoom = document.getElementById('pf-zoom')?.value || 100;
+  const px   = document.getElementById('pf-x')?.value || 50;
+  const py   = document.getElementById('pf-y')?.value || 50;
+  img.style.objectPosition = `${px}% ${py}%`;
+  img.style.transform = `scale(${zoom/100})`;
+  img.style.transformOrigin = `${px}% ${py}%`;
+  const zv = document.getElementById('pf-zoom-val');
+  if (zv) zv.textContent = zoom + '%';
+}
+
+function savePortrait() {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  ch.portrait    = window._pfSrc;
+  ch.portraitZoom = parseInt(document.getElementById('pf-zoom')?.value) || 100;
+  ch.portraitX   = parseInt(document.getElementById('pf-x')?.value);
+  ch.portraitY   = parseInt(document.getElementById('pf-y')?.value);
+  saveData(db);
+  closeModal();
+  renderApp();
+}
+
 function removePortrait() {
-  delete db.characters[currentCharId].portrait;
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  delete ch.portrait;
+  ch.portraitZoom = 100; ch.portraitX = 50; ch.portraitY = 50;
   saveData(db); renderApp();
 }
 
