@@ -6,6 +6,8 @@ function migrateCharacter(ch) {
   if (!ch.languages)      ch.languages = '';
   if (!ch.proficiencies)  ch.proficiencies = '';
   if (ch.attunedItems === undefined) ch.attunedItems = [];
+  if (ch.activeConcentration === undefined) ch.activeConcentration = null;
+  if (ch.exhaustionLevel === undefined) ch.exhaustionLevel = 0;
   if (ch.portraitZoom === undefined) ch.portraitZoom = 100;
   if (ch.portraitX    === undefined) ch.portraitX    = 50;
   if (ch.portraitY    === undefined) ch.portraitY    = 50;
@@ -1746,13 +1748,36 @@ function renderAbilityScores(ch) {
   </div>`;
 }
 
+const EXHAUSTION_EFFECTS = [
+  '', // 0 — nothing shown
+  'Disadvantage on ability checks',
+  '+Speed halved',
+  '+Disadv. on attacks/saves',
+  '+HP max halved',
+  '+Speed = 0',
+  'Dead',
+];
+
 function renderCoreStats(ch, pb) {
+  const exLevel = ch.exhaustionLevel || 0;
+  const exEffect = EXHAUSTION_EFFECTS[exLevel] || '';
+  const exPips = [1,2,3,4,5,6].map(n => {
+    const filled = n <= exLevel;
+    // clicking a filled pip at current level resets to 0; otherwise sets to n
+    const onclick = filled && n === exLevel ? `setExhaustion(0)` : `setExhaustion(${n})`;
+    return `<span class="ex-pip ${filled?'filled':''}" onclick="${onclick}" title="${filled?'Click to clear exhaustion':'Set exhaustion '+n}"></span>`;
+  }).join('');
   return `<div class="sheet-panel" style="margin-top:0.6rem">
     <div class="cs-section-label">Core Stats</div>
     <div class="cs-core-row"><span>Proficiency Bonus</span><span class="text-gold cs-core-val">+${pb}</span></div>
     <div class="cs-core-row"><span>Passive Perception</span><span class="text-gold cs-core-val">${passivePerception(ch,pb)}</span></div>
-    <div class="cs-core-row" style="border:none"><span>Inspiration</span>
+    <div class="cs-core-row"><span>Inspiration</span>
       <button class="cs-inspiration-toggle ${ch.inspiration?'active':''}" onclick="toggleInspiration()" title="Inspiration">&#9733;</button>
+    </div>
+    <div class="cs-core-row" style="border:none;flex-wrap:wrap;gap:0.25rem">
+      <span>Exhaustion</span>
+      <div class="ex-pips-row">${exPips}</div>
+      ${exLevel > 0 ? `<span class="ex-effect-text">${esc(exEffect)}</span>` : ''}
     </div>
   </div>`;
 }
@@ -1864,6 +1889,11 @@ function renderCombatSection(ch) {
         <button class="hp-grid-btn hp-short-btn" onclick="openShortRestDialog()"><span class="hp-grid-icon">&#10040;</span><span class="hp-grid-label">Short Rest</span></button>
       </div>
     </div>
+    ${ch.activeConcentration ? `
+    <div class="conc-tracker">
+      <span class="conc-pill">◈ Concentrating: ${esc(ch.activeConcentration.spellName)}${ch.activeConcentration.castLevel ? ` (${['','1st','2nd','3rd','4th','5th','6th','7th','8th','9th'][ch.activeConcentration.castLevel]})` : ''}</span>
+      <button class="conc-clear-btn" onclick="clearConcentration()" title="End concentration">×</button>
+    </div>` : ''}
     <div class="death-saves-row">
       <span class="cs-field-label">Death Saves</span>
       <span class="ds-group">
@@ -1952,6 +1982,36 @@ function renderEquipmentCurrency(ch) {
       <input type="text" id="eq-input" placeholder="Add item..." onkeydown="if(event.key==='Enter')addEquipment()">
       <button class="btn btn-sm" onclick="addEquipment()">Add</button>
       <button class="btn btn-sm" onclick="openMagicItemBrowser()">⚔ Magic Item</button>
+    </div>
+    <div style="margin-top:0.8rem">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.3rem">
+        <div class="cs-field-label" style="margin:0">Attunement</div>
+        <span class="attune-count">${(ch.attunedItems||[]).length}/3</span>
+      </div>
+      <div class="attune-slots">
+        ${[0,1,2].map(i => {
+          const item = (ch.attunedItems||[])[i];
+          if (item) {
+            return `<div class="attune-slot attune-filled">
+              <span class="attune-name">${esc(item)}</span>
+              <button class="btn btn-icon btn-danger" onclick="unattuneItem(${i})" style="font-size:0.7rem;padding:0 0.2rem">&times;</button>
+            </div>`;
+          }
+          // Find magic items with attunement requirement not already attuned
+          const attunable = (ch.equipment||[]).filter(e =>
+            typeof e === 'object' && e._magic && e.attunement && !(ch.attunedItems||[]).includes(e.name)
+          );
+          if (!attunable.length) {
+            return `<div class="attune-slot attune-empty"><span class="attune-empty-label">— empty —</span></div>`;
+          }
+          const opts = attunable.map(e => `<option value="${esc(e.name)}">${esc(e.name)}</option>`).join('');
+          return `<div class="attune-slot attune-empty">
+            <select class="lang-add-select" style="font-size:0.72rem;width:100%" onchange="attuneItem(this.value,${i});this.value=''">
+              <option value="">+ Attune item…</option>${opts}
+            </select>
+          </div>`;
+        }).join('')}
+      </div>
     </div>
     <div style="margin-top:0.8rem">
       <div class="cs-field-label" style="color:var(--gold);margin-bottom:0.4rem">Currency</div>
@@ -2452,15 +2512,24 @@ function openCastModal(spellName, minLevel) {
 function confirmCast(spellName, slotLevel) {
   const ch = db.characters[currentCharId]; if (!ch) return;
   if ((ch.spells.slots[slotLevel] || 0) <= 0) { alert('No slots at that level!'); return; }
+  // Find the spell to check concentration
+  const allSpells = [...(ch.spells.known||[]), ...(ch.spells.prepared||[])];
+  const sp = allSpells.find(s => (typeof s==='object' ? s.name : s) === spellName && typeof s === 'object');
+  const isConc = sp?.concentration === 'yes';
+  if (isConc && ch.activeConcentration && ch.activeConcentration.spellName !== spellName) {
+    if (!confirm(`This will end your concentration on ${ch.activeConcentration.spellName}. Continue?`)) return;
+  }
   CharacterStore.useSpellSlot(currentCharId, slotLevel);
   const ordinals = ['','1st','2nd','3rd','4th','5th','6th','7th','8th','9th'];
   const entry = `${spellName} cast at ${ordinals[slotLevel]} level`;
   ch.sessionLog = ch.sessionLog || [];
   ch.sessionLog.unshift({ text: entry, ts: Date.now() });
   if (ch.sessionLog.length > 100) ch.sessionLog = ch.sessionLog.slice(0, 100);
+  if (isConc) ch.activeConcentration = { spellName, castLevel: slotLevel };
   saveData(db);
   closeModal();
   renderSpellTabContent();
+  if (isConc) renderApp(); // refresh combat section to show pill
   // Flash the slot grid
   const slotEl = document.querySelector(`.spell-slot-row:nth-child(${slotLevel}) .spell-slot-bubbles`);
   if (slotEl) { slotEl.style.transition='opacity 0.1s'; slotEl.style.opacity='0.3'; setTimeout(()=>slotEl.style.opacity='1', 200); }
@@ -4529,6 +4598,29 @@ function toggleInspiration() {
   saveData(db);
   const btn = document.querySelector('.cs-inspiration-toggle');
   if (btn) btn.classList.toggle('active', ch.inspiration);
+}
+function clearConcentration() {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  ch.activeConcentration = null;
+  saveData(db); renderApp();
+}
+function setExhaustion(level) {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  ch.exhaustionLevel = Math.min(6, Math.max(0, level));
+  saveData(db); renderApp();
+}
+function attuneItem(itemName, slotIdx) {
+  const ch = db.characters[currentCharId]; if (!ch || !itemName) return;
+  ch.attunedItems = ch.attunedItems || [];
+  if (ch.attunedItems.length >= 3) { showToast('Already attuned to 3 items (maximum).'); return; }
+  if (!ch.attunedItems.includes(itemName)) ch.attunedItems.push(itemName);
+  saveData(db); renderApp();
+}
+function unattuneItem(idx) {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  ch.attunedItems = ch.attunedItems || [];
+  ch.attunedItems.splice(idx, 1);
+  saveData(db); renderApp();
 }
 function toggleSaveProf(ability) {
   const ch = db.characters[currentCharId];
