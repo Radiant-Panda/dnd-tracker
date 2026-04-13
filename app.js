@@ -1947,7 +1947,10 @@ function renderAttacksSection(ch) {
         </tr>`).join('')}
       </tbody>
     </table>
-    <button class="btn btn-sm" style="margin-top:0.5rem" onclick="addAttack()">+ Add Attack</button>
+    <div style="display:flex;gap:0.4rem;margin-top:0.5rem">
+      <button class="btn btn-sm" onclick="addAttack()">+ Add Attack</button>
+      <button class="btn btn-sm" onclick="openWeaponPicker()">⚔ Pick Weapon</button>
+    </div>
   </div>`;
 }
 
@@ -4952,6 +4955,149 @@ function autoCalcAttackBonus(i, weaponType) {
   }
   saveData(db); renderApp();
 }
+
+// ── Weapon Picker ─────────────────────────────────────────────────────────────
+let _wpnSearch = '', _wpnFilter = { simple: true, martial: true };
+
+function openWeaponPicker() {
+  _wpnSearch = '';
+  _wpnFilter = { simple: true, martial: true };
+  openModal(`<h2>⚔ Pick Weapon</h2>
+    <input type="text" id="wpn-search" placeholder="Search weapons…" style="width:100%;margin-bottom:0.4rem"
+      oninput="_wpnSearch=this.value;updateWeaponResults()">
+    <div style="display:flex;gap:0.4rem;margin-bottom:0.5rem">
+      <button id="wpn-f-simple"  class="btn btn-sm btn-primary" onclick="toggleWpnFilter('simple',this)">Simple</button>
+      <button id="wpn-f-martial" class="btn btn-sm btn-primary" onclick="toggleWpnFilter('martial',this)">Martial</button>
+    </div>
+    <div id="wpn-results" style="max-height:400px;overflow-y:auto"></div>
+  `);
+  updateWeaponResults();
+}
+
+function toggleWpnFilter(cat, btn) {
+  _wpnFilter[cat] = !_wpnFilter[cat];
+  btn.classList.toggle('btn-primary', _wpnFilter[cat]);
+  updateWeaponResults();
+}
+
+function updateWeaponResults() {
+  const container = document.getElementById('wpn-results');
+  if (!container) return;
+  const q = _wpnSearch.toLowerCase();
+  const filtered = (typeof WEAPONS_DATA !== 'undefined' ? WEAPONS_DATA : []).filter(w => {
+    if (!_wpnFilter[w.category]) return false;
+    if (q && !w.name.toLowerCase().includes(q) && !w.dmg.toLowerCase().includes(q)) return false;
+    return true;
+  });
+
+  window._wpnVisible = filtered;
+
+  const groups = [
+    { key: 'simple',  label: 'Simple Weapons',  color: '#9b6dff' },
+    { key: 'martial', label: 'Martial Weapons',  color: '#f59e0b' },
+  ];
+
+  container.innerHTML = groups.map(g => {
+    const items = filtered.filter(w => w.category === g.key);
+    if (!items.length) return '';
+    const rows = items.map((w, _i) => {
+      const idx = filtered.indexOf(w);
+      const dmgParts = w.dmg.split(' ');
+      const dice = dmgParts[0];
+      const dmgType = dmgParts.slice(1).join(' ');
+      const chips = w.properties.map(p =>
+        `<span style="font-size:0.6rem;border:1px solid rgba(155,109,255,0.45);color:var(--text-dim);border-radius:3px;padding:0 3px;white-space:nowrap">${esc(p)}</span>`
+      ).join('');
+      const rangeTxt = w.range ? `<span style="font-size:0.65rem;color:var(--text-dim)">${esc(w.range)}</span>` : '';
+      return `<div class="wpn-row" onclick="pickWeapon(${idx})"
+          style="display:flex;align-items:center;gap:0.4rem;flex-wrap:wrap;
+                 padding:0.3rem 0.5rem;border-radius:5px;cursor:pointer;
+                 border:1px solid var(--border);margin-bottom:0.25rem">
+        <span style="font-size:0.82rem;font-weight:600;min-width:110px">${esc(w.name)}</span>
+        <span style="font-size:0.82rem;color:#f59e0b;font-weight:600">${esc(dice)}</span>
+        <span style="font-size:0.72rem;color:var(--text-dim)">${esc(dmgType)}</span>
+        ${rangeTxt}
+        <div style="display:flex;gap:0.2rem;flex-wrap:wrap;margin-left:auto">${chips}</div>
+      </div>`;
+    }).join('');
+    return `<div style="font-size:0.7rem;font-weight:700;color:${g.color};text-transform:uppercase;letter-spacing:0.06em;margin:0.5rem 0 0.25rem">${g.label}</div>${rows}`;
+  }).join('') || `<p style="color:var(--text-dim);font-size:0.82rem;text-align:center;padding:1rem">No weapons match.</p>`;
+}
+
+function pickWeapon(idx) {
+  const w = (window._wpnVisible || [])[idx];
+  if (!w) return;
+  closeModal();
+
+  const isVersatile = w.properties.includes('Versatile');
+  const isThrown    = w.properties.includes('Thrown');
+  const isMelee     = w.weapon_type !== 'ranged-dex';
+
+  // Determine weapon_type and damage, then possibly ask follow-up questions
+  function applyWeapon(weaponType, dmg) {
+    const ch = db.characters[currentCharId];
+    ch.attacks = ch.attacks || [];
+    const pb = profBonus(ch.level);
+    const abs = ch.abilities || {};
+    const strMod = mod(abs.str || 10);
+    const dexMod = mod(abs.dex || 10);
+    let abilityMod;
+    if (weaponType === 'melee-str')       abilityMod = strMod;
+    else if (weaponType === 'melee-finesse') abilityMod = Math.max(strMod, dexMod);
+    else                                  abilityMod = dexMod;
+    const bonus = pb + abilityMod;
+    const bonusStr = (bonus >= 0 ? '+' : '') + bonus;
+    ch.attacks.push({ id: uid(), name: w.name, weaponType, bonus: bonusStr, damage: dmg });
+    saveData(db); renderApp();
+  }
+
+  // Step 1: thrown+melee asks Melee or Thrown?
+  function askThrown(dmg, meleeType) {
+    openModal(`<h2>${esc(w.name)}</h2>
+      <p style="margin-bottom:1rem">How do you want to use this weapon?</p>
+      <div style="display:flex;gap:0.5rem">
+        <button class="btn btn-primary" style="flex:1" onclick="closeModal();pickWeaponApply('${meleeType}','${esc(dmg)}')">Melee</button>
+        <button class="btn" style="flex:1" onclick="closeModal();pickWeaponApply('ranged-dex','${esc(dmg)}')">Thrown (DEX)</button>
+      </div>`);
+  }
+
+  // Step 2: versatile asks 1H or 2H?
+  function askVersatile(weaponType) {
+    const dmg1h = w.dmg;
+    const dmg2h = w.versatile_dmg || w.dmg;
+    openModal(`<h2>${esc(w.name)}</h2>
+      <p style="margin-bottom:1rem">One-handed or two-handed?</p>
+      <div style="display:flex;gap:0.5rem">
+        <button class="btn btn-primary" style="flex:1" onclick="closeModal();pickWeaponApply('${weaponType}','${esc(dmg1h)}')">One-handed (${esc(dmg1h.split(' ')[0])})</button>
+        <button class="btn" style="flex:1" onclick="closeModal();pickWeaponApply('${weaponType}','${esc(dmg2h)}')">Two-handed (${esc(dmg2h.split(' ')[0])})</button>
+      </div>`);
+  }
+
+  // Store pending apply for onclick strings
+  window._pendingWeapon = w;
+  window.pickWeaponApply = function(weaponType, dmg) { applyWeapon(weaponType, dmg); };
+
+  if (isThrown && isMelee && !w.properties.includes('Ammunition')) {
+    // Dagger, Handaxe, Javelin, Spear, Trident etc — ask melee or thrown first
+    if (isVersatile) {
+      // Ask thrown/melee, then versatile — do thrown path without versatile option
+      openModal(`<h2>${esc(w.name)}</h2>
+        <p style="margin-bottom:1rem">How do you want to use this weapon?</p>
+        <div style="display:flex;gap:0.5rem">
+          <button class="btn btn-primary" style="flex:1" onclick="closeModal();_askVersatileFor('${w.weapon_type}')">Melee</button>
+          <button class="btn" style="flex:1" onclick="closeModal();pickWeaponApply('ranged-dex','${esc(w.dmg)}')">Thrown (DEX)</button>
+        </div>`);
+      window._askVersatileFor = function(wt) { askVersatile(wt); };
+    } else {
+      askThrown(w.dmg, w.weapon_type);
+    }
+  } else if (isVersatile) {
+    askVersatile(w.weapon_type);
+  } else {
+    applyWeapon(w.weapon_type, w.dmg);
+  }
+}
+
 function rollAttack(i) {
   const ch = db.characters[currentCharId];
   const atk = ch?.attacks?.[i];

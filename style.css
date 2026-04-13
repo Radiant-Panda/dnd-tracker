@@ -2694,6 +2694,12 @@ input.hp-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0;
   flex-shrink: 0;
 }
 
+/* Weapon picker rows */
+.wpn-row:hover {
+  background: rgba(155, 109, 255, 0.08);
+  border-color: rgba(155, 109, 255, 0.4) !important;
+}
+
 /* Concentration tracker */
 .conc-tracker {
   display: flex; align-items: center; gap: 0.4rem;
