@@ -2467,7 +2467,14 @@ function spellAddFromEncoded(listType, encoded) {
   const sp = JSON.parse(decodeURIComponent(encoded));
   ch.spells[listType] = ch.spells[listType] || [];
   const already = ch.spells[listType].some(s => (typeof s==='object'?s.name:s) === sp.name);
-  if (!already) { ch.spells[listType].push(sp); saveData(db); }
+  if (!already) { ch.spells[listType].push(sp); }
+  // Preparing a spell also adds it to Known
+  if (listType === 'prepared') {
+    ch.spells.known = ch.spells.known || [];
+    const inKnown = ch.spells.known.some(s => (typeof s==='object'?s.name:s) === sp.name);
+    if (!inKnown) ch.spells.known.push(sp);
+  }
+  saveData(db);
   renderSpellTabContent();
 }
 
@@ -2485,6 +2492,8 @@ function togglePrepareFromKnown(knownIdx) {
 // ── Cast Modal ────────────────────────────────────────────────────────────────
 function openCastModal(spellName, minLevel) {
   const ch = db.characters[currentCharId]; if (!ch) return;
+  // Cantrips don't use slots — cast directly
+  if (minLevel === 0) { castCantrip(spellName); return; }
   const slots = ch.spells.slots || {};
   const maxSlots = ch.spells.slotsMax || {};
   const availableLevels = [];
@@ -2507,6 +2516,23 @@ function openCastModal(spellName, minLevel) {
     </div>
     ${availableLevels.length===0?`<p style="color:var(--red-lt);font-size:0.82rem">No spell slots available!</p>`:''}
     <div class="form-actions"><button class="btn" onclick="closeModal()">Cancel</button></div>`);
+}
+
+function castCantrip(spellName) {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  const allSpells = [...(ch.spells.known||[]), ...(ch.spells.prepared||[])];
+  const sp = allSpells.find(s => typeof s === 'object' && s.name === spellName);
+  const isConc = sp?.concentration === 'yes';
+  if (isConc && ch.activeConcentration && ch.activeConcentration.spellName !== spellName) {
+    if (!confirm(`This will end your concentration on ${ch.activeConcentration.spellName}. Continue?`)) return;
+  }
+  ch.sessionLog = ch.sessionLog || [];
+  ch.sessionLog.unshift({ text: `${spellName} (cantrip)`, ts: Date.now() });
+  if (ch.sessionLog.length > 100) ch.sessionLog = ch.sessionLog.slice(0, 100);
+  if (isConc) ch.activeConcentration = { spellName, castLevel: 0 };
+  saveData(db);
+  showToast(`<strong>${esc(spellName)}</strong> cast!`);
+  if (isConc) renderApp();
 }
 
 function confirmCast(spellName, slotLevel) {
@@ -3198,7 +3224,8 @@ function updateFeatResults() {
   if (filtered.length === 0) { el.innerHTML = '<p style="color:var(--text-dim);padding:0.5rem 0">No feats match.</p>'; return; }
   const show = filtered.slice(0, _featShowCount);
   const remaining = filtered.length - show.length;
-  el.innerHTML = show.map(f => {
+  window._featVisible = show; // index lookup for onclick
+  el.innerHTML = show.map((f, fi) => {
     const src = FEAT_SOURCE_COLORS[f.source] || { abbr: (f.source||'?').split(' ')[0], color: '#7b6d8d' };
     const catColor = FEAT_CAT_COLORS[f.category] || '#9b6dff';
     const catLabel = FEAT_CAT_LABELS[f.category] || f.category || '';
@@ -3226,7 +3253,7 @@ function updateFeatResults() {
         <button id="fbt-${uid}" class="btn btn-sm" onclick="toggleFeatDesc('${uid}')">▾</button>
         ${isAdded
           ? `<button class="btn btn-sm btn-primary" disabled style="opacity:0.7">✓ Added</button>`
-          : `<button class="btn btn-sm" onclick="addFeatToChar(${JSON.stringify(f.name)})">+ Add</button>`}
+          : `<button class="btn btn-sm" onclick="addFeatByIdx(${fi})">+ Add</button>`}
       </div>
       <div id="${uid}" style="display:none;width:100%;padding:0.3rem 0.25rem 0.4rem;font-size:0.78rem;color:var(--text-dim);border-top:1px solid rgba(155,109,255,0.15);margin-top:0.2rem">
         <p style="margin:0 0 0.3rem">${esc(f.desc || '')}</p>
@@ -3243,6 +3270,11 @@ function toggleFeatDesc(uid) {
   el.style.display = hidden ? 'block' : 'none';
   const btn = document.getElementById('fbt-' + uid);
   if (btn) btn.textContent = hidden ? '▴' : '▾';
+}
+
+function addFeatByIdx(i) {
+  const f = (window._featVisible || [])[i];
+  if (f) addFeatToChar(f.name);
 }
 
 function addFeatToChar(featName) {
@@ -3450,6 +3482,7 @@ function updateMagicResults() {
   const visible = items.slice(0, _magicShowCount);
   const remaining = total - visible.length;
 
+  window._magicVisible = visible; // index lookup for onclick
   container.innerHTML = visible.map((item, i) => {
     const uid = 'mi-' + i + '-' + item.name.replace(/\W/g,'').slice(0,8);
     const color = MAGIC_RARITY_COLORS[item.rarity] || '#9ca3af';
@@ -3466,7 +3499,7 @@ function updateMagicResults() {
           <button id="mibt-${uid}" class="btn btn-sm" onclick="toggleMagicDesc('${uid}')">▾</button>
           ${isAdded
             ? `<button class="btn btn-sm btn-primary" disabled style="opacity:0.7">✓ Added</button>`
-            : `<button class="btn btn-sm" onclick="addMagicItemToChar(${JSON.stringify(item.name)},${JSON.stringify(item.rarity)})">+ Add</button>`}
+            : `<button class="btn btn-sm" onclick="addMagicItemByIdx(${i})">+ Add</button>`}
         </div>
       </div>
       <div id="${uid}" style="display:none;width:100%;padding:0.3rem 0.25rem 0.4rem;font-size:0.78rem;color:var(--text-dim);border-top:1px solid rgba(155,109,255,0.15);margin-top:0.2rem">
@@ -3504,6 +3537,11 @@ function addMagicItemToChar(itemName, itemRarity) {
   saveData(db);
   updateMagicResults();
   renderApp();
+}
+
+function addMagicItemByIdx(i) {
+  const item = (window._magicVisible || [])[i];
+  if (item) addMagicItemToChar(item.name, item.rarity);
 }
 
 function toggleEquipDesc(idx) {

@@ -3066,7 +3066,7 @@ input.hp-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0;
   padding: 1px 0.45rem;
   white-space: nowrap;
   flex-shrink: 0;
-  filter: drop-shadow(0 0 3px currentColor);
+  text-shadow: 0 0 6px currentColor;
 }
 .spell-source-badge {
   font-size: 0.65rem;
