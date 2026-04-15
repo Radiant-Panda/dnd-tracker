@@ -36,8 +36,13 @@ function migrateCharacter(ch) {
   if (ch.spells.pactSlots     === undefined) ch.spells.pactSlots     = 0;
   if (ch.spells.pactSlotsMax  === undefined) ch.spells.pactSlotsMax  = 0;
   if (ch.spells.pactSlotLevel === undefined) ch.spells.pactSlotLevel = 0;
-  if (!ch.combat)          ch.combat = {ac:10,initiative:0,speed:30,maxHP:10,currentHP:10,tempHP:0,hitDice:'1d8',hitDiceUsed:0};
-  if (ch.combat.hitDiceUsed === undefined) ch.combat.hitDiceUsed = 0;
+  if (!ch.combat)          ch.combat = {ac:10,initiative:0,speed:30,maxHP:10,currentHP:10,tempHP:0,hitDice:'1d8',hitDiceUsed:{}};
+  // Migrate hitDiceUsed from old single-number format to per-class object
+  if (typeof ch.combat.hitDiceUsed === 'number') {
+    const primaryClass = ch.class || 'Fighter';
+    ch.combat.hitDiceUsed = { [primaryClass]: ch.combat.hitDiceUsed };
+  }
+  if (typeof ch.combat.hitDiceUsed !== 'object' || ch.combat.hitDiceUsed === null) ch.combat.hitDiceUsed = {};
   if (!ch.featuresList)    ch.featuresList = [];
   if (ch.carryWeight === undefined) ch.carryWeight = 0;
   if (ch.resistances        === undefined) ch.resistances        = '';
@@ -89,7 +94,13 @@ function loadData() {
 }
 
 function saveData(data) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  } catch (e) {
+    if (e instanceof DOMException && (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED')) {
+      showToast('<span style="color:#ef4444;font-weight:700">⚠ Storage nearly full</span> — remove a portrait or export your data to free space.', 7000);
+    }
+  }
 }
 
 function uid() {
@@ -201,23 +212,24 @@ function openEditCampaignModal(id) {
 }
 function createCampaign() {
   const name = document.getElementById('camp-name').value.trim();
-  if (!name) { alert('Please enter a campaign name.'); return; }
+  if (!name) { showAlert('Please enter a campaign name.'); return; }
   db.campaigns.push({ id:uid(), name, description:document.getElementById('camp-desc').value.trim(), characters:[], npcs:[], initiative:null, campaignTab:'characters', activeCharId:null, journal:[], createdAt:Date.now() });
   saveData(db); closeModal(); renderApp();
 }
 function updateCampaign(id) {
   const name = document.getElementById('camp-name').value.trim();
-  if (!name) { alert('Please enter a campaign name.'); return; }
+  if (!name) { showAlert('Please enter a campaign name.'); return; }
   const c = db.campaigns.find(c => c.id === id);
   c.name = name; c.description = document.getElementById('camp-desc').value.trim();
   saveData(db); closeModal(); renderApp();
 }
 function deleteCampaign(id) {
-  if (!confirm('Delete this campaign and all its characters & NPCs?')) return;
-  const c = db.campaigns.find(c => c.id === id);
-  if (c) { (c.characters||[]).forEach(cid => delete db.characters[cid]); (c.npcs||[]).forEach(nid => delete db.npcs[nid]); }
-  db.campaigns = db.campaigns.filter(c => c.id !== id);
-  saveData(db); renderApp();
+  showConfirm('Delete this campaign and all its characters & NPCs?', () => {
+    const c = db.campaigns.find(c => c.id === id);
+    if (c) { (c.characters||[]).forEach(cid => delete db.characters[cid]); (c.npcs||[]).forEach(nid => delete db.npcs[nid]); }
+    db.campaigns = db.campaigns.filter(c => c.id !== id);
+    saveData(db); renderApp();
+  });
 }
 
 // ── Campaign Detail ───────────────────────────────────────────────────────────
@@ -281,14 +293,15 @@ function createCharacter() {
   saveData(db); closeModal(); renderApp();
 }
 function deleteCharacter(id) {
-  if (!confirm('Delete this character?')) return;
-  delete db.characters[id];
-  const c = db.campaigns.find(c => c.id === currentCampaignId);
-  if (c) {
-    c.characters = c.characters.filter(cid => cid !== id);
-    if (c.activeCharId === id) c.activeCharId = c.characters[0] || null;
-  }
-  saveData(db); renderApp();
+  showConfirm('Delete this character?', () => {
+    delete db.characters[id];
+    const c = db.campaigns.find(c => c.id === currentCampaignId);
+    if (c) {
+      c.characters = c.characters.filter(cid => cid !== id);
+      if (c.activeCharId === id) c.activeCharId = c.characters[0] || null;
+    }
+    saveData(db); renderApp();
+  });
 }
 
 // ── NPC Manager ───────────────────────────────────────────────────────────────
@@ -332,11 +345,12 @@ function createNpc() {
   saveData(db); closeModal(); renderApp();
 }
 function deleteNpc(id) {
-  if (!confirm('Delete this NPC?')) return;
-  delete db.npcs[id];
-  const c = db.campaigns.find(c => c.id === currentCampaignId);
-  if (c) c.npcs = c.npcs.filter(nid => nid !== id);
-  saveData(db); renderApp();
+  showConfirm('Delete this NPC?', () => {
+    delete db.npcs[id];
+    const c = db.campaigns.find(c => c.id === currentCampaignId);
+    if (c) c.npcs = c.npcs.filter(nid => nid !== id);
+    saveData(db); renderApp();
+  });
 }
 
 // ── Session Journal ───────────────────────────────────────────────────────────
@@ -364,11 +378,12 @@ function updateJournalEntry(campaignId, entryId, field, value) {
 }
 
 function deleteJournalEntry(campaignId, entryId) {
-  if (!confirm('Delete this journal entry?')) return;
-  const c = db.campaigns.find(c => c.id === campaignId);
-  if (!c) return;
-  c.journal = (c.journal||[]).filter(e => e.id !== entryId);
-  saveData(db); renderApp();
+  showConfirm('Delete this journal entry?', () => {
+    const c = db.campaigns.find(c => c.id === campaignId);
+    if (!c) return;
+    c.journal = (c.journal||[]).filter(e => e.id !== entryId);
+    saveData(db); renderApp();
+  });
 }
 
 function toggleJournalEntry(id) {
@@ -419,7 +434,7 @@ function renderNpcSheet() {
   return `
     <div class="section-header">
       <div><h2>${esc(npc.name||'Unnamed NPC')}</h2><div class="text-dim" style="font-size:0.85rem">${esc(npc.role||'NPC')} &bull; ${esc(npc.race||'')} &bull; ${esc(npc.location||'Unknown location')}</div></div>
-      <button class="btn btn-primary btn-sm" onclick="saveNpcSheet()">Save</button>
+      <button id="npc-save-btn" class="btn btn-primary btn-sm" onclick="saveNpcSheet()">Save</button>
     </div>
     <div class="sheet-grid">
       <div>
@@ -453,7 +468,7 @@ function renderNpcSheet() {
 function npc_field(field, value) { db.npcs[currentNpcId][field] = value; }
 function saveNpcSheet() {
   saveData(db);
-  const btn = document.querySelector('.btn-primary');
+  const btn = document.getElementById('npc-save-btn');
   if (btn) { const o=btn.textContent; btn.textContent='Saved!'; setTimeout(()=>btn.textContent=o,1000); }
 }
 
@@ -674,7 +689,7 @@ function renderInitiativeTracker(campaign) {
         const isActive = i===(init.currentIndex%combatants.length);
         const hpPct = cb.maxHP>0?Math.round((cb.hp/cb.maxHP)*100):100;
         return `<div class="initiative-row ${isActive?'active':''}">
-          <div class="init-order"><input type="number" class="init-order-input" value="${cb.initiative}" min="1" max="30" title="Click to edit initiative" oninput="updateCombatantInitiative(${i},+this.value)"></div>
+          <div class="init-order"><input type="number" class="init-order-input" value="${cb.initiative}" min="1" max="30" title="Click to edit initiative" oninput="updateCombatantInitiative(${i},+this.value)"><button class="btn-reroll-init" onclick="rerollCombatantInitiative(${i})" title="Re-roll initiative">🎲</button></div>
           <div class="init-body">
             <div class="init-top">
               <span class="init-name">${esc(cb.name)}</span>
@@ -685,9 +700,19 @@ function renderInitiativeTracker(campaign) {
             <div class="init-stats">
               <span>AC <strong>${cb.ac}</strong></span>
               <span>HP <input type="number" class="hp-input" value="${cb.hp}" min="0" max="${cb.maxHP}" oninput="updateCombatantHP(${i},+this.value)"> / ${cb.maxHP}${cb.tempHP > 0 ? ` (<span class="temp-hp-display">+${cb.tempHP} temp</span>)` : ''}<button class="btn btn-sm" style="padding:0.2rem 0.35rem; font-size:0.75rem; margin-left:0.3rem;" onclick="openTempHPInput(${i})" title="Add temp HP">+T</button></span>
-              <span><button class="btn btn-sm" onclick="healCombatant(${i},1)">+</button><button class="btn btn-sm btn-danger" onclick="damageCombatant(${i},1)">-</button></span>
+              <span><button class="btn btn-sm" onclick="toggleCombatantHP(${i})" title="Apply damage or healing">HP</button></span>
             </div>
             <div class="hp-bar-wrap" style="position:relative; overflow:hidden;"><div class="hp-bar ${hpPct<=25?'low':hpPct<=50?'mid':''}" style="width:${hpPct}%; position:relative; z-index:2;"></div>${cb.tempHP > 0 ? '<div class="hp-bar-temp" style="width:'+Math.min(100, Math.round(((cb.hp + cb.tempHP) / cb.maxHP) * 100))+'%; position:absolute; top:0; left:0; z-index:1;"></div>' : ''}</div>
+            ${cb._hpOpen ? `<div class="cb-hp-popover" tabindex="-1" onfocusout="if(!this.contains(event.relatedTarget))closeCombatantHP(${i})">
+              <div class="cb-hp-popover-row">
+                <input type="number" class="cb-hp-input cb-hp-dmg" id="cb-hp-dmg-${i}" placeholder="0" min="1"
+                  onkeydown="if(event.key==='Enter'){applyCombatantDamage(${i})}else if(event.key==='Escape'){closeCombatantHP(${i})}">
+                <button class="btn btn-sm btn-danger" onclick="applyCombatantDamage(${i})">Damage</button>
+                <input type="number" class="cb-hp-input cb-hp-heal" id="cb-hp-heal-${i}" placeholder="0" min="1"
+                  onkeydown="if(event.key==='Enter'){applyCombatantHeal(${i})}else if(event.key==='Escape'){closeCombatantHP(${i})}">
+                <button class="btn btn-sm cb-hp-heal-btn" onclick="applyCombatantHeal(${i})">Heal</button>
+              </div>
+            </div>` : ''}
             ${cb._concCheck ? `<div class="conc-warning">&#9888; Concentration check required — DC ${cb._concCheck.dc} (${esc(cb._concCheck.spell)})<button class="conc-dismiss" onclick="dismissConcCheck(${i})">&times;</button></div>` : ''}
             ${cb.legendaryMax ? `<div class="legendary-pips" id="leg-pips-${i}" title="Legendary Actions — reset at the start of this creature's turn">
               ${Array.from({length: cb.legendaryMax}, (_,j) => {
@@ -760,6 +785,7 @@ function addCombatant() {
   combatLog(`${name} added to combat`);
   saveData(db); closeModal(); renderApp();
 }
+let _quickAddState = null; // State for quick add initiative modal
 function quickAddCombatant(entityId, type) {
   let name, ac, maxHP, hp, charId = null;
   if (type==='player') {
@@ -770,12 +796,40 @@ function quickAddCombatant(entityId, type) {
     const npc=db.npcs[entityId]; name=npc.name; ac=npc.ac||10; maxHP=npc.maxHP||10; hp=npc.hp||10;
   }
   const rolled = Math.ceil(Math.random()*20);
-  const raw = prompt(`Initiative roll for ${name}:`, rolled);
-  if (raw === null) return; // cancelled
-  const initiative = parseInt(raw) || rolled;
+
+  // Store state and open modal
+  _quickAddState = { charId, name, type, ac, hp, maxHP, rolled };
+  openModal(`
+    <div class="panel surface2">
+      <div class="panel-title">Add to Initiative</div>
+      <div style="padding: 1rem 0;">
+        <div style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">${esc(name)}</div>
+        <div class="form-group">
+          <label for="qa-init">Initiative Roll</label>
+          <input type="number" id="qa-init" value="${rolled}" min="1" max="20">
+        </div>
+        <div class="form-actions">
+          <button class="btn" onclick="_closeQuickAdd()">Cancel</button>
+          <button class="btn btn-primary" onclick="_confirmQuickAdd()">Add</button>
+        </div>
+      </div>
+    </div>
+  `);
+  document.getElementById('qa-init').focus();
+}
+function _confirmQuickAdd() {
+  if (!_quickAddState) return;
+  const initiative = parseInt(document.getElementById('qa-init').value) || _quickAddState.rolled;
+  const { charId, name, type, ac, hp, maxHP } = _quickAddState;
+
   getInitiative().combatants.push({ id:uid(), charId, name, initiative, ac, hp, maxHP, type, conditions:[], notes:'', tempHP:0 });
   combatLog(`${name} added to combat (init ${initiative})`);
+  _quickAddState = null;
   saveData(db); closeModal(); renderApp();
+}
+function _closeQuickAdd() {
+  _quickAddState = null;
+  closeModal();
 }
 function addAllPcsToInitiative() {
   const campaign=getCampaign(), init=getInitiative();
@@ -790,8 +844,9 @@ function _getConcentrationSpell(cb) {
   if (!cb.charId) return null;
   const ch = db.characters[cb.charId];
   if (!ch) return null;
-  const prepared = ch.spells?.prepared || [];
-  const concSpell = prepared.find(s => typeof s === 'object' && s.concentration === 'yes');
+  if (ch.activeConcentration) return ch.activeConcentration;
+  const allSpells = [...(ch.spells?.prepared || []), ...(ch.spells?.known || [])];
+  const concSpell = allSpells.find(s => typeof s === 'object' && s.concentration === 'yes');
   return concSpell ? concSpell.name : null;
 }
 function _checkConcentration(i, dmg) {
@@ -838,6 +893,32 @@ function closeCombatantNotes(i) {
   }
 }
 
+function toggleCombatantHP(i) {
+  const init = getInitiative();
+  init.combatants.forEach((cb, idx) => { if (idx !== i) cb._hpOpen = false; });
+  const cb = init.combatants[i];
+  if (cb) {
+    cb._hpOpen = !cb._hpOpen;
+    saveData(db);
+    renderApp();
+    if (cb._hpOpen) setTimeout(() => document.getElementById(`cb-hp-dmg-${i}`)?.focus(), 50);
+  }
+}
+function closeCombatantHP(i) {
+  const cb = getInitiative().combatants[i];
+  if (cb) { cb._hpOpen = false; saveData(db); renderApp(); }
+}
+function applyCombatantDamage(i) {
+  const val = parseInt(document.getElementById(`cb-hp-dmg-${i}`)?.value) || 0;
+  if (val > 0) damageCombatant(i, val);
+  closeCombatantHP(i);
+}
+function applyCombatantHeal(i) {
+  const val = parseInt(document.getElementById(`cb-hp-heal-${i}`)?.value) || 0;
+  if (val > 0) healCombatant(i, val);
+  closeCombatantHP(i);
+}
+
 function sortInitiative() { const init=getInitiative(); init.combatants.sort((a,b)=>b.initiative-a.initiative); init.currentIndex=0; saveData(db); renderApp(); }
 function nextTurn() {
   const init=getInitiative(); if(!init.combatants.length) return;
@@ -873,6 +954,28 @@ function nextTurn() {
     delete active._legFlash;
   }
 }
+
+function rerollCombatantInitiative(i) {
+  const init = getInitiative();
+  const cb = init.combatants[i];
+  if (!cb) return;
+
+  const roll = Math.ceil(Math.random() * 20);
+
+  if (cb.statBlock) {
+    // Monster: roll d20 + DEX modifier and set automatically
+    const dexMod = Math.floor(((cb.statBlock.dexterity || 10) - 10) / 2);
+    const newInitiative = roll + dexMod;
+    cb.initiative = newInitiative;
+    combatLog(`${cb.name} re-rolled initiative: ${newInitiative}`);
+    saveData(db);
+    renderApp();
+  } else {
+    // Player: show toast with d20 result
+    showToast(`<strong>${esc(cb.name)}</strong>: Rolled d20 = <strong>${roll}</strong> — enter manually`);
+  }
+}
+
 function updateCombatantHP(i,val) {
   const cb=getInitiative().combatants[i];
   const oldHP = cb ? cb.hp : 0;
@@ -924,11 +1027,11 @@ function openTempHPInput(i) {
     </div>
     <div class="form-actions">
       <button class="btn" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-primary" onclick="setTempHP(${i},+document.getElementById('temp-hp-input').value);closeModal()">Add</button>
+      <button class="btn btn-primary" onclick="setCombatantTempHP(${i},+document.getElementById('temp-hp-input').value);closeModal()">Add</button>
     </div>`);
   document.getElementById('temp-hp-input').focus();
 }
-function setTempHP(i, amount) {
+function setCombatantTempHP(i, amount) {
   const cb=getInitiative().combatants[i];
   if (cb) {
     cb.tempHP = Math.max(0, amount);
@@ -965,10 +1068,11 @@ function copyCombatLog() {
   navigator.clipboard.writeText(text).then(()=>showToast('Combat log copied to clipboard!')).catch(()=>showToast('Copy failed — try a different browser.'));
 }
 function clearInitiative() {
-  if(!confirm('End combat and clear all combatants?')) return;
-  _combatLogOpen = false;
-  getCampaign().initiative={round:1,currentIndex:0,combatants:[],log:[]};
-  saveData(db); renderApp();
+  showConfirm('End combat and clear all combatants?', () => {
+    _combatLogOpen = false;
+    getCampaign().initiative={round:1,currentIndex:0,combatants:[],log:[]};
+    saveData(db); renderApp();
+  });
 }
 
 function openAoeDamageModal() {
@@ -1803,9 +1907,159 @@ function uploadPortrait(event) {
   const file = event.target.files[0]; if (!file) return;
   const reader = new FileReader();
   reader.onload = function(e) {
-    openPortraitFramer(e.target.result);
+    const img = new Image();
+    img.onload = function() {
+      const MAX = 1200;
+      let w = img.width, h = img.height;
+      if (w > MAX || h > MAX) {
+        if (w > h) { h = Math.round(h * MAX / w); w = MAX; }
+        else        { w = Math.round(w * MAX / h); h = MAX; }
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      openPortraitCropModal(canvas.toDataURL('image/jpeg', 0.9));
+    };
+    img.src = e.target.result;
   };
   reader.readAsDataURL(file);
+}
+
+function openPortraitCropModal(imageSrc) {
+  const PREVIEW = 300, CROP = 200;
+  const CX = (PREVIEW - CROP) / 2, CY = (PREVIEW - CROP) / 2; // 50, 50
+
+  window._cropState = {
+    img: null, zoom: 1,
+    imgX: PREVIEW / 2, imgY: PREVIEW / 2,
+    dragging: false, dragStartX: 0, dragStartY: 0, dragImgX: 0, dragImgY: 0
+  };
+
+  openModal(`<div style="text-align:center;user-select:none">
+    <h3 style="margin:0 0 0.75rem;color:var(--gold)">Crop Portrait</h3>
+    <canvas id="pc-canvas" width="${PREVIEW}" height="${PREVIEW}"
+      style="cursor:grab;border-radius:8px;border:2px solid var(--purple);display:block;margin:0 auto;touch-action:none">
+    </canvas>
+    <div style="display:flex;align-items:center;gap:0.6rem;margin:0.7rem auto 0;max-width:280px">
+      <span style="color:var(--muted);font-size:0.8rem;white-space:nowrap">Zoom</span>
+      <input type="range" id="pc-zoom" min="50" max="200" value="100" step="1"
+        style="accent-color:var(--purple);flex:1" oninput="_pcZoom(+this.value)">
+      <span id="pc-zoom-val" style="color:var(--muted);font-size:0.8rem;width:38px;text-align:right">100%</span>
+    </div>
+    <p style="color:var(--muted);font-size:0.75rem;margin:0.3rem 0 0.8rem">Drag image to reposition &bull; Zoom to fit</p>
+    <div class="form-actions" style="justify-content:center">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="_pcApply()">Apply Crop</button>
+    </div>
+  </div>`);
+
+  window._pcDraw = function() {
+    const s = window._cropState;
+    const canvas = document.getElementById('pc-canvas'); if (!canvas || !s.img) return;
+    const ctx = canvas.getContext('2d');
+    const iw = s.img.naturalWidth * s.zoom, ih = s.img.naturalHeight * s.zoom;
+    ctx.clearRect(0, 0, PREVIEW, PREVIEW);
+    ctx.drawImage(s.img, s.imgX - iw / 2, s.imgY - ih / 2, iw, ih);
+    // Dark vignette outside crop square
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(0, 0, PREVIEW, CY);
+    ctx.fillRect(0, CY + CROP, PREVIEW, PREVIEW - CY - CROP);
+    ctx.fillRect(0, CY, CX, CROP);
+    ctx.fillRect(CX + CROP, CY, PREVIEW - CX - CROP, CROP);
+    // Crop border
+    ctx.strokeStyle = 'rgba(155,109,255,0.95)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(CX, CY, CROP, CROP);
+    // Rule-of-thirds guides
+    ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+    ctx.lineWidth = 1;
+    for (let i = 1; i < 3; i++) {
+      ctx.beginPath(); ctx.moveTo(CX + CROP/3*i, CY); ctx.lineTo(CX + CROP/3*i, CY+CROP); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(CX, CY + CROP/3*i); ctx.lineTo(CX+CROP, CY + CROP/3*i); ctx.stroke();
+    }
+  };
+
+  window._pcClamp = function() {
+    const s = window._cropState; if (!s.img) return;
+    const iw = s.img.naturalWidth * s.zoom, ih = s.img.naturalHeight * s.zoom;
+    s.imgX = Math.max(CX + CROP - iw/2, Math.min(CX + iw/2, s.imgX));
+    s.imgY = Math.max(CY + CROP - ih/2, Math.min(CY + ih/2, s.imgY));
+  };
+
+  window._pcZoom = function(pct) {
+    const s = window._cropState;
+    s.zoom = pct / 100;
+    const zv = document.getElementById('pc-zoom-val');
+    if (zv) zv.textContent = pct + '%';
+    _pcClamp(); _pcDraw();
+  };
+
+  window._pcApply = function() {
+    const s = window._cropState; if (!s.img) { closeModal(); return; }
+    const OUT = 400;
+    const out = document.createElement('canvas');
+    out.width = OUT; out.height = OUT;
+    const ctx = out.getContext('2d');
+    const iw = s.img.naturalWidth * s.zoom, ih = s.img.naturalHeight * s.zoom;
+    const imgL = s.imgX - iw / 2, imgT = s.imgY - ih / 2;
+    // Map crop box back to source image pixel coords
+    const sx = (CX - imgL) / s.zoom, sy = (CY - imgT) / s.zoom;
+    const sw = CROP / s.zoom, sh = CROP / s.zoom;
+    ctx.drawImage(s.img, sx, sy, sw, sh, 0, 0, OUT, OUT);
+    const dataUrl = out.toDataURL('image/jpeg', 0.85);
+    ch_field('portrait', dataUrl);
+    closeModal();
+    renderApp();
+  };
+
+  setTimeout(() => {
+    const canvas = document.getElementById('pc-canvas'); if (!canvas) return;
+    const s = window._cropState;
+
+    const img = new Image();
+    img.onload = function() {
+      s.img = img;
+      // Set initial zoom so image covers the crop area
+      const coverZoom = Math.max(CROP / img.naturalWidth, CROP / img.naturalHeight);
+      s.zoom = Math.max(0.5, coverZoom);
+      const pct = Math.min(200, Math.max(50, Math.round(s.zoom * 100)));
+      const slider = document.getElementById('pc-zoom');
+      if (slider) { slider.value = pct; slider.min = Math.max(50, Math.round(coverZoom * 100)); }
+      const zv = document.getElementById('pc-zoom-val'); if (zv) zv.textContent = pct + '%';
+      s.imgX = PREVIEW / 2; s.imgY = PREVIEW / 2;
+      _pcClamp(); _pcDraw();
+    };
+    img.src = imageSrc;
+
+    // Mouse drag
+    canvas.addEventListener('mousedown', e => {
+      s.dragging = true; s.dragStartX = e.clientX; s.dragStartY = e.clientY;
+      s.dragImgX = s.imgX; s.dragImgY = s.imgY; canvas.style.cursor = 'grabbing'; e.preventDefault();
+    });
+    canvas.addEventListener('mousemove', e => {
+      if (!s.dragging) return;
+      s.imgX = s.dragImgX + (e.clientX - s.dragStartX);
+      s.imgY = s.dragImgY + (e.clientY - s.dragStartY);
+      _pcClamp(); _pcDraw();
+    });
+    const stopDrag = () => { s.dragging = false; canvas.style.cursor = 'grab'; };
+    canvas.addEventListener('mouseup', stopDrag);
+    canvas.addEventListener('mouseleave', stopDrag);
+    // Touch drag
+    canvas.addEventListener('touchstart', e => {
+      const t = e.touches[0]; s.dragging = true;
+      s.dragStartX = t.clientX; s.dragStartY = t.clientY;
+      s.dragImgX = s.imgX; s.dragImgY = s.imgY; e.preventDefault();
+    }, { passive: false });
+    canvas.addEventListener('touchmove', e => {
+      if (!s.dragging) return;
+      const t = e.touches[0];
+      s.imgX = s.dragImgX + (t.clientX - s.dragStartX);
+      s.imgY = s.dragImgY + (t.clientY - s.dragStartY);
+      _pcClamp(); _pcDraw(); e.preventDefault();
+    }, { passive: false });
+    canvas.addEventListener('touchend', () => { s.dragging = false; });
+  }, 0);
 }
 
 function openPortraitFramer(newDataUrl) {
@@ -1897,12 +2151,12 @@ function renderAbilityScores(ch) {
 }
 
 const EXHAUSTION_EFFECTS = [
-  '', // 0 — nothing shown
-  'Disadvantage on ability checks',
-  '+Speed halved',
-  '+Disadv. on attacks/saves',
-  '+HP max halved',
-  '+Speed = 0',
+  '',
+  '−2 to d20 Tests, Speed −5 ft',
+  '−4 to d20 Tests, Speed −10 ft',
+  '−6 to d20 Tests, Speed −15 ft',
+  '−8 to d20 Tests, Speed −20 ft',
+  '−10 to d20 Tests, Speed −25 ft',
   'Dead',
 ];
 
@@ -1990,20 +2244,150 @@ function renderSkillList(ch, pb) {
   </div>`;
 }
 
+function openACCalcModal() {
+  const ch = CharacterStore[currentCharId];
+  if (!ch) return;
+  const dex = mod(ch.abilities.dex || 10);
+  const con = mod(ch.abilities.con || 10);
+  const wis = mod(ch.abilities.wis || 10);
+  const ARMORS = [
+    { group: 'Unarmored', label: 'Unarmored (10 + DEX)', base: 10, type: 'dex', dexCap: null },
+    { group: 'Light', label: 'Padded (11 + DEX)', base: 11, type: 'dex', dexCap: null },
+    { group: 'Light', label: 'Leather (11 + DEX)', base: 11, type: 'dex', dexCap: null },
+    { group: 'Light', label: 'Studded Leather (12 + DEX)', base: 12, type: 'dex', dexCap: null },
+    { group: 'Medium', label: 'Hide (12 + DEX max 2)', base: 12, type: 'dex', dexCap: 2 },
+    { group: 'Medium', label: 'Chain Shirt (13 + DEX max 2)', base: 13, type: 'dex', dexCap: 2 },
+    { group: 'Medium', label: 'Scale Mail (14 + DEX max 2)', base: 14, type: 'dex', dexCap: 2 },
+    { group: 'Medium', label: 'Breastplate (14 + DEX max 2)', base: 14, type: 'dex', dexCap: 2 },
+    { group: 'Medium', label: 'Half Plate (15 + DEX max 2)', base: 15, type: 'dex', dexCap: 2 },
+    { group: 'Heavy', label: 'Ring Mail (14)', base: 14, type: 'flat', dexCap: 0 },
+    { group: 'Heavy', label: 'Chain Mail (16)', base: 16, type: 'flat', dexCap: 0 },
+    { group: 'Heavy', label: 'Splint (17)', base: 17, type: 'flat', dexCap: 0 },
+    { group: 'Heavy', label: 'Plate (18)', base: 18, type: 'flat', dexCap: 0 },
+    { group: 'Special', label: 'Unarmored Defense — Barbarian (10 + DEX + CON)', base: 10, type: 'dex+con', dexCap: null },
+    { group: 'Special', label: 'Unarmored Defense — Monk (10 + DEX + WIS)', base: 10, type: 'dex+wis', dexCap: null },
+    { group: 'Special', label: 'Mage Armor (13 + DEX)', base: 13, type: 'dex', dexCap: null },
+  ];
+  function calcAC(armorIdx, shield) {
+    const a = ARMORS[armorIdx];
+    let ac, formula;
+    const shieldBonus = shield ? 2 : 0;
+    if (a.type === 'flat') {
+      ac = a.base + shieldBonus;
+      formula = `${a.base}${shield ? ' + 2 (shield)' : ''}`;
+    } else if (a.type === 'dex') {
+      const dexAdd = a.dexCap !== null ? Math.min(dex, a.dexCap) : dex;
+      ac = a.base + dexAdd + shieldBonus;
+      formula = `${a.base} + ${dexAdd} DEX${a.dexCap !== null ? ` (cap ${a.dexCap})` : ''}${shield ? ' + 2 (shield)' : ''}`;
+    } else if (a.type === 'dex+con') {
+      ac = a.base + dex + con + shieldBonus;
+      formula = `10 + ${dex} DEX + ${con} CON${shield ? ' + 2 (shield)' : ''}`;
+    } else if (a.type === 'dex+wis') {
+      ac = a.base + dex + wis + shieldBonus;
+      formula = `10 + ${dex} DEX + ${wis} WIS${shield ? ' + 2 (shield)' : ''}`;
+    }
+    return { ac, formula };
+  }
+  // Build grouped select options
+  const groups = {};
+  ARMORS.forEach((a, i) => { (groups[a.group] = groups[a.group] || []).push({ ...a, i }); });
+  const optionsHtml = Object.entries(groups).map(([g, items]) =>
+    `<optgroup label="${g}">${items.map(a => `<option value="${a.i}">${esc(a.label)}</option>`).join('')}</optgroup>`
+  ).join('');
+  // Find current AC match to pre-select (best-effort)
+  let defaultIdx = 0;
+  openModal(`<div style="min-width:280px">
+    <h3 style="margin:0 0 1rem;color:var(--gold)">⚙ AC Calculator</h3>
+    <div style="margin-bottom:0.75rem">
+      <label class="cs-field-label" style="display:block;margin-bottom:0.3rem">Armor</label>
+      <select id="ac-armor-sel" style="width:100%;padding:0.4rem;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px" onchange="_acCalcUpdate()">
+        ${optionsHtml}
+      </select>
+    </div>
+    <div style="margin-bottom:1rem">
+      <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;color:var(--text)">
+        <input type="checkbox" id="ac-shield-chk" onchange="_acCalcUpdate()" style="accent-color:var(--purple)">
+        Shield (+2 AC)
+      </label>
+    </div>
+    <div id="ac-calc-preview" style="background:var(--surface2);border-radius:8px;padding:0.75rem 1rem;margin-bottom:1rem;text-align:center">
+      <div id="ac-calc-val" style="font-size:2rem;font-weight:bold;color:var(--gold)">—</div>
+      <div id="ac-calc-formula" style="font-size:0.8rem;color:var(--muted);margin-top:0.2rem">Select armor above</div>
+    </div>
+    <div class="form-actions" style="justify-content:flex-end">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="_acCalcApply()">Apply</button>
+    </div>
+  </div>`);
+  // Attach helpers to window for inline onclick access
+  window._acCalcData = { ARMORS, calcAC };
+  window._acCalcUpdate = function() {
+    const idx = +document.getElementById('ac-armor-sel').value;
+    const shield = document.getElementById('ac-shield-chk').checked;
+    const { ac, formula } = calcAC(idx, shield);
+    document.getElementById('ac-calc-val').textContent = ac;
+    document.getElementById('ac-calc-formula').textContent = formula;
+  };
+  window._acCalcApply = function() {
+    const idx = +document.getElementById('ac-armor-sel').value;
+    const shield = document.getElementById('ac-shield-chk').checked;
+    const { ac } = calcAC(idx, shield);
+    combatField('ac', ac);
+    closeModal();
+  };
+  // Trigger initial preview render
+  setTimeout(() => window._acCalcUpdate?.(), 0);
+}
+
 function renderCombatSection(ch) {
   const hpPct=ch.combat.maxHP>0?Math.round((ch.combat.currentHP/ch.combat.maxHP)*100):100;
   const barClass=hpPct<=25?'low':hpPct<=50?'mid':'';
-  const hdSides = HIT_DICE[ch.class] || 8;
-  const hdTotal = ch.level || 1;
-  const hdUsed = ch.combat.hitDiceUsed || 0;
-  const hdRemaining = Math.max(0, hdTotal - hdUsed);
+  const hdUsedMap = (typeof ch.combat.hitDiceUsed === 'object' && ch.combat.hitDiceUsed !== null) ? ch.combat.hitDiceUsed : {};
+  const hdClasses = (ch.classes && ch.classes.length > 0) ? ch.classes : [{ class: ch.class || 'Fighter', level: ch.level || 1 }];
+  const hdTotalAll = hdClasses.reduce((s, c) => s + (c.level || 0), 0);
+  const hdUsedAll  = hdClasses.reduce((s, c) => s + (hdUsedMap[c.class] || 0), 0);
+  const hdRemainingAll = Math.max(0, hdTotalAll - hdUsedAll);
+  // Build display string: "5/5d10" for single class, "3/5d10 · 4/5d6" for multi
+  const hdDisplayParts = hdClasses.map(c => {
+    const sides = HIT_DICE[c.class] || 8;
+    const total = c.level || 0;
+    const used  = hdUsedMap[c.class] || 0;
+    const rem   = Math.max(0, total - used);
+    return `${rem}/${total}d${sides}`;
+  });
+  const hdDisplay = hdClasses.length === 1
+    ? hdDisplayParts[0]
+    : hdClasses.map((c, i) => `${c.class} ${hdDisplayParts[i]}`).join(' · ');
+  // Determine spell ability for spellcasting classes
+  let spellAbility = null;
+  if (SPELL_ABILITY[ch.class || (ch.classes && ch.classes[0]?.class)]) {
+    spellAbility = SPELL_ABILITY[ch.class || (ch.classes && ch.classes[0]?.class)];
+  } else if (ch.classes) {
+    for (const classData of ch.classes) {
+      if (SPELL_ABILITY[classData.class]) {
+        spellAbility = SPELL_ABILITY[classData.class];
+        break;
+      }
+    }
+  }
+  const spellBoxes = spellAbility ? (() => {
+    const spellMod = mod(ch.abilities[spellAbility] || 10);
+    const pb = profBonus(ch.level || 1);
+    const saveDC = 8 + pb + spellMod;
+    const attackBonus = pb + spellMod;
+    return `<div class="cs-combat-duo" style="margin-top:0.6rem;display:grid;grid-template-columns:1fr 1fr;gap:0.6rem">
+      <div class="stat-box"><div class="stat-label">Spell DC</div><div style="text-align:center;font-size:1.3rem;color:var(--gold);font-weight:bold">${saveDC}</div></div>
+      <div class="stat-box"><div class="stat-label">Spell Atk</div><div style="text-align:center;font-size:1.3rem;color:var(--gold);font-weight:bold">${attackBonus >= 0 ? '+' : ''}${attackBonus}</div></div>
+    </div>`;
+  })() : '';
   return `<div class="sheet-panel">
     <div class="cs-section-label">Combat</div>
     <div class="cs-combat-trio">
-      <div class="stat-box"><div class="stat-label">Armor Class</div><input type="number" value="${ch.combat.ac}" oninput="combatField('ac',+this.value)" style="width:100%;text-align:center;font-size:1.3rem;background:transparent;border:none;color:var(--gold);font-weight:bold"></div>
+      <div class="stat-box" style="position:relative"><div class="stat-label">Armor Class</div><input type="number" value="${ch.combat.ac}" oninput="combatField('ac',+this.value)" style="width:100%;text-align:center;font-size:1.3rem;background:transparent;border:none;color:var(--gold);font-weight:bold"><button class="ac-calc-btn" onclick="openACCalcModal()" title="AC Calculator">⚙</button></div>
       <div class="stat-box"><div class="stat-label">Initiative</div><input type="number" value="${ch.combat.initiative}" oninput="combatField('initiative',+this.value)" style="width:100%;text-align:center;font-size:1.3rem;background:transparent;border:none;color:var(--gold);font-weight:bold"></div>
       <div class="stat-box"><div class="stat-label">Speed</div><input type="number" value="${ch.combat.speed}" oninput="combatField('speed',+this.value)" style="width:100%;text-align:center;font-size:1.3rem;background:transparent;border:none;color:var(--gold);font-weight:bold"></div>
     </div>
+    ${spellBoxes}
     <div class="hp-display" style="margin-top:0.6rem">
       <div class="hp-duo">
         <div class="hp-block" onclick="openEditHP('maxHP')"><div class="hp-block-label">Max HP</div><div class="hp-block-val">${ch.combat.maxHP}</div></div>
@@ -2055,7 +2439,7 @@ function renderCombatSection(ch) {
     </div>
     <div class="hd-row">
       <span class="cs-field-label">Hit Dice:</span>
-      <span class="hd-val">${hdRemaining}/${hdTotal}d${hdSides}</span>
+      <span class="hd-val">${hdDisplay}</span>
       <button class="btn btn-sm hd-adj-btn" onclick="adjustHitDice(-1)" title="Use a hit die">&#8722;</button>
       <button class="btn btn-sm hd-adj-btn" onclick="adjustHitDice(1)" title="Restore a hit die">+</button>
     </div>
@@ -2392,10 +2776,11 @@ function renderSpellTabContent() {
       // Calculate prepared spell limit if applicable
       const classesWithLimit = (ch.classes||[]).filter(c => PREPARED_SPELL_LIMIT[c.class]);
       if (classesWithLimit.length > 0) {
-        const c = classesWithLimit[0];
-        const ab = SPELL_ABILITY[c.class];
-        const abilityMod = mod(ch.abilities[ab]);
-        const limit = PREPARED_SPELL_LIMIT[c.class](c.level, abilityMod);
+        const limit = classesWithLimit.reduce((sum, c) => {
+          const ab = SPELL_ABILITY[c.class];
+          const abilityMod = mod(ch.abilities[ab]);
+          return sum + PREPARED_SPELL_LIMIT[c.class](c.level, abilityMod);
+        }, 0);
         badge.textContent = `${prepared}/${limit}`;
         badge.style.color = prepared > limit ? 'var(--red-lt)' : '';
       } else {
@@ -2696,38 +3081,46 @@ function castCantrip(spellName) {
   const allSpells = [...(ch.spells.known||[]), ...(ch.spells.prepared||[])];
   const sp = allSpells.find(s => typeof s === 'object' && s.name === spellName);
   const isConc = sp?.concentration === 'yes';
+  const docast = () => {
+    ch.sessionLog = ch.sessionLog || [];
+    ch.sessionLog.unshift({ text: `${spellName} (cantrip)`, ts: Date.now() });
+    if (ch.sessionLog.length > 100) ch.sessionLog = ch.sessionLog.slice(0, 100);
+    if (isConc) ch.activeConcentration = { spellName, castLevel: 0 };
+    saveData(db);
+    showToast(`<strong>${esc(spellName)}</strong> cast!`);
+    if (isConc) renderApp();
+  };
   if (isConc && ch.activeConcentration && ch.activeConcentration.spellName !== spellName) {
-    if (!confirm(`This will end your concentration on ${ch.activeConcentration.spellName}. Continue?`)) return;
+    showConfirm(`This will end your concentration on ${esc(ch.activeConcentration.spellName)}. Continue?`, docast);
+  } else {
+    docast();
   }
-  ch.sessionLog = ch.sessionLog || [];
-  ch.sessionLog.unshift({ text: `${spellName} (cantrip)`, ts: Date.now() });
-  if (ch.sessionLog.length > 100) ch.sessionLog = ch.sessionLog.slice(0, 100);
-  if (isConc) ch.activeConcentration = { spellName, castLevel: 0 };
-  saveData(db);
-  showToast(`<strong>${esc(spellName)}</strong> cast!`);
-  if (isConc) renderApp();
 }
 
 function confirmCast(spellName, slotLevel) {
   const ch = db.characters[currentCharId]; if (!ch) return;
-  if ((ch.spells.slots[slotLevel] || 0) <= 0) { alert('No slots at that level!'); return; }
+  if ((ch.spells.slots[slotLevel] || 0) <= 0) { showAlert('No slots at that level!'); return; }
   // Find the spell to check concentration
   const allSpells = [...(ch.spells.known||[]), ...(ch.spells.prepared||[])];
   const sp = allSpells.find(s => (typeof s==='object' ? s.name : s) === spellName && typeof s === 'object');
   const isConc = sp?.concentration === 'yes';
+  const docast = () => {
+    CharacterStore.useSpellSlot(currentCharId, slotLevel);
+    const ordinals = ['','1st','2nd','3rd','4th','5th','6th','7th','8th','9th'];
+    const entry = `${spellName} cast at ${ordinals[slotLevel]} level`;
+    ch.sessionLog = ch.sessionLog || [];
+    ch.sessionLog.unshift({ text: entry, ts: Date.now() });
+    if (ch.sessionLog.length > 100) ch.sessionLog = ch.sessionLog.slice(0, 100);
+    if (isConc) ch.activeConcentration = { spellName, castLevel: slotLevel };
+    saveData(db);
+    closeModal();
+    renderApp(); // refresh slots, combat pill, everything
+  };
   if (isConc && ch.activeConcentration && ch.activeConcentration.spellName !== spellName) {
-    if (!confirm(`This will end your concentration on ${ch.activeConcentration.spellName}. Continue?`)) return;
+    showConfirm(`This will end your concentration on ${esc(ch.activeConcentration.spellName)}. Continue?`, docast);
+  } else {
+    docast();
   }
-  CharacterStore.useSpellSlot(currentCharId, slotLevel);
-  const ordinals = ['','1st','2nd','3rd','4th','5th','6th','7th','8th','9th'];
-  const entry = `${spellName} cast at ${ordinals[slotLevel]} level`;
-  ch.sessionLog = ch.sessionLog || [];
-  ch.sessionLog.unshift({ text: entry, ts: Date.now() });
-  if (ch.sessionLog.length > 100) ch.sessionLog = ch.sessionLog.slice(0, 100);
-  if (isConc) ch.activeConcentration = { spellName, castLevel: slotLevel };
-  saveData(db);
-  closeModal();
-  renderApp(); // refresh slots, combat pill, everything
 }
 
 // ── Custom Spell ──────────────────────────────────────────────────────────────
@@ -2771,7 +3164,7 @@ function openCustomSpellModal(editIdx) {
 function saveCustomSpell(editIdx) {
   loadCustomSpells();
   const name = document.getElementById('csp-name')?.value.trim();
-  if (!name) { alert('Spell name required.'); return; }
+  if (!name) { showAlert('Spell name required.'); return; }
   const sp = {
     name, level_int: parseInt(document.getElementById('csp-level')?.value)||0,
     school: document.getElementById('csp-school')?.value,
@@ -2792,11 +3185,11 @@ function saveCustomSpell(editIdx) {
 }
 
 function deleteCustomSpell(idx) {
-  if (!confirm('Delete this custom spell?')) return;
-  customSpells.splice(idx, 1);
-  saveCustomSpells();
-  closeModal();
-  renderSpellTabContent();
+  showConfirm('Delete this custom spell?', () => {
+    customSpells.splice(idx, 1);
+    saveCustomSpells();
+    renderSpellTabContent();
+  });
 }
 
 function renderSpellsSection(ch) {
@@ -2817,13 +3210,22 @@ function renderSpellsSection(ch) {
   let prepareLimitFormula = '';
   const classesWithLimit = (ch.classes||[]).filter(c => PREPARED_SPELL_LIMIT[c.class]);
   if (classesWithLimit.length > 0) {
-    const c = classesWithLimit[0]; // Use first class with limit
-    const ab = SPELL_ABILITY[c.class];
-    const abilityMod = mod(ch.abilities[ab]);
-    preparedLimit = PREPARED_SPELL_LIMIT[c.class](c.level, abilityMod);
-    const abilityName = ABILITY_SHORT[ab].toUpperCase();
-    const abilityModStr = abilityMod >= 0 ? `+ ${ABILITY_SHORT[ab]} +${abilityMod}` : `+ ${ABILITY_SHORT[ab]} ${abilityMod}`;
-    prepareLimitFormula = `Prepare up to ${preparedLimit} spells (level ${c.level} ${abilityModStr})`;
+    const parts = classesWithLimit.map(c => {
+      const ab = SPELL_ABILITY[c.class];
+      const abilityMod = mod(ch.abilities[ab]);
+      const limit = PREPARED_SPELL_LIMIT[c.class](c.level, abilityMod);
+      const abilityLabel = ABILITY_SHORT[ab].toUpperCase();
+      const modStr = abilityMod >= 0 ? `+${abilityMod}` : `${abilityMod}`;
+      return { cls: c.class, level: c.level, abilityLabel, modStr, limit };
+    });
+    preparedLimit = parts.reduce((sum, p) => sum + p.limit, 0);
+    if (parts.length === 1) {
+      const p = parts[0];
+      prepareLimitFormula = `Prepare up to ${preparedLimit} spells (${p.cls} ${p.level} +${p.abilityLabel} ${p.modStr})`;
+    } else {
+      const contributions = parts.map(p => `${p.cls} ${p.level} +${p.abilityLabel} ${p.modStr} = ${p.limit}`).join(', ');
+      prepareLimitFormula = `${contributions} → Prepare up to ${preparedLimit} spells`;
+    }
   }
 
   // Build per-class spellcasting stat rows
@@ -2840,7 +3242,9 @@ function renderSpellsSection(ch) {
       const sMod = mod(ch.abilities[ab]);
       const dc = 8 + pb + sMod;
       const atk = pb + sMod;
-      const limitNote = PREPARED_SPELL_LIMIT[c.class] ? `<div style="font-size:0.7rem;color:var(--text-dim);margin-top:0.3rem">${prepareLimitFormula}</div>` : '';
+      // Only show the combined prepare formula once — under the last class that has a limit
+      const isLastWithLimit = PREPARED_SPELL_LIMIT[c.class] && c === classesWithLimit[classesWithLimit.length - 1];
+      const limitNote = isLastWithLimit ? `<div style="font-size:0.7rem;color:var(--text-dim);margin-top:0.3rem">${prepareLimitFormula}</div>` : '';
       return `<div class="spell-stat-row">
         <div class="spell-stat-box"><div class="spell-stat-label">${esc(c.class)}</div><div class="spell-stat-val">${ABILITY_SHORT[ab]}</div></div>
         <div class="spell-stat-box"><div class="spell-stat-label">Spell Save DC</div><div class="spell-stat-val">${dc}</div></div>
@@ -3197,8 +3601,11 @@ function getClassFeaturesUpToLevel(className, level) {
 
 function renderFeaturesSection(ch) {
   const allFeatures = ch.featuresList || [];
-  const subFeatures = allFeatures.filter(f => f._subclass);
-  const customFeatures = allFeatures.filter(f => !f._subclass);
+  const speciesFeatures  = allFeatures.filter(f => f._species);
+  const subFeatures      = allFeatures.filter(f => f._subclass);
+  const bgFeatures       = allFeatures.filter(f => f._background);
+  const featFeatures     = allFeatures.filter(f => f._feat);
+  const customFeatures   = allFeatures.filter(f => !f._subclass && !f._species && !f._background && !f._feat);
 
   // Build a map from resource name → resource object for quick lookup
   const resourceMap = {};
@@ -3237,8 +3644,31 @@ function renderFeaturesSection(ch) {
     return `<span class="feat-res-mini">${pips}${overflow}</span>`;
   }
 
-  // Subclass feature cards
-  const subCards = subFeatures.map((f, rawI) => {
+  // Helper: inline badge style
+  function badgeStyle(color) {
+    return `style="background:${color};color:#fff;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.65rem;font-weight:bold"`;
+  }
+
+  // Species feature cards — teal badge
+  const speciesCards = speciesFeatures.map(f => {
+    const i = allFeatures.indexOf(f);
+    const idKey = `sp-desc-${i}`;
+    return `
+      <div class="sf-card" id="sp-card-${i}">
+        <div class="sf-card-header" onclick="toggleSfCard('${idKey}', this)">
+          <span class="sf-source-badge" ${badgeStyle('#14b8a6')}>${esc(f._species)}</span>
+          <span class="sf-name">${esc(f.name)}</span>
+          <span class="sf-toggle">▼</span>
+        </div>
+        <div class="sf-card-body hidden" id="${idKey}">
+          <div class="sf-body-name">${esc(f.name)}</div>
+          <p class="sf-desc">${esc(f.desc || 'No description.')}</p>
+        </div>
+      </div>`;
+  }).join('');
+
+  // Subclass feature cards — default purple sf-source-badge
+  const subCards = subFeatures.map(f => {
     const i = allFeatures.indexOf(f);
     const lvl = featLevel(f);
     const res = linkedResource(f);
@@ -3260,26 +3690,48 @@ function renderFeaturesSection(ch) {
       </div>`;
   }).join('');
 
-  // Custom feature cards (styled like subclass cards but editable)
+  // Background feature cards — gold badge showing background name
+  const bgCards = bgFeatures.map(f => {
+    const i = allFeatures.indexOf(f);
+    const idKey = `bg-desc-${i}`;
+    const label = esc(ch.background || 'Background');
+    return `
+      <div class="sf-card cf-card" id="bg-card-${i}">
+        <div class="sf-card-header" onclick="toggleSfCard('${idKey}', this)">
+          <span class="sf-source-badge" ${badgeStyle('#f59e0b')}>${label}</span>
+          <span class="sf-name">${esc(f.name)}</span>
+          <span class="sf-toggle">▼</span>
+          <button class="feature-del-btn cf-del-btn" onclick="event.stopPropagation();removeFeature(${i})" title="Remove">&times;</button>
+        </div>
+        <div class="sf-card-body hidden" id="${idKey}">
+          <p class="sf-desc">${esc(f.desc || 'No description.')}</p>
+        </div>
+      </div>`;
+  }).join('');
+
+  // Feat feature cards — source-coloured badge showing feat source
+  const featCards = featFeatures.map(f => {
+    const i = allFeatures.indexOf(f);
+    const idKey = `ft-desc-${i}`;
+    const srcInfo = FEAT_SOURCE_COLORS[f._featSource] || { abbr: f._featSource || 'Feat', color: '#9b6dff' };
+    return `
+      <div class="sf-card cf-card" id="ft-card-${i}">
+        <div class="sf-card-header" onclick="toggleSfCard('${idKey}', this)">
+          <span class="sf-source-badge" ${badgeStyle(srcInfo.color)}>${esc(srcInfo.abbr)}</span>
+          <span class="sf-name">${esc(f.name)}</span>
+          <span class="sf-toggle">▼</span>
+          <button class="feature-del-btn cf-del-btn" onclick="event.stopPropagation();removeFeature(${i})" title="Remove">&times;</button>
+        </div>
+        <div class="sf-card-body hidden" id="${idKey}">
+          <p class="sf-desc">${esc(f.desc || 'No description.')}</p>
+        </div>
+      </div>`;
+  }).join('');
+
+  // Custom feature cards — editable
   const customRows = customFeatures.map(f => {
     const i = allFeatures.indexOf(f);
     const idKey = `cf-desc-${i}`;
-    // Feat/background entries are read-only collapsed cards
-    if (f._feat || f._background) {
-      const srcInfo = f._feat ? (FEAT_SOURCE_COLORS[f._featSource] || { abbr: f._featSource || 'Feat', color: '#9b6dff' }) : { abbr: 'Background', color: '#22c55e' };
-      return `
-        <div class="sf-card cf-card" id="feat-row-${i}">
-          <div class="sf-card-header" onclick="toggleSfCard('${idKey}', this)">
-            <span class="sf-source-badge" style="background:${srcInfo.color};color:#fff;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.65rem;font-weight:bold">${srcInfo.abbr}</span>
-            <span class="sf-name">${esc(f.name)}</span>
-            <span class="sf-toggle">▼</span>
-            <button class="feature-del-btn cf-del-btn" onclick="event.stopPropagation();removeFeature(${i})" title="Remove">&times;</button>
-          </div>
-          <div class="sf-card-body hidden" id="${idKey}">
-            <p class="sf-desc">${esc(f.desc || 'No description.')}</p>
-          </div>
-        </div>`;
-    }
     return `
       <div class="sf-card cf-card" id="feat-row-${i}">
         <div class="sf-card-header cf-card-header" onclick="toggleSfCard('${idKey}', this)">
@@ -3297,14 +3749,33 @@ function renderFeaturesSection(ch) {
       </div>`;
   }).join('');
 
+  // Section order: Species → Subclass → Background → Feat → Custom
+  // Track how many sections precede each, for feat-section-first class
+  let hasPrev = false;
+  function sectionLabel(text) {
+    const cls = hasPrev ? 'feat-section-label' : 'feat-section-label feat-section-first';
+    hasPrev = true;
+    return `<div class="${cls}">${text}</div>`;
+  }
+
+  const speciesSection = speciesFeatures.length ? `
+    ${sectionLabel('Species &amp; Racial Traits')}
+    ${speciesCards}` : '';
+
   const subSection = subFeatures.length ? `
-    <div class="feat-section-label">✦ Class &amp; Subclass Features</div>
+    ${sectionLabel('✦ Class &amp; Subclass Features')}
     ${subCards}` : '';
 
+  const bgSection = bgFeatures.length ? `
+    ${sectionLabel('Background Features')}
+    ${bgCards}` : '';
+
+  const featSection = featFeatures.length ? `
+    ${sectionLabel('Feats')}
+    ${featCards}` : '';
+
   const customSection = `
-    <div class="feat-section-divider${subFeatures.length ? '' : ' feat-section-first'}">
-      <span>Custom Features</span>
-    </div>
+    ${sectionLabel('Custom Features')}
     <div id="features-list">
       ${customRows || '<div class="feature-empty">No custom features yet.</div>'}
     </div>
@@ -3315,7 +3786,10 @@ function renderFeaturesSection(ch) {
 
   return `<div class="sheet-panel features-panel" style="margin-top:0.6rem">
     <div class="cs-section-label">Features &amp; Traits</div>
+    ${speciesSection}
     ${subSection}
+    ${bgSection}
+    ${featSection}
     ${customSection}
   </div>`;
 }
@@ -3580,7 +4054,7 @@ function rollRandomItem() {
     if (typeQ && !(item.type||'').toLowerCase().includes(typeQ)) return false;
     return true;
   });
-  if (!pool.length) { alert('No items match the current filters.'); return; }
+  if (!pool.length) { showAlert('No items match the current filters.'); return; }
   const item = pool[Math.floor(Math.random() * pool.length)];
   // Push to history (keep last 5, avoid immediate duplicate at top)
   if (_randCurrent && (_randHistory.length === 0 || _randHistory[0].name !== _randCurrent.name)) {
@@ -3713,10 +4187,12 @@ function addMagicItemToChar(itemName, itemRarity) {
   ch.equipment.push({ name: item.name, rarity: item.rarity, type: item.type || '', attunement: item.attunement || '', desc: item.desc || '', _magic: true });
   // Prompt to attune if needed
   if (item.attunement && ch.attunedItems !== undefined) {
-    if (confirm(`"${item.name}" ${item.attunement}. Add to attuned items?`)) {
+    showConfirm(`"${esc(item.name)}" ${esc(item.attunement)}. Add to attuned items?`, () => {
       ch.attunedItems = ch.attunedItems || [];
       if (!ch.attunedItems.includes(item.name)) ch.attunedItems.push(item.name);
-    }
+      saveData(db); updateMagicResults(); renderApp();
+    }, () => { saveData(db); updateMagicResults(); renderApp(); });
+    return;
   }
   saveData(db);
   updateMagicResults();
@@ -3803,10 +4279,50 @@ function renderProficienciesLanguages(ch) {
       ${secOpts ? `<optgroup label="Secret">${secOpts}</optgroup>` : ''}
     </select>` : '';
 
+  // Collect tool names from proficiencies string + _background featuresList entries
+  const toolNames = [];
+  const seenTools = new Set();
+  (ch.proficiencies || '').split(',').map(t => t.trim()).filter(Boolean).forEach(t => {
+    const key = t.toLowerCase();
+    if (!seenTools.has(key)) { seenTools.add(key); toolNames.push(t); }
+  });
+  (ch.featuresList || []).filter(f => f._background === true).forEach(f => {
+    const match = (TOOLS_DATA || []).find(t => t.name.toLowerCase() === f.name.toLowerCase());
+    if (match) {
+      const key = match.name.toLowerCase();
+      if (!seenTools.has(key)) { seenTools.add(key); toolNames.push(match.name); }
+    }
+  });
+
+  const toolCardsHtml = toolNames.length > 0 ? `
+    <div class="tool-prof-list">
+      ${toolNames.map(toolName => {
+        const toolData = (TOOLS_DATA || []).find(t => t.name.toLowerCase() === toolName.toLowerCase());
+        if (!toolData) return `<div class="tool-prof-plain">${esc(toolName)}</div>`;
+        const cardId = 'tool-' + toolName.replace(/[^a-z0-9]/gi, '-').toLowerCase();
+        return `<div class="tool-prof-card">
+          <button class="tool-prof-toggle" onclick="var d=document.getElementById('${cardId}');d.classList.toggle('open');this.querySelector('.tool-chevron').textContent=d.classList.contains('open')?'▴':'▾'">
+            <span class="tool-prof-name">${esc(toolData.name)}</span>
+            <span class="tool-prof-type-badge">${esc(toolData.type)}</span>
+            <span class="tool-chevron">▾</span>
+          </button>
+          ${toolData.desc ? `<div class="tool-prof-desc" id="${cardId}">${esc(toolData.desc)}</div>` : ''}
+        </div>`;
+      }).join('')}
+    </div>` : '';
+
+  // Filter out tool names from proficiencies so textarea only shows non-tool profs
+  const toolNameLower = new Set(toolNames.map(t => t.toLowerCase()));
+  const nonToolProfs = (ch.proficiencies || '').split(',')
+    .map(p => p.trim())
+    .filter(p => p && !toolNameLower.has(p.toLowerCase()))
+    .join(', ');
+
   return `<div class="sheet-panel" style="margin-top:0.6rem">
     <div class="cs-section-label">Proficiencies &amp; Languages</div>
     <div class="cs-field-label" style="margin-bottom:0.3rem">Proficiencies</div>
-    <textarea class="sheet-textarea" rows="3" placeholder="Weapons, armor, tools..." oninput="ch_field('proficiencies',this.value)">${esc(ch.proficiencies||'')}</textarea>
+    ${toolCardsHtml}
+    <textarea class="sheet-textarea" rows="3" placeholder="Weapons, armor, other proficiencies..." oninput="(() => { const filtered = this.value.trim(); const toolList = ${JSON.stringify(toolNames)}.join(', '); const combined = filtered ? (toolList ? toolList + ', ' + filtered : filtered) : toolList; ch_field('proficiencies', combined); })()" style="margin-top:${toolNames.length?'0.5rem':'0'}">${esc(nonToolProfs)}</textarea>
     ${mcNote}
     <div class="cs-field-label" style="margin:0.6rem 0 0.3rem">Languages</div>
     <div class="lang-pills-row">${pills}${dropdown}</div>
@@ -4555,11 +5071,38 @@ function renderCharacterSheet() {
       </div>
       <div class="cs-header-field">
         <label>Background</label>
-        <input type="text" value="${esc(ch.background)}" oninput="ch_field('background',this.value)" placeholder="Soldier">
+        ${(()=>{
+          const ddStyle = 'background:transparent;border:none;border-bottom:1px solid var(--border);border-radius:0;color:var(--text);padding:0.1rem 0;font-size:0.85rem;width:100%';
+          const bgList = (SPECIES_DATA?.backgrounds_2024 || []).map(b => b.name);
+          const customBg = ch.background && !bgList.includes(ch.background) ? ch.background : null;
+          const bgOpts = bgList.map(n => `<option${ch.background===n?' selected':''}>${esc(n)}</option>`).join('');
+          const customOpt = customBg ? `<option value="${esc(customBg)}" selected>${esc(customBg)}</option>` : '';
+          return `<select style="${ddStyle}" onchange="changeBackground(this.value)">
+            <option value=""${!ch.background?' selected':''}>Choose background…</option>
+            ${customOpt}
+            ${bgOpts}
+          </select>`;
+        })()}
       </div>
       <div class="cs-header-field">
         <label>Species / Race</label>
-        <input type="text" value="${esc(ch.race)}" oninput="ch_field('race',this.value)" placeholder="Human">
+        ${(()=>{
+          const ddStyle = 'background:transparent;border:none;border-bottom:1px solid var(--border);border-radius:0;color:var(--text);padding:0.1rem 0;font-size:0.85rem;width:100%';
+          const s2024 = (SPECIES_DATA?.species_2024 || []).map(s => s.name);
+          const r2014 = (SPECIES_DATA?.races_2014 || []).map(r => r.name);
+          const rmpmm = (SPECIES_DATA?.races_mpmm || []).map(r => r.name);
+          const allRaces = [...s2024, ...r2014, ...rmpmm];
+          const customRace = ch.race && !allRaces.includes(ch.race) ? ch.race : null;
+          const makeOpts = (arr) => arr.map(n => `<option${ch.race===n?' selected':''}>${esc(n)}</option>`).join('');
+          const customGrp = customRace ? `<optgroup label="Other"><option value="${esc(customRace)}" selected>${esc(customRace)}</option></optgroup>` : '';
+          return `<select style="${ddStyle}" onchange="changeRace(this.value)">
+            <option value=""${!ch.race?' selected':''}>Choose species…</option>
+            ${customGrp}
+            <optgroup label="2024 PHB">${makeOpts(s2024)}</optgroup>
+            <optgroup label="2014 PHB">${makeOpts(r2014)}</optgroup>
+            <optgroup label="Mordenkainen's Multiverse">${makeOpts(rmpmm)}</optgroup>
+          </select>`;
+        })()}
       </div>
       <div class="cs-header-field">
         <label>Alignment</label>
@@ -4599,6 +5142,79 @@ function renderCharacterSheet() {
 }
 
 // ── Character Field Update Functions ──────────────────────────────────────────
+function changeBackground(newBg) {
+  const ch = db.characters[currentCharId];
+  if (!ch) return;
+
+  // Strip skills the OLD background added
+  if (ch.background) {
+    const oldBgData = (SPECIES_DATA?.backgrounds_2024 || []).find(b => b.name === ch.background);
+    (oldBgData?.skills || []).forEach(skill => {
+      const idx = ch.skillProficiencies.indexOf(skill);
+      if (idx !== -1) ch.skillProficiencies.splice(idx, 1);
+    });
+  }
+
+  // Strip old background-sourced features and feat
+  ch.featuresList = (ch.featuresList || []).filter(f =>
+    !(f._background === true) && !(f._feat && f._featSource?.startsWith('Background ('))
+  );
+
+  ch.background = newBg;
+
+  const newBgData = (SPECIES_DATA?.backgrounds_2024 || []).find(b => b.name === newBg);
+  if (newBgData) {
+    // Skills
+    (newBgData.skills || []).forEach(skill => {
+      if (!ch.skillProficiencies.includes(skill)) ch.skillProficiencies.push(skill);
+    });
+    // Tool proficiencies
+    ch.proficiencies = (newBgData.tools || []).join(', ');
+    // Feat
+    if (newBgData.feat) {
+      const featName = newBgData.feat;
+      const featsPool = FEATS_ITEMS_DATA?.feats || [];
+      const featData = featsPool.find(x => x.name === featName)
+        || featsPool.find(x => x.name === featName.replace(/\s*\(.*\)$/, ''));
+      ch.featuresList.push({ name: featName, desc: featData?.desc || 'Granted by your background.', _feat: true, _featSource: 'Background (' + newBg + ')' });
+    }
+  } else {
+    // Custom/unknown background — clear derived profs
+    ch.proficiencies = '';
+  }
+
+  saveData(db);
+  renderApp();
+}
+
+function changeRace(newRace) {
+  const ch = db.characters[currentCharId];
+  if (!ch) return;
+
+  // Strip old species traits
+  ch.featuresList = (ch.featuresList || []).filter(f => !f._species);
+
+  ch.race = newRace;
+
+  const allSources = [
+    ...(SPECIES_DATA?.species_2024 || []),
+    ...(SPECIES_DATA?.races_2014 || []),
+    ...(SPECIES_DATA?.races_mpmm || [])
+  ];
+  const raceData = allSources.find(r => r.name === newRace);
+  if (raceData) {
+    // Traits
+    (raceData.traits || []).forEach(trait => {
+      ch.featuresList.push({ name: trait.name, desc: trait.desc, _species: newRace });
+    });
+    // Speed
+    if (raceData.speed) ch.combat.speed = raceData.speed;
+  }
+
+  saveData(db);
+  renderApp();
+}
+
 function ch_field(field, value) {
   const ch = db.characters[currentCharId];
   ch[field] = value;
@@ -4868,8 +5484,32 @@ function toggleSkillProf(skillName) {
   saveData(db); renderApp();
 }
 function updateDeathSave(type, index, checked) {
-  db.characters[currentCharId].deathSaves[type] = checked?index+1:index;
+  const ch = db.characters[currentCharId];
+  ch.deathSaves[type] = checked ? index + 1 : index;
+
+  const { successes, failures } = ch.deathSaves;
+
+  if (failures >= 3) {
+    ch.combat.currentHP = 0;
+    showToast(`<span style="color:#ef4444">💀 <strong>${esc(ch.name)}</strong> has died — 3 failed death saves.</span>`);
+    // Add Unconscious condition to linked combatant
+    const campaign = db.campaigns.find(c => c.id === currentCampaignId);
+    if (campaign?.initiative?.combatants) {
+      const cb = campaign.initiative.combatants.find(c => c.charId === currentCharId);
+      if (cb) {
+        cb.conditions = cb.conditions || [];
+        if (!cb.conditions.some(c => (typeof c === 'string' ? c : c.name) === 'Unconscious')) {
+          cb.conditions.push('Unconscious');
+        }
+      }
+    }
+  } else if (successes >= 3) {
+    ch.deathSaves = { successes: 0, failures: 0 };
+    showToast(`<span style="color:#22c55e">✦ <strong>${esc(ch.name)}</strong> has stabilised — 3 successful death saves.</span>`);
+  }
+
   saveData(db);
+  renderApp();
 }
 
 function updateHPDisplay() {
@@ -4980,10 +5620,19 @@ function doLongRest() {
   const ch = db.characters[currentCharId]; if (!ch) return;
   ch.combat.currentHP = ch.combat.maxHP;
   ch.combat.tempHP = 0;
-  // Restore half hit dice (minimum 1)
-  const hdTotal = ch.level || 1;
-  const restore = Math.max(1, Math.floor(hdTotal / 2));
-  ch.combat.hitDiceUsed = Math.max(0, (ch.combat.hitDiceUsed || 0) - restore);
+  // Restore half hit dice per class (minimum 1 total)
+  const hdClasses = (ch.classes && ch.classes.length > 0) ? ch.classes : [{ class: ch.class || 'Fighter', level: ch.level || 1 }];
+  const hdTotal = hdClasses.reduce((s, c) => s + (c.level || 0), 0);
+  const totalRestore = Math.max(1, Math.floor(hdTotal / 2));
+  if (typeof ch.combat.hitDiceUsed !== 'object' || ch.combat.hitDiceUsed === null) ch.combat.hitDiceUsed = {};
+  let leftToRestore = totalRestore;
+  for (const cls of hdClasses) {
+    if (leftToRestore <= 0) break;
+    const used = ch.combat.hitDiceUsed[cls.class] || 0;
+    const restore = Math.min(used, leftToRestore);
+    ch.combat.hitDiceUsed[cls.class] = used - restore;
+    leftToRestore -= restore;
+  }
   // Restore all spell slots
   if (ch.spells?.slotsMax) {
     for (let lvl = 1; lvl <= 9; lvl++) {
@@ -4994,6 +5643,15 @@ function doLongRest() {
   if (ch.spells?.pactSlotsMax) ch.spells.pactSlots = ch.spells.pactSlotsMax;
   // Reset death saves
   ch.deathSaves = { successes: 0, failures: 0 };
+  // Clear concentration
+  ch.activeConcentration = null;
+  // Clear concentration warnings on any initiative combatant linked to this character
+  const charId = currentCharId;
+  db.campaigns.forEach(camp => {
+    camp.initiative?.combatants?.forEach(cb => {
+      if (cb.charId === charId) delete cb._concCheck;
+    });
+  });
   // Restore resources
   restoreResources('long', currentCharId);
   saveData(db); renderApp();
@@ -5001,71 +5659,133 @@ function doLongRest() {
 
 function openShortRestDialog() {
   const ch = db.characters[currentCharId]; if (!ch) return;
-  const hdSides = HIT_DICE[ch.class] || 8;
-  const hdTotal = ch.level || 1;
-  const hdUsed = ch.combat.hitDiceUsed || 0;
-  const hdRemaining = Math.max(0, hdTotal - hdUsed);
   const conMod = mod(ch.abilities?.con || 10);
+  const hdClasses = (ch.classes && ch.classes.length > 0) ? ch.classes : [{ class: ch.class || 'Fighter', level: ch.level || 1 }];
+  if (typeof ch.combat.hitDiceUsed !== 'object' || ch.combat.hitDiceUsed === null) ch.combat.hitDiceUsed = {};
+  const hdTotal = hdClasses.reduce((s, c) => s + (c.level || 0), 0);
+  const hdUsedAll = hdClasses.reduce((s, c) => s + (ch.combat.hitDiceUsed[c.class] || 0), 0);
+  const hdRemainingAll = Math.max(0, hdTotal - hdUsedAll);
+
+  // Per-class breakdown lines
+  const breakdownLines = hdClasses.map(c => {
+    const sides = HIT_DICE[c.class] || 8;
+    const used = ch.combat.hitDiceUsed[c.class] || 0;
+    const rem = Math.max(0, c.level - used);
+    return `<span style="margin-right:0.8rem">${c.class}: <strong>${rem}/${c.level}d${sides}</strong></span>`;
+  }).join('');
+
+  // Dropdown for multiclass: which die to roll
+  const isMulti = hdClasses.length > 1;
+  const availClasses = hdClasses.filter(c => (c.level - (ch.combat.hitDiceUsed[c.class] || 0)) > 0);
+  const dropdownHtml = isMulti ? `
+    <div style="margin-bottom:0.6rem;font-size:0.9rem">
+      <label style="color:var(--text-dim);margin-right:0.4rem">Roll die from:</label>
+      <select id="sr-class-select" style="background:var(--bg-input,#1a1a2e);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:0.2rem 0.4rem">
+        ${hdClasses.map(c => {
+          const sides = HIT_DICE[c.class] || 8;
+          const rem = Math.max(0, c.level - (ch.combat.hitDiceUsed[c.class] || 0));
+          return `<option value="${c.class}" ${rem <= 0 ? 'disabled' : ''}>${c.class} (d${sides}, ${rem} left)</option>`;
+        }).join('')}
+      </select>
+    </div>` : '';
+
+  const rollDisabled = hdRemainingAll <= 0 || ch.combat.currentHP >= ch.combat.maxHP;
+  const singleSides = HIT_DICE[hdClasses[0].class] || 8;
 
   openModal(`<h2>&#9788; Short Rest</h2>
-    <p style="font-size:0.85rem;color:var(--text-dim);margin-bottom:0.8rem">Spend hit dice to recover HP. Each die rolls 1d${hdSides} + ${conMod >= 0 ? '+' : ''}${conMod} (CON).</p>
-    <div style="font-size:0.9rem;margin-bottom:0.6rem"><strong>Hit Dice Remaining:</strong> <span id="sr-hd-remaining">${hdRemaining}</span> / ${hdTotal}d${hdSides}</div>
+    <p style="font-size:0.85rem;color:var(--text-dim);margin-bottom:0.8rem">Spend hit dice to recover HP. Each die rolls its hit die + ${conMod >= 0 ? '+' : ''}${conMod} (CON).</p>
+    <div style="font-size:0.85rem;margin-bottom:0.5rem">${breakdownLines}</div>
     <div style="font-size:0.9rem;margin-bottom:0.6rem"><strong>Current HP:</strong> <span id="sr-hp-current">${ch.combat.currentHP}</span> / ${ch.combat.maxHP}</div>
+    ${dropdownHtml}
     <div id="sr-roll-log" style="max-height:120px;overflow-y:auto;margin-bottom:0.8rem"></div>
     <div class="form-actions">
-      <button class="btn" id="sr-roll-btn" onclick="shortRestRollHD()" ${hdRemaining <= 0 || ch.combat.currentHP >= ch.combat.maxHP ? 'disabled' : ''}>Roll Hit Die</button>
+      <button class="btn" id="sr-roll-btn" onclick="shortRestRollHD()" ${rollDisabled ? 'disabled' : ''}>Roll Hit Die</button>
       <button class="btn btn-primary" onclick="restorePactSlots();restoreResources('short',currentCharId);saveData(db);closeModal();renderApp()">Done</button>
     </div>`);
 }
 
 function shortRestRollHD() {
   const ch = db.characters[currentCharId]; if (!ch) return;
-  const hdSides = HIT_DICE[ch.class] || 8;
-  const hdTotal = ch.level || 1;
-  const hdUsed = ch.combat.hitDiceUsed || 0;
-  const hdRemaining = hdTotal - hdUsed;
-  if (hdRemaining <= 0 || ch.combat.currentHP >= ch.combat.maxHP) return;
+  if (typeof ch.combat.hitDiceUsed !== 'object' || ch.combat.hitDiceUsed === null) ch.combat.hitDiceUsed = {};
+  const hdClasses = (ch.classes && ch.classes.length > 0) ? ch.classes : [{ class: ch.class || 'Fighter', level: ch.level || 1 }];
+  if (ch.combat.currentHP >= ch.combat.maxHP) return;
 
+  // Determine which class die to roll
+  const isMulti = hdClasses.length > 1;
+  let chosenClass;
+  if (isMulti) {
+    const sel = document.getElementById('sr-class-select');
+    chosenClass = hdClasses.find(c => c.class === sel?.value) || hdClasses[0];
+  } else {
+    chosenClass = hdClasses[0];
+  }
+  const usedForClass = ch.combat.hitDiceUsed[chosenClass.class] || 0;
+  if (usedForClass >= chosenClass.level) return; // none left for this class
+
+  const hdSides = HIT_DICE[chosenClass.class] || 8;
   const conMod = mod(ch.abilities?.con || 10);
   const roll = Math.ceil(Math.random() * hdSides);
   const healed = Math.max(1, roll + conMod);
   ch.combat.currentHP = Math.min(ch.combat.maxHP, ch.combat.currentHP + healed);
-  ch.combat.hitDiceUsed = (ch.combat.hitDiceUsed || 0) + 1;
+  ch.combat.hitDiceUsed[chosenClass.class] = usedForClass + 1;
   saveData(db);
 
-  // Update dialog
+  // Update roll log
   const log = document.getElementById('sr-roll-log');
   if (log) {
-    log.innerHTML += `<div style="font-size:0.82rem;padding:0.2rem 0;border-bottom:1px solid var(--border)">Rolled <strong>1d${hdSides} = ${roll}</strong> + ${conMod} CON = <span style="color:var(--green-lt);font-weight:bold">+${healed} HP</span></div>`;
+    const label = isMulti ? `${chosenClass.class} 1d${hdSides}` : `1d${hdSides}`;
+    log.innerHTML += `<div style="font-size:0.82rem;padding:0.2rem 0;border-bottom:1px solid var(--border)">Rolled <strong>${label} = ${roll}</strong> + ${conMod} CON = <span style="color:var(--green-lt);font-weight:bold">+${healed} HP</span></div>`;
     log.scrollTop = log.scrollHeight;
   }
-  const remEl = document.getElementById('sr-hd-remaining');
-  if (remEl) remEl.textContent = hdTotal - ch.combat.hitDiceUsed;
+
+  // Update HP display
   const hpEl = document.getElementById('sr-hp-current');
   if (hpEl) hpEl.textContent = ch.combat.currentHP;
 
-  // Disable button if no more dice or full HP
-  const btn = document.getElementById('sr-roll-btn');
-  if (btn && (hdTotal - ch.combat.hitDiceUsed <= 0 || ch.combat.currentHP >= ch.combat.maxHP)) {
-    btn.disabled = true;
+  // Refresh dropdown options and disable exhausted classes
+  if (isMulti) {
+    const sel = document.getElementById('sr-class-select');
+    if (sel) {
+      Array.from(sel.options).forEach(opt => {
+        const cls = hdClasses.find(c => c.class === opt.value);
+        if (cls) {
+          const rem = Math.max(0, cls.level - (ch.combat.hitDiceUsed[cls.class] || 0));
+          opt.text = `${cls.class} (d${HIT_DICE[cls.class]||8}, ${rem} left)`;
+          opt.disabled = rem <= 0;
+        }
+      });
+      // If current selection is exhausted, pick next available
+      const curOpt = sel.options[sel.selectedIndex];
+      if (curOpt?.disabled) {
+        const firstAvail = Array.from(sel.options).find(o => !o.disabled);
+        if (firstAvail) sel.value = firstAvail.value;
+      }
+    }
   }
 
-  // Update bar behind modal
+  // Disable Roll button if no more dice or at full HP
+  const hdUsedAll = hdClasses.reduce((s, c) => s + (ch.combat.hitDiceUsed[c.class] || 0), 0);
+  const hdTotal = hdClasses.reduce((s, c) => s + (c.level || 0), 0);
+  const btn = document.getElementById('sr-roll-btn');
+  if (btn && (hdUsedAll >= hdTotal || ch.combat.currentHP >= ch.combat.maxHP)) btn.disabled = true;
+
   updateHPDisplay();
 }
 
 function adjustHitDice(delta) {
   const ch = db.characters[currentCharId]; if (!ch) return;
-  const hdTotal = ch.level || 1;
-  const used = ch.combat.hitDiceUsed || 0;
+  if (typeof ch.combat.hitDiceUsed !== 'object' || ch.combat.hitDiceUsed === null) ch.combat.hitDiceUsed = {};
+  const hdClasses = (ch.classes && ch.classes.length > 0) ? ch.classes : [{ class: ch.class || 'Fighter', level: ch.level || 1 }];
   if (delta < 0) {
-    // Use a die (increase used)
-    if (used >= hdTotal) return;
-    ch.combat.hitDiceUsed = used + 1;
+    // Use a die: spend from first class with remaining dice
+    const cls = hdClasses.find(c => (ch.combat.hitDiceUsed[c.class] || 0) < c.level);
+    if (!cls) return;
+    ch.combat.hitDiceUsed[cls.class] = (ch.combat.hitDiceUsed[cls.class] || 0) + 1;
   } else {
-    // Restore a die (decrease used)
-    if (used <= 0) return;
-    ch.combat.hitDiceUsed = used - 1;
+    // Restore a die: restore from last class with used dice
+    const cls = [...hdClasses].reverse().find(c => (ch.combat.hitDiceUsed[c.class] || 0) > 0);
+    if (!cls) return;
+    ch.combat.hitDiceUsed[cls.class] = (ch.combat.hitDiceUsed[cls.class] || 0) - 1;
   }
   saveData(db); renderApp();
 }
@@ -5080,6 +5800,9 @@ function removeAttack(i) { db.characters[currentCharId].attacks.splice(i,1); sav
 function updateAttack(i, field, value) {
   const ch = db.characters[currentCharId];
   if (ch.attacks[i]) ch.attacks[i][field] = value;
+  // Debounce save: clear existing timer and set new one
+  if (window._attackSaveTimer) clearTimeout(window._attackSaveTimer);
+  window._attackSaveTimer = setTimeout(() => { saveData(db); }, 500);
 }
 function autoCalcAttackBonus(i, weaponType) {
   const ch = db.characters[currentCharId];
@@ -5138,6 +5861,28 @@ function updateWeaponResults() {
     return true;
   });
 
+  // Add Unarmed Strike to the beginning of simple weapons
+  const ch = db.characters[currentCharId];
+  const isMonk = ch && (ch.class === 'Monk' || (ch.classes && ch.classes.some(c => c.class === 'Monk')));
+  const monkLevel = isMonk ? (ch.classes ? ch.classes.find(c => c.class === 'Monk')?.level || ch.level : ch.level) : 0;
+  let unarmedDmg = '1 bludgeoning';
+  const unarmedStrike = { id: '_unarmed', name: 'Unarmed Strike', weapon_type: 'melee-str', dmg: unarmedDmg, category: 'simple', properties: [], _isUnarmed: true };
+  if (isMonk) {
+    let die = 'd6';
+    if (monkLevel >= 17) die = 'd12';
+    else if (monkLevel >= 11) die = 'd10';
+    else if (monkLevel >= 5) die = 'd8';
+    unarmedDmg = `1${die} bludgeoning`;
+    unarmedStrike.dmg = unarmedDmg;
+    unarmedStrike._monkBadge = true;
+  }
+
+  // Filter unarmed strike in search
+  const matchesSearch = !q || 'unarmed'.includes(q) || unarmedDmg.toLowerCase().includes(q);
+  if (matchesSearch && _wpnFilter['simple']) {
+    filtered.unshift(unarmedStrike);
+  }
+
   window._wpnVisible = filtered;
 
   const groups = [
@@ -5161,7 +5906,7 @@ function updateWeaponResults() {
           style="display:flex;align-items:center;gap:0.4rem;flex-wrap:wrap;
                  padding:0.3rem 0.5rem;border-radius:5px;cursor:pointer;
                  border:1px solid var(--border);margin-bottom:0.25rem">
-        <span style="font-size:0.82rem;font-weight:600;min-width:110px">${esc(w.name)}</span>
+        <span style="font-size:0.82rem;font-weight:600;min-width:110px">${esc(w.name)}${w._monkBadge ? '<span style="font-size:0.55rem;background:#9b6dff;color:#fff;padding:0.1rem 0.3rem;border-radius:2px;margin-left:0.3rem">Monk</span>' : ''}</span>
         <span style="font-size:0.82rem;color:#f59e0b;font-weight:600">${esc(dice)}</span>
         <span style="font-size:0.72rem;color:var(--text-dim)">${esc(dmgType)}</span>
         ${rangeTxt}
@@ -5195,7 +5940,19 @@ function pickWeapon(idx) {
     else                                  abilityMod = dexMod;
     const bonus = pb + abilityMod;
     const bonusStr = (bonus >= 0 ? '+' : '') + bonus;
-    ch.attacks.push({ id: uid(), name: w.name, weaponType, bonus: bonusStr, damage: dmg });
+
+    // For unarmed strike, adjust damage based on Monk status
+    let finalDmg = dmg;
+    if (w._isUnarmed) {
+      const isMonk = ch.class === 'Monk' || (ch.classes && ch.classes.some(c => c.class === 'Monk'));
+      if (!isMonk) {
+        // Non-Monk: damage is 1 + STR mod (no dice, stored as flat bonus)
+        const flatDamage = 1 + strMod;
+        finalDmg = flatDamage + ' bludgeoning';
+      }
+    }
+
+    ch.attacks.push({ id: uid(), name: w.name, weaponType, bonus: bonusStr, damage: finalDmg, _unarmed: w._isUnarmed });
     saveData(db); renderApp();
   }
 
@@ -5254,12 +6011,36 @@ function rollAttack(i) {
   const bonusNum = parseInt(atk.bonus) || 0;
   const total = d20 + bonusNum;
   const bonusStr = bonusNum >= 0 ? `+ ${bonusNum}` : `\u2212 ${Math.abs(bonusNum)}`;
-  showToast(`<strong>${esc(atk.name || 'Attack')} attack:</strong> d20(${d20}) ${bonusStr} = <strong>${total}</strong>`);
+  const totalDisplay = `d20(${d20}) ${bonusStr} = <strong>${total}</strong>`;
+  let html;
+  let duration = 5000;
+  if (d20 === 20) {
+    html = `<span style="color:#f59e0b;font-weight:700">✦ CRITICAL HIT!</span> <strong>${esc(atk.name || 'Attack')} attack:</strong> ${totalDisplay} — roll damage dice twice`;
+    duration = 7000;
+  } else if (d20 === 1) {
+    html = `<span style="color:#ef4444;font-weight:700">✗ CRITICAL MISS!</span> <strong>${esc(atk.name || 'Attack')} attack:</strong> ${totalDisplay}`;
+    duration = 7000;
+  } else {
+    html = `<strong>${esc(atk.name || 'Attack')} attack:</strong> ${totalDisplay}`;
+  }
+  showToast(html, duration);
 }
 function rollDamage(i) {
   const ch = db.characters[currentCharId];
   const atk = ch?.attacks?.[i];
   if (!atk?.damage) { showToast('No damage dice set.'); return; }
+
+  // Handle unarmed strike for non-Monks (flat damage, no dice)
+  if (atk._unarmed) {
+    const flatMatch = atk.damage.match(/^(\d+)\s/);
+    if (flatMatch) {
+      const flatDamage = parseInt(flatMatch[1]);
+      const dmgType = atk.damage.split(/\s+/).slice(1).join(' ');
+      showToast(`<strong>${esc(atk.name || 'Unarmed Strike')} damage:</strong> <strong>${flatDamage}</strong> ${esc(dmgType)}`);
+      return;
+    }
+  }
+
   const diceStr = atk.damage.trim().split(/\s+/)[0];
   const m = diceStr.match(/^(\d+)d(\d+)([+-]\d+)?/i);
   if (!m) { showToast(`Cannot parse: <strong>${esc(atk.damage)}</strong>`); return; }
@@ -5337,12 +6118,33 @@ function _openLevelUpHPModal(ch, classIdx) {
   const avg = Math.floor(hd / 2) + 1;
   const conMod = Math.floor(((ch.abilities?.con || 10) - 10) / 2);
   const conStr = conMod >= 0 ? `+${conMod}` : `${conMod}`;
+  const newClassLevel = (entry ? entry.level : ch.level) + 1;
+  const classFeats = (CLASS_FEATURES[className] || [])
+    .filter(f => f[0] === newClassLevel)
+    .map(f => ({ name: f[1], desc: f[2], tag: null }));
+  const subclassFeats = (() => {
+    const sub = entry?.subclass || ch.subclass;
+    if (!sub || typeof SUBCLASS_DATA === 'undefined') return [];
+    const sdata = SUBCLASS_DATA[className]?.[sub];
+    if (!sdata?.features) return [];
+    return sdata.features.filter(f => f.level === newClassLevel)
+      .map(f => ({ name: f.name, desc: f.description, tag: 'subclass' }));
+  })();
+  const allFeats = [...classFeats, ...subclassFeats];
+  const featuresHTML = allFeats.length > 0 ? `
+    <div class="levelup-features">
+      <div class="levelup-features-title">New Features at Level ${newClassLevel}</div>
+      ${allFeats.map(f => `<div class="levelup-feature-row">
+        <span class="levelup-feat-name">${esc(f.name)}</span>${f.tag ? `<span class="levelup-feat-tag">${f.tag}</span>` : ''}<span class="levelup-feat-desc">${esc(f.desc)}</span>
+      </div>`).join('')}
+    </div>` : '';
   openModal(`<h2>Level Up — ${esc(className)}</h2>
     <p style="font-size:0.82rem;color:var(--text-dim);margin-bottom:0.75rem">
       Hit Die: d${hd} &nbsp;·&nbsp; CON modifier: ${conStr} &nbsp;·&nbsp; New total level: ${ch.level + 1}
     </p>
+    ${featuresHTML}
     <div class="form-group" style="display:flex;flex-direction:column;gap:0.5rem">
-      <button class="btn btn-primary" onclick="_levelUpGainHP(${classIdx}, ${Math.floor(Math.random()*hd)+1} + ${conMod})">
+      <button class="btn btn-primary" onclick="_levelUpRollHP(${classIdx}, ${hd}, ${conMod})">
         Roll d${hd} (you'll see the result)
       </button>
       <button class="btn" onclick="_levelUpGainHP(${classIdx}, ${avg + conMod})">
@@ -5362,7 +6164,13 @@ function _openLevelUpHPModal(ch, classIdx) {
     <p id="levelup-result" style="margin-top:0.5rem;font-size:0.85rem;color:var(--gold-lt);min-height:1.2em"></p>`);
 }
 
-function _levelUpGainHP(classIdx, hpGain) {
+function _levelUpRollHP(classIdx, hd, conMod) {
+  const roll = Math.floor(Math.random() * hd) + 1;
+  const total = Math.max(1, roll + conMod);
+  _levelUpGainHP(classIdx, total, { roll, hd, conMod });
+}
+
+function _levelUpGainHP(classIdx, hpGain, rollInfo) {
   const ch = db.characters[currentCharId]; if (!ch) return;
   if (ch.level >= 20) { closeModal(); return; }
   const gained = Math.max(1, Math.round(hpGain));
@@ -5379,7 +6187,12 @@ function _levelUpGainHP(classIdx, hpGain) {
   saveData(db);
   const result = document.getElementById('levelup-result');
   if (result) {
-    result.textContent = `+${gained} HP · Now Level ${ch.level} · Max HP ${ch.combat.maxHP}`;
+    let resultMsg = `+${gained} HP · Now Level ${ch.level} · Max HP ${ch.combat.maxHP}`;
+    if (rollInfo) {
+      const conStr = rollInfo.conMod >= 0 ? `+${rollInfo.conMod}` : rollInfo.conMod;
+      resultMsg = `Rolled d${rollInfo.hd}: ${rollInfo.roll} ${conStr} CON = +${gained} HP · Now Level ${ch.level} · Max HP ${ch.combat.maxHP}`;
+    }
+    result.textContent = resultMsg;
   }
   setTimeout(() => { closeModal(); renderApp(); refreshPanels(); }, 900);
 }
@@ -5488,7 +6301,7 @@ function switchToCharacter(charId) {
 
 function duplicateCharacter(charId) {
   if (CharacterStore.getAllForCampaign(currentCampaignId).length >= 20) {
-    alert('20 character limit reached.'); return;
+    showAlert('20 character limit reached.'); return;
   }
   const orig = db.characters[charId]; if (!orig) return;
   const copy = JSON.parse(JSON.stringify(orig));
@@ -5501,22 +6314,23 @@ function duplicateCharacter(charId) {
 }
 
 function deleteCharacterFromPanel(charId) {
-  if (!confirm('Delete this character?')) return;
-  delete db.characters[charId];
-  const c = db.campaigns.find(c => c.id === currentCampaignId);
-  if (c) {
-    c.characters = c.characters.filter(id => id !== charId);
-    if (c.activeCharId === charId) c.activeCharId = c.characters[0] || null;
-  }
-  saveData(db);
-  if (currentCharId === charId) {
-    closeCharPanel();
-    if (c?.activeCharId) { currentCharId = c.activeCharId; renderApp(); }
-    else showCampaign(currentCampaignId);
-  } else {
-    closeCharPanel(); openCharPanel();
-  }
-  renderCharSelector();
+  showConfirm('Delete this character?', () => {
+    delete db.characters[charId];
+    const c = db.campaigns.find(c => c.id === currentCampaignId);
+    if (c) {
+      c.characters = c.characters.filter(id => id !== charId);
+      if (c.activeCharId === charId) c.activeCharId = c.characters[0] || null;
+    }
+    saveData(db);
+    if (currentCharId === charId) {
+      closeCharPanel();
+      if (c?.activeCharId) { currentCharId = c.activeCharId; renderApp(); }
+      else showCampaign(currentCampaignId);
+    } else {
+      closeCharPanel(); openCharPanel();
+    }
+    renderCharSelector();
+  });
 }
 
 // ── Character Setup Wizard ────────────────────────────────────────────────────
@@ -5977,7 +6791,7 @@ function wiz_setLevel(lvl) { wizardData.level = Math.min(20, Math.max(1, lvl)); 
 
 function wizardFinish() {
   if (CharacterStore.getAllForCampaign(currentCampaignId).length >= 20) {
-    alert('20 character limit reached.'); return;
+    showAlert('20 character limit reached.'); return;
   }
   wizardData.maxHP = Math.max(1, parseInt(document.getElementById('wiz-hp')?.value) || wizardData.maxHP || 1);
   const ch = newCharacter(wizardData.name, wizardData.race, wizardData.class, wizardData.level);
@@ -5999,8 +6813,19 @@ function wizardFinish() {
     if (tools) ch.proficiencies = tools;
     if (wizardData.backgroundData.feat) {
       ch.featuresList = ch.featuresList || [];
-      ch.featuresList.push({ name: wizardData.backgroundData.feat, desc: 'Granted by background.', _background: true });
+      const featName = wizardData.backgroundData.feat;
+      const featsPool = FEATS_ITEMS_DATA?.feats || [];
+      const featData = featsPool.find(x => x.name === featName)
+        || featsPool.find(x => x.name === featName.replace(/\s*\(.*\)$/, ''));
+      ch.featuresList.push({ name: featName, desc: featData?.desc || 'Granted by your background.', _feat: true, _featSource: 'Background (' + wizardData.background + ')' });
     }
+  }
+  // Store species traits
+  if (wizardData.raceData?.traits && Array.isArray(wizardData.raceData.traits) && wizardData.raceData.traits.length > 0) {
+    ch.featuresList = ch.featuresList || [];
+    wizardData.raceData.traits.forEach(trait => {
+      ch.featuresList.push({ name: trait.name, desc: trait.desc, _species: wizardData.race });
+    });
   }
   // Set speed from species
   if (wizardData.raceData?.speed) ch.combat.speed = wizardData.raceData.speed;
@@ -6097,6 +6922,32 @@ function openModal(html) { document.getElementById('modal-content').innerHTML=ht
 function closeModal() { document.getElementById('modal-overlay').classList.add('hidden'); }
 document.addEventListener('keydown', e => { if(e.key==='Escape') closeModal(); });
 
+// ── Confirm / Alert helpers (replace native confirm() / alert()) ───────────────
+let _modalConfirmFn = null, _modalCancelFn = null;
+function showConfirm(msg, onConfirm, onCancel) {
+  _modalConfirmFn = onConfirm || null;
+  _modalCancelFn = onCancel || null;
+  openModal(`<div style="text-align:center;padding:0.5rem 0 0.75rem">
+    <div style="font-size:2rem;margin-bottom:0.5rem;color:#f59e0b">⚠</div>
+    <p style="margin:0 0 1.25rem;font-size:0.95rem;color:var(--text);line-height:1.5">${esc(msg)}</p>
+    <div class="form-actions" style="justify-content:center">
+      <button class="btn" onclick="_modalDismiss()">Cancel</button>
+      <button class="btn btn-danger" onclick="_modalAccept()">Confirm</button>
+    </div>
+  </div>`);
+}
+function showAlert(msg, success) {
+  openModal(`<div style="text-align:center;padding:0.5rem 0 0.75rem">
+    <div style="font-size:2rem;margin-bottom:0.5rem;color:${success?'#22c55e':'#f59e0b'}">${success?'✓':'⚠'}</div>
+    <p style="margin:0 0 1.25rem;font-size:0.95rem;color:var(--text);line-height:1.5">${esc(msg)}</p>
+    <div class="form-actions" style="justify-content:center">
+      <button class="btn btn-primary" onclick="closeModal()">OK</button>
+    </div>
+  </div>`);
+}
+function _modalAccept() { closeModal(); const fn=_modalConfirmFn; _modalConfirmFn=null; _modalCancelFn=null; fn?.(); }
+function _modalDismiss() { closeModal(); const fn=_modalCancelFn; _modalConfirmFn=null; _modalCancelFn=null; fn?.(); }
+
 // ── Import / Export ────────────────────────────────────────────────────────────
 function exportData() {
   const blob=new Blob([JSON.stringify(db,null,2)],{type:'application/json'});
@@ -6110,11 +6961,12 @@ function importData(event) {
     try {
       const imported=JSON.parse(e.target.result);
       if(!imported.campaigns||!imported.characters) throw new Error('Invalid');
-      if(!confirm('This will replace all current data. Continue?')) return;
-      db=imported; if(!db.npcs) db.npcs={};
-      Object.values(db.characters).forEach(ch=>migrateCharacter(ch));
-      saveData(db); showCampaigns(); alert('Import successful!');
-    } catch { alert('Invalid file.'); }
+      showConfirm('This will replace all current data. Continue?', ()=>{
+        db=imported; if(!db.npcs) db.npcs={};
+        Object.values(db.characters).forEach(ch=>migrateCharacter(ch));
+        saveData(db); showCampaigns(); showAlert('Import successful!', true);
+      });
+    } catch { showAlert('Invalid file.'); }
   };
   reader.readAsText(file); event.target.value='';
 }
