@@ -1,5 +1,261 @@
 // ── Data Layer ────────────────────────────────────────────────────────────────
 const STORAGE_KEY = 'dnd_tracker_v1';
+const STORAGE_KEY_BACKUP = 'dnd_tracker_v1_backup';
+
+// Firebase configuration — replace placeholder values with your project's config
+const FIREBASE_CONFIG = {
+  apiKey:            "REPLACE_ME",
+  authDomain:        "REPLACE_ME.firebaseapp.com",
+  projectId:         "REPLACE_ME",
+  storageBucket:     "REPLACE_ME.appspot.com",
+  messagingSenderId: "REPLACE_ME",
+  appId:             "REPLACE_ME"
+};
+
+// ── Firebase / Firestore Internals ───────────────────────────────────────────
+let _fireDb = null;          // Firestore instance (null when unconfigured)
+let _firestoreReady = false; // true once Firebase is initialised
+let _fsWriteTimer = null;    // debounce handle
+const _FS_DEBOUNCE = 1500;   // ms to wait before writing to Firestore
+const _FS_USER = 'local';    // placeholder user id (no auth yet)
+
+// Snapshot of each doc's JSON — used for change detection
+let _dbSnap = { campaigns: {}, characters: {}, npcs: {} };
+
+// Flag to suppress Firestore re-writes when we're applying a Firestore snapshot
+let _fromFirestore = false;
+
+function _initFirebase() {
+  if (!FIREBASE_CONFIG.apiKey || FIREBASE_CONFIG.apiKey === 'REPLACE_ME') return;
+  if (typeof firebase === 'undefined') { console.warn('[Firebase] SDK not loaded'); return; }
+  try {
+    firebase.initializeApp(FIREBASE_CONFIG);
+    _fireDb = firebase.firestore();
+    _firestoreReady = true;
+    console.log('[Firebase] Initialized — Firestore ready');
+  } catch (e) { console.warn('[Firebase] Init failed:', e); }
+}
+
+// Take a snapshot of the current db state for change detection
+function _takeSnapshot(data) {
+  _dbSnap = { campaigns: {}, characters: {}, npcs: {} };
+  (data.campaigns || []).forEach(c => { _dbSnap.campaigns[c.id] = JSON.stringify(c); });
+  Object.entries(data.characters || {}).forEach(([id, ch]) => { _dbSnap.characters[id] = JSON.stringify(ch); });
+  Object.entries(data.npcs || {}).forEach(([id, npc]) => { _dbSnap.npcs[id] = JSON.stringify(npc); });
+}
+
+// Debounced Firestore write — called by saveData()
+function _debouncedFirestoreWrite(data) {
+  if (!_firestoreReady || _fromFirestore) return;
+  clearTimeout(_fsWriteTimer);
+  _fsWriteTimer = setTimeout(() => _writeChangesToFirestore(data), _FS_DEBOUNCE);
+}
+
+async function _writeChangesToFirestore(data) {
+  if (!_firestoreReady) return;
+  const base = `users/${_FS_USER}`;
+  const batch = _fireDb.batch();
+  let changeCount = 0;
+
+  // ── Campaigns ──
+  const curCampaigns = {};
+  (data.campaigns || []).forEach(c => {
+    const json = JSON.stringify(c);
+    curCampaigns[c.id] = json;
+    if (_dbSnap.campaigns[c.id] !== json) {
+      batch.set(_fireDb.doc(`${base}/campaigns/${c.id}`), JSON.parse(json));
+      changeCount++;
+    }
+  });
+  // Detect deleted campaigns
+  Object.keys(_dbSnap.campaigns).forEach(id => {
+    if (!curCampaigns[id]) { batch.delete(_fireDb.doc(`${base}/campaigns/${id}`)); changeCount++; }
+  });
+
+  // ── Characters ──
+  const curChars = {};
+  Object.entries(data.characters || {}).forEach(([id, ch]) => {
+    const json = JSON.stringify(ch);
+    curChars[id] = json;
+    if (_dbSnap.characters[id] !== json) {
+      batch.set(_fireDb.doc(`${base}/characters/${id}`), JSON.parse(json));
+      changeCount++;
+    }
+  });
+  Object.keys(_dbSnap.characters).forEach(id => {
+    if (!curChars[id]) { batch.delete(_fireDb.doc(`${base}/characters/${id}`)); changeCount++; }
+  });
+
+  // ── NPCs ──
+  const curNpcs = {};
+  Object.entries(data.npcs || {}).forEach(([id, npc]) => {
+    const json = JSON.stringify(npc);
+    curNpcs[id] = json;
+    if (_dbSnap.npcs[id] !== json) {
+      batch.set(_fireDb.doc(`${base}/npcs/${id}`), JSON.parse(json));
+      changeCount++;
+    }
+  });
+  Object.keys(_dbSnap.npcs).forEach(id => {
+    if (!curNpcs[id]) { batch.delete(_fireDb.doc(`${base}/npcs/${id}`)); changeCount++; }
+  });
+
+  if (changeCount === 0) return;
+  try {
+    await batch.commit();
+    _takeSnapshot(data);
+    console.log(`[Firestore] Wrote ${changeCount} doc(s)`);
+  } catch (e) {
+    console.warn('[Firestore] Write failed — data safe in localStorage:', e.message);
+  }
+}
+
+// ── Firestore → local real-time listeners ────────────────────────────────────
+let _snapshotUnsubs = [];
+
+function _setupFirestoreListeners() {
+  if (!_firestoreReady) return;
+  // Tear down any existing listeners
+  _snapshotUnsubs.forEach(fn => fn());
+  _snapshotUnsubs = [];
+  const base = `users/${_FS_USER}`;
+
+  // Campaigns listener
+  _snapshotUnsubs.push(
+    _fireDb.collection(`${base}/campaigns`).onSnapshot(snap => {
+      if (snap.metadata.hasPendingWrites) return; // ignore local echoes
+      _fromFirestore = true;
+      const remoteCampaigns = {};
+      snap.forEach(doc => { remoteCampaigns[doc.id] = doc.data(); });
+      // Merge: keep remote as source of truth for existing docs, preserve local-only additions
+      const remoteIds = new Set(Object.keys(remoteCampaigns));
+      const merged = [];
+      // Add all remote campaigns (update or new)
+      Object.values(remoteCampaigns).forEach(c => {
+        // Ensure campaign migrations
+        if (!c.npcs) c.npcs = [];
+        if (!c.initiative) c.initiative = null;
+        if (!c.campaignTab) c.campaignTab = 'characters';
+        if (c.activeCharId === undefined) c.activeCharId = (c.characters || [])[0] || null;
+        if (!c.journal) c.journal = [];
+        merged.push(c);
+      });
+      db.campaigns = merged;
+      _takeSnapshot(db);
+      saveData(db); // localStorage only (re-write suppressed by _fromFirestore flag)
+      _fromFirestore = false;
+      renderApp();
+    }, err => console.warn('[Firestore] Campaigns listener error:', err))
+  );
+
+  // Characters listener
+  _snapshotUnsubs.push(
+    _fireDb.collection(`${base}/characters`).onSnapshot(snap => {
+      if (snap.metadata.hasPendingWrites) return;
+      _fromFirestore = true;
+      snap.docChanges().forEach(change => {
+        if (change.type === 'removed') {
+          delete db.characters[change.doc.id];
+        } else {
+          const ch = change.doc.data();
+          migrateCharacter(ch);
+          db.characters[ch.id || change.doc.id] = ch;
+        }
+      });
+      _takeSnapshot(db);
+      saveData(db);
+      _fromFirestore = false;
+      renderApp();
+    }, err => console.warn('[Firestore] Characters listener error:', err))
+  );
+
+  // NPCs listener
+  _snapshotUnsubs.push(
+    _fireDb.collection(`${base}/npcs`).onSnapshot(snap => {
+      if (snap.metadata.hasPendingWrites) return;
+      _fromFirestore = true;
+      snap.docChanges().forEach(change => {
+        if (change.type === 'removed') {
+          delete db.npcs[change.doc.id];
+        } else {
+          const npc = change.doc.data();
+          db.npcs[npc.id || change.doc.id] = npc;
+        }
+      });
+      _takeSnapshot(db);
+      saveData(db);
+      _fromFirestore = false;
+      renderApp();
+    }, err => console.warn('[Firestore] NPCs listener error:', err))
+  );
+}
+
+// ── Async init — loads from Firestore then falls back to localStorage ────────
+async function initData() {
+  _initFirebase();
+  if (!_firestoreReady) {
+    // No Firestore — just snapshot the existing localStorage data
+    _takeSnapshot(db);
+    return;
+  }
+  const base = `users/${_FS_USER}`;
+  try {
+    // Try loading all three collections from Firestore
+    const [campSnap, charSnap, npcSnap] = await Promise.all([
+      _fireDb.collection(`${base}/campaigns`).get(),
+      _fireDb.collection(`${base}/characters`).get(),
+      _fireDb.collection(`${base}/npcs`).get(),
+    ]);
+
+    // If Firestore has data, use it; otherwise push localStorage data up
+    const hasRemoteData = !campSnap.empty || !charSnap.empty || !npcSnap.empty;
+
+    if (hasRemoteData) {
+      // ── Load from Firestore ──
+      const remoteCampaigns = [];
+      campSnap.forEach(doc => {
+        const c = doc.data();
+        if (!c.npcs) c.npcs = [];
+        if (!c.initiative) c.initiative = null;
+        if (!c.campaignTab) c.campaignTab = 'characters';
+        if (c.activeCharId === undefined) c.activeCharId = (c.characters || [])[0] || null;
+        if (!c.journal) c.journal = [];
+        remoteCampaigns.push(c);
+      });
+      const remoteChars = {};
+      charSnap.forEach(doc => {
+        const ch = doc.data();
+        migrateCharacter(ch);
+        remoteChars[ch.id || doc.id] = ch;
+      });
+      const remoteNpcs = {};
+      npcSnap.forEach(doc => {
+        const npc = doc.data();
+        remoteNpcs[npc.id || doc.id] = npc;
+      });
+
+      db.campaigns  = remoteCampaigns;
+      db.characters = remoteChars;
+      db.npcs       = remoteNpcs;
+
+      // Persist to localStorage (offline backup)
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(db)); } catch (_) {}
+      console.log('[Firestore] Loaded data from cloud');
+      renderApp();
+    } else if (db.campaigns.length > 0 || Object.keys(db.characters).length > 0) {
+      // ── No remote data but local data exists — push up to Firestore ──
+      console.log('[Firestore] No cloud data found — uploading local data');
+      _takeSnapshot({ campaigns: [], characters: {}, npcs: {} }); // empty snap so everything looks "new"
+      await _writeChangesToFirestore(db);
+    }
+
+    _takeSnapshot(db);
+    _setupFirestoreListeners();
+  } catch (e) {
+    console.warn('[Firestore] Initial load failed — using localStorage:', e.message);
+    _takeSnapshot(db);
+  }
+}
 
 function migrateCharacter(ch) {
   if (ch.inspiration === undefined) ch.inspiration = false;
@@ -78,7 +334,7 @@ function migrateCharacter(ch) {
 
 function loadData() {
   try {
-    const raw = JSON.parse(localStorage.getItem(STORAGE_KEY));
+    const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) || localStorage.getItem(STORAGE_KEY_BACKUP));
     if (!raw) return { campaigns: [], characters: {}, npcs: {} };
     if (!raw.npcs) raw.npcs = {};
     raw.campaigns.forEach(c => {
@@ -94,13 +350,19 @@ function loadData() {
 }
 
 function saveData(data) {
+  // ① Synchronous localStorage write — always immediate
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    const json = JSON.stringify(data);
+    localStorage.setItem(STORAGE_KEY, json);
+    // Also write to backup key for export/import resilience
+    try { localStorage.setItem(STORAGE_KEY_BACKUP, json); } catch (_) {}
   } catch (e) {
     if (e instanceof DOMException && (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED')) {
       showToast('<span style="color:#ef4444;font-weight:700">⚠ Storage nearly full</span> — remove a portrait or export your data to free space.', 7000);
     }
   }
+  // ② Debounced Firestore write — async layer on top
+  _debouncedFirestoreWrite(data);
 }
 
 function uid() {
@@ -6964,6 +7226,8 @@ function importData(event) {
       showConfirm('This will replace all current data. Continue?', ()=>{
         db=imported; if(!db.npcs) db.npcs={};
         Object.values(db.characters).forEach(ch=>migrateCharacter(ch));
+        // Reset snapshot so Firestore sees everything as new/changed
+        _takeSnapshot({ campaigns: [], characters: {}, npcs: {} });
         saveData(db); showCampaigns(); showAlert('Import successful!', true);
       });
     } catch { showAlert('Invalid file.'); }
@@ -6980,3 +7244,5 @@ function esc(str) {
 // ── Init ───────────────────────────────────────────────────────────────────────
 renderBreadcrumb();
 renderApp();
+// Async: connect to Firestore (if configured), load cloud data, set up listeners
+initData();
