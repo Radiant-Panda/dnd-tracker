@@ -14,7 +14,9 @@ const FIREBASE_CONFIG = {
 
 // ── Firebase / Firestore Internals ───────────────────────────────────────────
 let _fireDb = null;          // Firestore instance (null when unconfigured)
+let _fireStorage = null;     // Firebase Storage instance (null when unconfigured)
 let _firestoreReady = false; // true once Firebase is initialised
+let _storageReady = false;   // true once Firebase Storage is initialised
 let _fsWriteTimer = null;    // debounce handle
 const _FS_DEBOUNCE = 1500;   // ms to wait before writing to Firestore
 const _FS_USER = 'local';    // placeholder user id (no auth yet)
@@ -32,8 +34,103 @@ function _initFirebase() {
     firebase.initializeApp(FIREBASE_CONFIG);
     _fireDb = firebase.firestore();
     _firestoreReady = true;
-    console.log('[Firebase] Initialized — Firestore ready');
+    // Init Storage if SDK is available
+    if (firebase.storage) {
+      _fireStorage = firebase.storage();
+      _storageReady = true;
+      console.log('[Firebase] Initialized — Firestore + Storage ready');
+    } else {
+      console.log('[Firebase] Initialized — Firestore ready (Storage SDK not loaded)');
+    }
   } catch (e) { console.warn('[Firebase] Init failed:', e); }
+}
+
+// ── Firebase Storage — Portrait Helpers ──────────────────────────────────────
+
+// Upload a base64 data URL to Firebase Storage, return the download URL
+async function _uploadPortraitToStorage(charId, dataUrl) {
+  if (!_storageReady) throw new Error('Storage not ready');
+  const path = `portraits/${_FS_USER}/${charId}.jpg`;
+  const ref = _fireStorage.ref(path);
+  // Convert data URL to Blob for upload
+  const resp = await fetch(dataUrl);
+  const blob = await resp.blob();
+  await ref.put(blob, { contentType: 'image/jpeg' });
+  return await ref.getDownloadURL();
+}
+
+// Delete a portrait from Firebase Storage
+async function _deletePortraitFromStorage(charId) {
+  if (!_storageReady) return;
+  const path = `portraits/${_FS_USER}/${charId}.jpg`;
+  try {
+    await _fireStorage.ref(path).delete();
+    console.log(`[Storage] Deleted portrait for ${charId}`);
+  } catch (e) {
+    // Ignore "not found" errors — portrait may not exist in Storage
+    if (e.code !== 'storage/object-not-found') {
+      console.warn('[Storage] Delete failed:', e.message);
+    }
+  }
+}
+
+// Check if a portrait URL is a Firebase Storage URL
+function _isStorageUrl(url) {
+  return typeof url === 'string' && url.includes('firebasestorage.googleapis.com');
+}
+
+// Check if a portrait is a base64 data URL
+function _isBase64Portrait(url) {
+  return typeof url === 'string' && url.startsWith('data:image');
+}
+
+// Save portrait — upload to Storage if available, fall back to base64 locally
+async function _savePortraitWithUpload(charId, dataUrl) {
+  const ch = db.characters[charId]; if (!ch) return;
+
+  // Show loading spinner on portrait card
+  const portraitFrame = document.querySelector('.portrait-frame');
+  if (portraitFrame) {
+    portraitFrame.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;width:100%;height:100%;color:var(--muted)">
+      <div class="portrait-uploading"><span class="portrait-spinner"></span> Uploading...</div>
+    </div>`;
+  }
+
+  if (_storageReady) {
+    try {
+      const downloadUrl = await _uploadPortraitToStorage(charId, dataUrl);
+      ch.portrait = downloadUrl;
+      console.log(`[Storage] Portrait uploaded for ${charId}`);
+      saveData(db);
+      renderApp();
+      return;
+    } catch (e) {
+      console.warn('[Storage] Upload failed, saving base64 locally:', e.message);
+    }
+  }
+
+  // Fallback: save base64 directly (offline or Storage unavailable)
+  ch.portrait = dataUrl;
+  saveData(db);
+  renderApp();
+}
+
+// Migrate a base64 portrait to Storage (called during migrateCharacter)
+function _queuePortraitMigration(charId) {
+  // Defer so it doesn't block character loading
+  setTimeout(async () => {
+    const ch = db.characters[charId];
+    if (!ch || !_isBase64Portrait(ch.portrait) || !_storageReady) return;
+    try {
+      const downloadUrl = await _uploadPortraitToStorage(charId, ch.portrait);
+      ch.portrait = downloadUrl;
+      saveData(db);
+      renderApp();
+      console.log(`[Storage] Migrated base64 portrait for ${charId}`);
+    } catch (e) {
+      console.warn(`[Storage] Portrait migration failed for ${charId}:`, e.message);
+    }
+  }, 2000);
 }
 
 // Take a snapshot of the current db state for change detection
@@ -329,6 +426,10 @@ function migrateCharacter(ch) {
   }
   // Inject base class resources inline (deduplicates by name)
   _injectBaseClassResourcesForCh(ch);
+  // Queue base64 portrait migration to Firebase Storage (async, non-blocking)
+  if (ch.id && _isBase64Portrait(ch.portrait)) {
+    _queuePortraitMigration(ch.id);
+  }
   return ch;
 }
 
@@ -556,6 +657,9 @@ function createCharacter() {
 }
 function deleteCharacter(id) {
   showConfirm('Delete this character?', () => {
+    const ch = db.characters[id];
+    // Delete portrait from Firebase Storage if applicable
+    if (ch && _isStorageUrl(ch.portrait)) _deletePortraitFromStorage(id);
     delete db.characters[id];
     const c = db.campaigns.find(c => c.id === currentCampaignId);
     if (c) {
@@ -2269,9 +2373,9 @@ function openPortraitCropModal(imageSrc) {
     const sw = CROP / s.zoom, sh = CROP / s.zoom;
     ctx.drawImage(s.img, sx, sy, sw, sh, 0, 0, OUT, OUT);
     const dataUrl = out.toDataURL('image/jpeg', 0.85);
-    ch_field('portrait', dataUrl);
     closeModal();
-    renderApp();
+    // Upload to Firebase Storage (async), fall back to base64
+    _savePortraitWithUpload(currentCharId, dataUrl);
   };
 
   setTimeout(() => {
@@ -2382,17 +2486,28 @@ function pfUpdate() {
 
 function savePortrait() {
   const ch = db.characters[currentCharId]; if (!ch) return;
-  ch.portrait    = window._pfSrc;
+  const newSrc = window._pfSrc;
   ch.portraitZoom = parseInt(document.getElementById('pf-zoom')?.value) || 100;
   ch.portraitX   = parseInt(document.getElementById('pf-x')?.value);
   ch.portraitY   = parseInt(document.getElementById('pf-y')?.value);
-  saveData(db);
   closeModal();
-  renderApp();
+  // If the source is a base64 data URL, upload to Storage
+  if (_isBase64Portrait(newSrc)) {
+    _savePortraitWithUpload(currentCharId, newSrc);
+  } else {
+    // Already a Storage URL — just save zoom/pan changes
+    ch.portrait = newSrc;
+    saveData(db);
+    renderApp();
+  }
 }
 
 function removePortrait() {
   const ch = db.characters[currentCharId]; if (!ch) return;
+  // Delete from Firebase Storage if it's a Storage URL
+  if (_isStorageUrl(ch.portrait)) {
+    _deletePortraitFromStorage(currentCharId);
+  }
   delete ch.portrait;
   ch.portraitZoom = 100; ch.portraitX = 50; ch.portraitY = 50;
   saveData(db); renderApp();
@@ -6577,6 +6692,8 @@ function duplicateCharacter(charId) {
 
 function deleteCharacterFromPanel(charId) {
   showConfirm('Delete this character?', () => {
+    const ch = db.characters[charId];
+    if (ch && _isStorageUrl(ch.portrait)) _deletePortraitFromStorage(charId);
     delete db.characters[charId];
     const c = db.campaigns.find(c => c.id === currentCampaignId);
     if (c) {
