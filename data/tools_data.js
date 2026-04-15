@@ -218,5 +218,55 @@ const TOOLS_DATA = [
     "name": "Zulkoon",
     "type": "Musical Instrument",
     "desc": "A complex pump organ that originated with the zulkirs of Thay, who use it in the casting of their spells. It is considered to have a dramatic, but sinister, sound."
+  },
+  {
+    "name": "Thieves' Tools",
+    "type": "Thieves' Tools",
+    "desc": "Used to pick locks and disarm traps. Includes a small file, lock picks, a small mirror, narrow-bladed scissors, and pliers."
+  },
+  {
+    "name": "Herbalism Kit",
+    "type": "Kit",
+    "desc": "Used to identify plants and prepare herbal remedies. Includes pouches of herbs, clippers, leather gloves, and glass vials."
+  },
+  {
+    "name": "Navigator's Tools",
+    "type": "Navigator's Tools",
+    "desc": "Used to chart a course by sea. Includes a sextant, compass, calipers, ruler, parchment, ink, and quill."
+  },
+  {
+    "name": "Disguise Kit",
+    "type": "Kit",
+    "desc": "Used to create disguises. Includes cosmetics, hair dye, small props, and trinkets."
+  },
+  {
+    "name": "Forgery Kit",
+    "type": "Kit",
+    "desc": "Used to duplicate documents and handwriting. Includes inks, parchment, and quills."
+  },
+  {
+    "name": "Gaming Set",
+    "type": "Gaming Set",
+    "desc": "A set used to play games of chance and skill, such as dice, cards, or board games."
+  },
+  {
+    "name": "Dice Set",
+    "type": "Gaming Set",
+    "desc": "A set of dice used to play games of chance."
+  },
+  {
+    "name": "Dragonchess Set",
+    "type": "Gaming Set",
+    "desc": "A Faerûnian variant of chess played on a three-level board."
+  },
+  {
+    "name": "Playing Card Set",
+    "type": "Gaming Set",
+    "desc": "A standard deck of cards used for games and fortune-telling."
+  },
+  {
+    "name": "Three-Dragon Ante Set",
+    "type": "Gaming Set",
+    "desc": "A popular card game played across Faerûn."
   }
 ];

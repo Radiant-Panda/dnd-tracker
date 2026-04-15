@@ -1797,5 +1797,20 @@ const SPECIES_DATA = {
       "feat": "Lucky",
       "desc": "+2/+1 to Dexterity, Wisdom or Charisma. Skills: Insight, Stealth. Lucky"
     }
+  ],
+  "backgrounds_2014": [
+    { name: "Acolyte", skills: ["Insight", "Religion"], tools: [], desc: "You have spent your life in service to a temple, gods, or religious order." },
+    { name: "Charlatan", skills: ["Deception", "Sleight of Hand"], tools: ["Disguise Kit", "Forgery Kit"], desc: "You have always had a way with people, bending truth and identity to your advantage." },
+    { name: "Criminal", skills: ["Deception", "Stealth"], tools: ["Any Gaming Set", "Thieves' Tools"], desc: "You are an experienced criminal with a history of breaking the law." },
+    { name: "Entertainer", skills: ["Acrobatics", "Performance"], tools: ["Disguise Kit", "Any Musical Instrument"], desc: "You thrive in front of an audience, knowing how to entrance, entertain, and inspire." },
+    { name: "Folk Hero", skills: ["Animal Handling", "Survival"], tools: ["Any Artisan's Tools"], desc: "You come from a humble social rank but are destined for so much more." },
+    { name: "Guild Artisan", skills: ["Insight", "Persuasion"], tools: ["Any Artisan's Tools"], desc: "You are a member of an artisan's guild, skilled in a particular field." },
+    { name: "Hermit", skills: ["Medicine", "Religion"], tools: ["Herbalism Kit"], desc: "You lived in seclusion for a formative part of your life." },
+    { name: "Noble", skills: ["History", "Persuasion"], tools: ["Any Gaming Set"], desc: "You understand wealth, power, and privilege." },
+    { name: "Outlander", skills: ["Athletics", "Survival"], tools: ["Any Musical Instrument"], desc: "You grew up in the wilds, far from civilization and the comforts of town and technology." },
+    { name: "Sage", skills: ["Arcana", "History"], tools: [], desc: "You spent years learning the lore of the multiverse." },
+    { name: "Sailor", skills: ["Athletics", "Perception"], tools: ["Navigator's Tools"], desc: "You sailed on a seagoing vessel for years, weathering storms and seeing wonders." },
+    { name: "Soldier", skills: ["Athletics", "Intimidation"], tools: ["Any Gaming Set"], desc: "War has been your life for as long as you care to remember." },
+    { name: "Urchin", skills: ["Sleight of Hand", "Stealth"], tools: ["Disguise Kit", "Thieves' Tools"], desc: "You grew up on the streets alone, orphaned, and poor." }
   ]
 };

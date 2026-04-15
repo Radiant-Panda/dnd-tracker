@@ -4,12 +4,13 @@ const STORAGE_KEY_BACKUP = 'dnd_tracker_v1_backup';
 
 // Firebase configuration — replace placeholder values with your project's config
 const FIREBASE_CONFIG = {
-  apiKey:            "REPLACE_ME",
-  authDomain:        "REPLACE_ME.firebaseapp.com",
-  projectId:         "REPLACE_ME",
-  storageBucket:     "REPLACE_ME.appspot.com",
-  messagingSenderId: "REPLACE_ME",
-  appId:             "REPLACE_ME"
+  apiKey:            "AIzaSyDRsD6PpWIbeeW3JkyfEjphEnMcGkCQ8eQ",
+  authDomain:        "dungeons-and-dragons-edd42.firebaseapp.com",
+  projectId:         "dungeons-and-dragons-edd42",
+  storageBucket:     "dungeons-and-dragons-edd42.firebasestorage.app",
+  messagingSenderId: "428793871397",
+  appId:             "1:428793871397:web:f761551d74af12400ad3cc",
+  measurementId:     "G-WMJJ10TDV4"
 };
 
 // ── Firebase / Firestore Internals ───────────────────────────────────────────
@@ -585,7 +586,14 @@ function _pvSaveCharacter() {
   const ch = db.characters[_PV_PLAYER];
   if (!ch) return;
   const base = `users/${_pvGmUid}`;
-  _fireDb.doc(`${base}/characters/${_PV_PLAYER}`).set(ch).catch(e => {
+  _fireDb.doc(`${base}/characters/${_PV_PLAYER}`).update({
+    'combat.currentHP':  ch.combat.currentHP,
+    'combat.tempHP':     ch.combat.tempHP,
+    'spells.slots':      ch.spells.slots,
+    'spells.pactSlots':  ch.spells.pactSlots,
+    'resources':         ch.resources,
+    'exhaustionLevel':   ch.exhaustionLevel,
+  }).catch(e => {
     console.warn('[PlayerView] Save failed:', e.message);
   });
 }
@@ -2912,7 +2920,7 @@ function renderSkillList(ch, pb) {
 }
 
 function openACCalcModal() {
-  const ch = CharacterStore[currentCharId];
+  const ch = db.characters[currentCharId];
   if (!ch) return;
   const dex = mod(ch.abilities.dex || 10);
   const con = mod(ch.abilities.con || 10);
@@ -2933,7 +2941,7 @@ function openACCalcModal() {
     { group: 'Heavy', label: 'Plate (18)', base: 18, type: 'flat', dexCap: 0 },
     { group: 'Special', label: 'Unarmored Defense — Barbarian (10 + DEX + CON)', base: 10, type: 'dex+con', dexCap: null },
     { group: 'Special', label: 'Unarmored Defense — Monk (10 + DEX + WIS)', base: 10, type: 'dex+wis', dexCap: null },
-    { group: 'Special', label: 'Mage Armor (13 + DEX)', base: 13, type: 'dex', dexCap: null },
+    { group: 'Spells', label: 'Mage Armor (13 + DEX)', base: 13, type: 'dex', dexCap: null },
   ];
   function calcAC(armorIdx, shield) {
     const a = ARMORS[armorIdx];
@@ -3001,6 +3009,7 @@ function openACCalcModal() {
     const { ac } = calcAC(idx, shield);
     combatField('ac', ac);
     closeModal();
+    renderApp();
   };
   // Trigger initial preview render
   setTimeout(() => window._acCalcUpdate?.(), 0);
@@ -3050,7 +3059,7 @@ function renderCombatSection(ch) {
   return `<div class="sheet-panel">
     <div class="cs-section-label">Combat</div>
     <div class="cs-combat-trio">
-      <div class="stat-box" style="position:relative"><div class="stat-label">Armor Class</div><input type="number" value="${ch.combat.ac}" oninput="combatField('ac',+this.value)" style="width:100%;text-align:center;font-size:1.3rem;background:transparent;border:none;color:var(--gold);font-weight:bold"><button class="ac-calc-btn" onclick="openACCalcModal()" title="AC Calculator">⚙</button></div>
+      <div class="stat-box"><div class="stat-label">Armor Class</div><input type="number" value="${ch.combat.ac}" oninput="combatField('ac',+this.value)" style="width:100%;text-align:center;font-size:1.3rem;background:transparent;border:none;color:var(--gold);font-weight:bold"><button class="ac-calc-btn" onclick="openACCalcModal()">Calc AC</button></div>
       <div class="stat-box"><div class="stat-label">Initiative</div><input type="number" value="${ch.combat.initiative}" oninput="combatField('initiative',+this.value)" style="width:100%;text-align:center;font-size:1.3rem;background:transparent;border:none;color:var(--gold);font-weight:bold"></div>
       <div class="stat-box"><div class="stat-label">Speed</div><input type="number" value="${ch.combat.speed}" oninput="combatField('speed',+this.value)" style="width:100%;text-align:center;font-size:1.3rem;background:transparent;border:none;color:var(--gold);font-weight:bold"></div>
     </div>
@@ -4954,7 +4963,8 @@ function renderProficienciesLanguages(ch) {
     if (!seenTools.has(key)) { seenTools.add(key); toolNames.push(t); }
   });
   (ch.featuresList || []).filter(f => f._background === true).forEach(f => {
-    const match = (TOOLS_DATA || []).find(t => t.name.toLowerCase() === f.name.toLowerCase());
+    const fLow = f.name.toLowerCase();
+    const match = (TOOLS_DATA || []).find(t => { const tLow = t.name.toLowerCase(); return tLow === fLow || tLow.includes(fLow) || fLow.includes(tLow); });
     if (match) {
       const key = match.name.toLowerCase();
       if (!seenTools.has(key)) { seenTools.add(key); toolNames.push(match.name); }
@@ -4964,12 +4974,29 @@ function renderProficienciesLanguages(ch) {
   const toolCardsHtml = toolNames.length > 0 ? `
     <div class="tool-prof-list">
       ${toolNames.map(toolName => {
-        const toolData = (TOOLS_DATA || []).find(t => t.name.toLowerCase() === toolName.toLowerCase());
+        const tnLow = toolName.toLowerCase();
+        let toolData = null;
+        if (toolName.startsWith('Any ')) {
+          // Wildcard resolution
+          const remainder = toolName.slice(4).toLowerCase();
+          if (remainder === "artisan's tools") {
+            toolData = { name: toolName, type: "Artisan's Tools", desc: "Choose any Artisan's Tools to be proficient with." };
+          } else if (remainder === 'musical instrument') {
+            const rep = (TOOLS_DATA || []).find(t => t.name === 'Lute');
+            toolData = rep ? { ...rep } : { name: toolName, type: 'Musical Instrument', desc: '' };
+          } else {
+            // e.g. "gaming set" → find "Gaming Set"
+            toolData = (TOOLS_DATA || []).find(t => t.name.toLowerCase() === remainder)
+              || (TOOLS_DATA || []).find(t => { const tLow = t.name.toLowerCase(); return tLow.includes(remainder) || remainder.includes(tLow); });
+          }
+        } else {
+          toolData = (TOOLS_DATA || []).find(t => { const tLow = t.name.toLowerCase(); return tLow === tnLow || tLow.includes(tnLow) || tnLow.includes(tLow); });
+        }
         if (!toolData) return `<div class="tool-prof-plain">${esc(toolName)}</div>`;
         const cardId = 'tool-' + toolName.replace(/[^a-z0-9]/gi, '-').toLowerCase();
         return `<div class="tool-prof-card">
           <button class="tool-prof-toggle" onclick="var d=document.getElementById('${cardId}');d.classList.toggle('open');this.querySelector('.tool-chevron').textContent=d.classList.contains('open')?'▴':'▾'">
-            <span class="tool-prof-name">${esc(toolData.name)}</span>
+            <span class="tool-prof-name">${esc(toolName)}</span>
             <span class="tool-prof-type-badge">${esc(toolData.type)}</span>
             <span class="tool-chevron">▾</span>
           </button>
@@ -5740,11 +5767,21 @@ function renderCharacterSheet() {
         <label>Background</label>
         ${(()=>{
           const ddStyle = 'background:transparent;border:none;border-bottom:1px solid var(--border);border-radius:0;color:var(--text);padding:0.1rem 0;font-size:0.85rem;width:100%';
-          const bgList = (SPECIES_DATA?.backgrounds_2024 || []).map(b => b.name);
-          const customBg = ch.background && !bgList.includes(ch.background) ? ch.background : null;
+          const bgEd = _bgEdition || '2024';
+          const bgSourceList = bgEd === '2014' ? (SPECIES_DATA?.backgrounds_2014 || []) : (SPECIES_DATA?.backgrounds_2024 || []);
+          const bgList = bgSourceList.map(b => b.name);
+          const allBgNames = [...(SPECIES_DATA?.backgrounds_2024||[]), ...(SPECIES_DATA?.backgrounds_2014||[])].map(b => b.name);
+          const customBg = ch.background && !allBgNames.includes(ch.background) ? ch.background : null;
           const bgOpts = bgList.map(n => `<option${ch.background===n?' selected':''}>${esc(n)}</option>`).join('');
           const customOpt = customBg ? `<option value="${esc(customBg)}" selected>${esc(customBg)}</option>` : '';
-          return `<select style="${ddStyle}" onchange="changeBackground(this.value)">
+          const pillBase = 'padding:1px 7px;font-size:0.65rem;border-radius:10px;cursor:pointer;border:1px solid var(--border);transition:background 0.15s,color 0.15s;';
+          const pill2024 = pillBase + (bgEd==='2024' ? 'background:var(--accent);color:#fff;' : 'background:transparent;color:var(--muted);');
+          const pill2014 = pillBase + (bgEd==='2014' ? 'background:var(--accent);color:#fff;' : 'background:transparent;color:var(--muted);');
+          return `<div style="display:flex;gap:4px;margin-bottom:3px">
+            <button style="${pill2024}" onclick="_setBgEdition('2024')">2024</button>
+            <button style="${pill2014}" onclick="_setBgEdition('2014')">2014</button>
+          </div>
+          <select style="${ddStyle}" onchange="changeBackground(this.value)">
             <option value=""${!ch.background?' selected':''}>Choose background…</option>
             ${customOpt}
             ${bgOpts}
@@ -5813,9 +5850,10 @@ function changeBackground(newBg) {
   const ch = db.characters[currentCharId];
   if (!ch) return;
 
-  // Strip skills the OLD background added
+  // Strip skills the OLD background added (search both editions)
   if (ch.background) {
-    const oldBgData = (SPECIES_DATA?.backgrounds_2024 || []).find(b => b.name === ch.background);
+    const allBgPool = [...(SPECIES_DATA?.backgrounds_2024||[]), ...(SPECIES_DATA?.backgrounds_2014||[])];
+    const oldBgData = allBgPool.find(b => b.name === ch.background);
     (oldBgData?.skills || []).forEach(skill => {
       const idx = ch.skillProficiencies.indexOf(skill);
       if (idx !== -1) ch.skillProficiencies.splice(idx, 1);
@@ -5829,7 +5867,10 @@ function changeBackground(newBg) {
 
   ch.background = newBg;
 
-  const newBgData = (SPECIES_DATA?.backgrounds_2024 || []).find(b => b.name === newBg);
+  // Look up new background — prefer current edition, fall back to the other
+  const _bgPrimary = _bgEdition === '2014' ? (SPECIES_DATA?.backgrounds_2014||[]) : (SPECIES_DATA?.backgrounds_2024||[]);
+  const _bgSecondary = _bgEdition === '2014' ? (SPECIES_DATA?.backgrounds_2024||[]) : (SPECIES_DATA?.backgrounds_2014||[]);
+  const newBgData = _bgPrimary.find(b => b.name === newBg) || _bgSecondary.find(b => b.name === newBg);
   if (newBgData) {
     // Skills
     (newBgData.skills || []).forEach(skill => {
@@ -5900,6 +5941,12 @@ function ch_field(field, value) {
 }
 
 let mcEditIdx = null;
+let _bgEdition = '2024'; // '2024' or '2014' — controls background picker source
+
+function _setBgEdition(edition) {
+  _bgEdition = edition;
+  renderApp();
+}
 
 function toggleClassEditor(idx) {
   mcEditIdx = mcEditIdx === idx ? null : idx;
