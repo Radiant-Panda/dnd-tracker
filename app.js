@@ -15,11 +15,13 @@ const FIREBASE_CONFIG = {
 // ── Firebase / Firestore Internals ───────────────────────────────────────────
 let _fireDb = null;          // Firestore instance (null when unconfigured)
 let _fireStorage = null;     // Firebase Storage instance (null when unconfigured)
+let _fireAuth = null;        // Firebase Auth instance
 let _firestoreReady = false; // true once Firebase is initialised
 let _storageReady = false;   // true once Firebase Storage is initialised
+let _authReady = false;      // true once Firebase Auth is initialised
 let _fsWriteTimer = null;    // debounce handle
 const _FS_DEBOUNCE = 1500;   // ms to wait before writing to Firestore
-const _FS_USER = 'local';    // placeholder user id (no auth yet)
+let _FS_USER = 'local';      // authenticated user's UID (set on sign-in)
 
 // Snapshot of each doc's JSON — used for change detection
 let _dbSnap = { campaigns: {}, characters: {}, npcs: {} };
@@ -31,18 +33,184 @@ function _initFirebase() {
   if (!FIREBASE_CONFIG.apiKey || FIREBASE_CONFIG.apiKey === 'REPLACE_ME') return;
   if (typeof firebase === 'undefined') { console.warn('[Firebase] SDK not loaded'); return; }
   try {
-    firebase.initializeApp(FIREBASE_CONFIG);
+    // Only init once
+    if (!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG);
     _fireDb = firebase.firestore();
     _firestoreReady = true;
-    // Init Storage if SDK is available
     if (firebase.storage) {
       _fireStorage = firebase.storage();
       _storageReady = true;
-      console.log('[Firebase] Initialized — Firestore + Storage ready');
-    } else {
-      console.log('[Firebase] Initialized — Firestore ready (Storage SDK not loaded)');
     }
+    if (firebase.auth) {
+      _fireAuth = firebase.auth();
+      _authReady = true;
+    }
+    console.log('[Firebase] Initialized — Firestore' +
+      (_storageReady ? ' + Storage' : '') +
+      (_authReady ? ' + Auth' : '') + ' ready');
   } catch (e) { console.warn('[Firebase] Init failed:', e); }
+}
+
+// ── Authentication ──────────────────────────────────────────────────────────
+
+function _showAuthGate() {
+  document.getElementById('auth-gate').style.display = '';
+  document.getElementById('app-header').style.display = 'none';
+  document.getElementById('app').style.display = 'none';
+}
+
+function _showApp() {
+  document.getElementById('auth-gate').style.display = 'none';
+  document.getElementById('app-header').style.display = '';
+  document.getElementById('app').style.display = '';
+}
+
+async function signInWithGoogle() {
+  if (!_authReady) {
+    // Firebase not configured — run in local-only mode
+    _FS_USER = 'local';
+    _showApp();
+    renderBreadcrumb();
+    renderApp();
+    initData();
+    return;
+  }
+  try {
+    const provider = new firebase.auth.GoogleAuthProvider();
+    await _fireAuth.signInWithPopup(provider);
+    // onAuthStateChanged will handle the rest
+  } catch (e) {
+    console.warn('[Auth] Sign-in failed:', e.message);
+    if (typeof showToast === 'function') {
+      showToast('<span style="color:#ef4444">Sign-in failed:</span> ' + e.message, 5000);
+    }
+  }
+}
+
+function signOut() {
+  if (_authReady && _fireAuth) {
+    _fireAuth.signOut();
+  }
+  // Tear down Firestore listeners
+  _snapshotUnsubs.forEach(fn => fn());
+  _snapshotUnsubs = [];
+  // Clear local state
+  _FS_USER = 'local';
+  db = { campaigns: [], characters: {}, npcs: {} };
+  currentView = 'campaigns';
+  currentCampaignId = null;
+  currentCharId = null;
+  currentNpcId = null;
+  _takeSnapshot(db);
+  _showAuthGate();
+}
+
+async function _onAuthStateChanged(user) {
+  if (!user) {
+    _showAuthGate();
+    return;
+  }
+
+  // Set user ID for all Firestore/Storage paths
+  _FS_USER = user.uid;
+  console.log('[Auth] Signed in as', user.displayName, '(' + user.uid + ')');
+
+  // Show the app
+  _showApp();
+
+  // Load data from localStorage first (instant render)
+  db = loadData();
+  renderBreadcrumb();
+  renderApp();
+
+  // Check for local data that should be migrated to this user's Firestore
+  const hasLocalData = db.campaigns.length > 0 || Object.keys(db.characters).length > 0;
+
+  // Try loading from Firestore for this user
+  await _initDataForUser(hasLocalData);
+}
+
+async function _initDataForUser(hasLocalData) {
+  if (!_firestoreReady) {
+    _takeSnapshot(db);
+    return;
+  }
+  const base = `users/${_FS_USER}`;
+  try {
+    const [campSnap, charSnap, npcSnap] = await Promise.all([
+      _fireDb.collection(`${base}/campaigns`).get(),
+      _fireDb.collection(`${base}/characters`).get(),
+      _fireDb.collection(`${base}/npcs`).get(),
+    ]);
+
+    const hasRemoteData = !campSnap.empty || !charSnap.empty || !npcSnap.empty;
+
+    if (hasRemoteData) {
+      // Load from Firestore
+      const remoteCampaigns = [];
+      campSnap.forEach(doc => {
+        const c = doc.data();
+        if (!c.npcs) c.npcs = [];
+        if (!c.initiative) c.initiative = null;
+        if (!c.campaignTab) c.campaignTab = 'characters';
+        if (c.activeCharId === undefined) c.activeCharId = (c.characters || [])[0] || null;
+        if (!c.journal) c.journal = [];
+        remoteCampaigns.push(c);
+      });
+      const remoteChars = {};
+      charSnap.forEach(doc => {
+        const ch = doc.data();
+        migrateCharacter(ch);
+        remoteChars[ch.id || doc.id] = ch;
+      });
+      const remoteNpcs = {};
+      npcSnap.forEach(doc => {
+        const npc = doc.data();
+        remoteNpcs[npc.id || doc.id] = npc;
+      });
+
+      db.campaigns  = remoteCampaigns;
+      db.characters = remoteChars;
+      db.npcs       = remoteNpcs;
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(db)); } catch (_) {}
+      console.log('[Firestore] Loaded data from cloud');
+      renderApp();
+
+      // If there was also local data that's different, offer to merge
+      if (hasLocalData) {
+        const localRaw = localStorage.getItem(STORAGE_KEY_BACKUP);
+        if (localRaw) {
+          try {
+            const local = JSON.parse(localRaw);
+            const localHasContent = (local.campaigns || []).length > 0 || Object.keys(local.characters || {}).length > 0;
+            if (localHasContent) {
+              showToast('Cloud data loaded. Local backup available via Export if needed.', 4000);
+            }
+          } catch (_) {}
+        }
+      }
+    } else if (hasLocalData) {
+      // No remote data — offer to migrate local data up
+      console.log('[Firestore] No cloud data — offering local data migration');
+      showToast(
+        '<span style="cursor:pointer" onclick="_migrateLocalToCloud()">Local data found — <b>click here</b> to sync it to the cloud.</span>',
+        10000
+      );
+    }
+
+    _takeSnapshot(db);
+    _setupFirestoreListeners();
+  } catch (e) {
+    console.warn('[Firestore] Initial load failed — using localStorage:', e.message);
+    _takeSnapshot(db);
+  }
+}
+
+async function _migrateLocalToCloud() {
+  if (!_firestoreReady) return;
+  _takeSnapshot({ campaigns: [], characters: {}, npcs: {} });
+  await _writeChangesToFirestore(db);
+  showToast('<span style="color:#22c55e">&#10003; Data synced to cloud!</span>', 3000);
 }
 
 // ── Firebase Storage — Portrait Helpers ──────────────────────────────────────
@@ -287,71 +455,20 @@ function _setupFirestoreListeners() {
   );
 }
 
-// ── Async init — loads from Firestore then falls back to localStorage ────────
-async function initData() {
+// ── Async init — sets up Firebase and auth listener ─────────────────────────
+function initData() {
   _initFirebase();
-  if (!_firestoreReady) {
-    // No Firestore — just snapshot the existing localStorage data
+  if (!_authReady) {
+    // No auth available — run in local-only mode, show app immediately
+    _FS_USER = 'local';
+    _showApp();
     _takeSnapshot(db);
+    renderBreadcrumb();
+    renderApp();
     return;
   }
-  const base = `users/${_FS_USER}`;
-  try {
-    // Try loading all three collections from Firestore
-    const [campSnap, charSnap, npcSnap] = await Promise.all([
-      _fireDb.collection(`${base}/campaigns`).get(),
-      _fireDb.collection(`${base}/characters`).get(),
-      _fireDb.collection(`${base}/npcs`).get(),
-    ]);
-
-    // If Firestore has data, use it; otherwise push localStorage data up
-    const hasRemoteData = !campSnap.empty || !charSnap.empty || !npcSnap.empty;
-
-    if (hasRemoteData) {
-      // ── Load from Firestore ──
-      const remoteCampaigns = [];
-      campSnap.forEach(doc => {
-        const c = doc.data();
-        if (!c.npcs) c.npcs = [];
-        if (!c.initiative) c.initiative = null;
-        if (!c.campaignTab) c.campaignTab = 'characters';
-        if (c.activeCharId === undefined) c.activeCharId = (c.characters || [])[0] || null;
-        if (!c.journal) c.journal = [];
-        remoteCampaigns.push(c);
-      });
-      const remoteChars = {};
-      charSnap.forEach(doc => {
-        const ch = doc.data();
-        migrateCharacter(ch);
-        remoteChars[ch.id || doc.id] = ch;
-      });
-      const remoteNpcs = {};
-      npcSnap.forEach(doc => {
-        const npc = doc.data();
-        remoteNpcs[npc.id || doc.id] = npc;
-      });
-
-      db.campaigns  = remoteCampaigns;
-      db.characters = remoteChars;
-      db.npcs       = remoteNpcs;
-
-      // Persist to localStorage (offline backup)
-      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(db)); } catch (_) {}
-      console.log('[Firestore] Loaded data from cloud');
-      renderApp();
-    } else if (db.campaigns.length > 0 || Object.keys(db.characters).length > 0) {
-      // ── No remote data but local data exists — push up to Firestore ──
-      console.log('[Firestore] No cloud data found — uploading local data');
-      _takeSnapshot({ campaigns: [], characters: {}, npcs: {} }); // empty snap so everything looks "new"
-      await _writeChangesToFirestore(db);
-    }
-
-    _takeSnapshot(db);
-    _setupFirestoreListeners();
-  } catch (e) {
-    console.warn('[Firestore] Initial load failed — using localStorage:', e.message);
-    _takeSnapshot(db);
-  }
+  // Auth available — listen for auth state changes
+  _fireAuth.onAuthStateChanged(_onAuthStateChanged);
 }
 
 function migrateCharacter(ch) {
@@ -7359,7 +7476,7 @@ function esc(str) {
 }
 
 // ── Init ───────────────────────────────────────────────────────────────────────
-renderBreadcrumb();
-renderApp();
-// Async: connect to Firestore (if configured), load cloud data, set up listeners
+// Firebase auth controls the app lifecycle:
+// - If auth is configured: show auth gate, wait for sign-in → then render app
+// - If auth is not configured: show app immediately in local-only mode
 initData();
