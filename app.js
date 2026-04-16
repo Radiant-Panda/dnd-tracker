@@ -217,15 +217,23 @@ async function _migrateLocalToCloud() {
 // ── Firebase Storage — Portrait Helpers ──────────────────────────────────────
 
 // Upload a base64 data URL to Firebase Storage, return the download URL
+function _dataUrlToBlob(dataUrl) {
+  const parts = dataUrl.split(',');
+  const mime = parts[0].match(/:(.*?);/)[1];
+  const binary = atob(parts[1]);
+  const array = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) array[i] = binary.charCodeAt(i);
+  return new Blob([array], { type: mime });
+}
+
 async function _uploadPortraitToStorage(charId, dataUrl) {
   if (!_storageReady) throw new Error('Storage not ready');
   const path = `portraits/${_FS_USER}/${charId}.jpg`;
   const ref = _fireStorage.ref(path);
-  // Convert data URL to Blob for upload
-  const resp = await fetch(dataUrl);
-  const blob = await resp.blob();
-  await ref.put(blob, { contentType: 'image/jpeg' });
-  return await ref.getDownloadURL();
+  const blob = _dataUrlToBlob(dataUrl);
+  const timeout = ms => new Promise((_, rej) => setTimeout(() => rej(new Error('Upload timed out')), ms));
+  await Promise.race([ref.put(blob, { contentType: 'image/jpeg' }), timeout(8000)]);
+  return await Promise.race([ref.getDownloadURL(), timeout(5000)]);
 }
 
 // Delete a portrait from Firebase Storage
@@ -265,7 +273,9 @@ async function _savePortraitWithUpload(charId, dataUrl) {
     </div>`;
   }
 
-  if (_storageReady) {
+  // Only attempt Firebase Storage when the user is actually signed in
+  // (_FS_USER === 'local' means unauthenticated / local-only mode)
+  if (_storageReady && _FS_USER !== 'local') {
     try {
       const downloadUrl = await _uploadPortraitToStorage(charId, dataUrl);
       ch.portrait = downloadUrl;
@@ -278,7 +288,7 @@ async function _savePortraitWithUpload(charId, dataUrl) {
     }
   }
 
-  // Fallback: save base64 directly (offline or Storage unavailable)
+  // Fallback: save base64 directly (offline, unauthenticated, or Storage unavailable)
   ch.portrait = dataUrl;
   saveData(db);
   renderApp();
@@ -705,6 +715,18 @@ function migrateCharacter(ch) {
   }
   // Inject base class resources inline (deduplicates by name)
   _injectBaseClassResourcesForCh(ch);
+  // Migrate cantrips: move any level_int===0 spells from prepared into known only
+  if (ch.spells.prepared && ch.spells.prepared.length) {
+    const cantripsPrepared = ch.spells.prepared.filter(s => typeof s === 'object' && s.level_int === 0);
+    if (cantripsPrepared.length) {
+      ch.spells.known = ch.spells.known || [];
+      cantripsPrepared.forEach(sp => {
+        const already = ch.spells.known.some(s => (typeof s==='object'?s.name:s) === sp.name);
+        if (!already) ch.spells.known.push(sp);
+      });
+      ch.spells.prepared = ch.spells.prepared.filter(s => !(typeof s === 'object' && s.level_int === 0));
+    }
+  }
   // Queue base64 portrait migration to Firebase Storage (async, non-blocking)
   if (ch.id && _isBase64Portrait(ch.portrait)) {
     _queuePortraitMigration(ch.id);
@@ -816,15 +838,25 @@ function renderBreadcrumb() {
 // ── Main Render ───────────────────────────────────────────────────────────────
 function renderApp() {
   const scrollY = window.scrollY;
-  const app = document.getElementById('app');
+  const appEl = document.getElementById('app');
+  const appScrollTop = appEl ? appEl.scrollTop : 0;
+  const listScrollTop = document.querySelector('.spell-api-list')?.scrollTop || 0;
+  const app = appEl;
   if      (currentView === 'campaigns')  app.innerHTML = renderCampaignList();
   else if (currentView === 'campaign')   app.innerHTML = renderCampaignDetail();
   else if (currentView === 'character')  app.innerHTML = renderCharacterSheet();
   else if (currentView === 'npc')        app.innerHTML = renderNpcSheet();
   if (currentView === 'character') {
     window.scrollTo(0, scrollY);
-    // Populate spell tab after DOM is ready
-    setTimeout(() => renderSpellTabContent(), 0);
+    if (appEl) appEl.scrollTop = appScrollTop;
+    // Populate spell tab after DOM is ready, then restore spell-list scroll
+    setTimeout(() => {
+      renderSpellTabContent();
+      if (listScrollTop > 0) requestAnimationFrame(() => {
+        const listEl = document.querySelector('.spell-api-list');
+        if (listEl) listEl.scrollTop = listScrollTop;
+      });
+    }, 0);
   }
   renderCharSelector();
 }
@@ -2646,13 +2678,16 @@ function openPortraitCropModal(imageSrc) {
   window._pcClamp = function() {
     const s = window._cropState; if (!s.img) return;
     const iw = s.img.naturalWidth * s.zoom, ih = s.img.naturalHeight * s.zoom;
-    s.imgX = Math.max(CX + CROP - iw/2, Math.min(CX + iw/2, s.imgX));
-    s.imgY = Math.max(CY + CROP - ih/2, Math.min(CY + ih/2, s.imgY));
+    // If image is larger than crop box, clamp so it always covers the box
+    // If smaller, center it
+    s.imgX = iw >= CROP ? Math.max(CX + CROP - iw/2, Math.min(CX + iw/2, s.imgX)) : PREVIEW / 2;
+    s.imgY = ih >= CROP ? Math.max(CY + CROP - ih/2, Math.min(CY + ih/2, s.imgY)) : PREVIEW / 2;
   };
 
   window._pcZoom = function(pct) {
     const s = window._cropState;
-    s.zoom = pct / 100;
+    // pct=100 means "image covers crop frame"; 50=zoomed out, 200=zoomed in
+    s.zoom = (s.coverZoom || 1) * (pct / 100);
     const zv = document.getElementById('pc-zoom-val');
     if (zv) zv.textContent = pct + '%';
     _pcClamp(); _pcDraw();
@@ -2683,15 +2718,13 @@ function openPortraitCropModal(imageSrc) {
     const img = new Image();
     img.onload = function() {
       s.img = img;
-      // Set initial zoom so image covers the crop area
-      const coverZoom = Math.max(CROP / img.naturalWidth, CROP / img.naturalHeight);
-      s.zoom = Math.max(0.5, coverZoom);
-      const pct = Math.min(200, Math.max(50, Math.round(s.zoom * 100)));
+      // Store coverZoom so _pcZoom can use relative scaling
+      s.coverZoom = Math.max(CROP / img.naturalWidth, CROP / img.naturalHeight);
       const slider = document.getElementById('pc-zoom');
-      if (slider) { slider.value = pct; slider.min = Math.max(50, Math.round(coverZoom * 100)); }
-      const zv = document.getElementById('pc-zoom-val'); if (zv) zv.textContent = pct + '%';
+      if (slider) { slider.value = 100; slider.min = 50; slider.max = 200; }
+      const zv = document.getElementById('pc-zoom-val'); if (zv) zv.textContent = '100%';
       s.imgX = PREVIEW / 2; s.imgY = PREVIEW / 2;
-      _pcClamp(); _pcDraw();
+      _pcZoom(100); // 100% = image just covers the crop frame
     };
     img.src = imageSrc;
 
@@ -3282,6 +3315,17 @@ const PREPARED_SPELL_LIMIT = {
   Paladin: (level, chaMod) => Math.max(1, Math.floor(level/2) + chaMod),
   Artificer: (level, intMod) => Math.max(1, Math.ceil(level/2) + intMod)
 };
+const CANTRIPS_KNOWN = {
+  Bard:              [0,2,2,2,3,3,3,3,3,3,4,4,4,4,4,4,4,4,4,4],
+  Cleric:            [0,3,3,3,3,3,3,3,3,3,4,4,4,4,4,4,4,4,4,4],
+  Druid:             [0,2,2,2,3,3,3,3,3,3,4,4,4,4,4,4,4,4,4,4],
+  Sorcerer:          [0,4,4,4,5,5,5,5,5,5,6,6,6,6,6,6,6,6,6,6],
+  Warlock:           [0,2,2,2,3,3,3,3,3,3,4,4,4,4,4,4,4,4,4,4],
+  Wizard:            [0,3,3,3,4,4,4,4,4,4,5,5,5,5,5,5,5,5,5,5],
+  Artificer:         [0,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2],
+  'Eldritch Knight': [0,0,0,2,2,2,2,2,2,2,3,3,3,3,3,3,3,3,3,3],
+  'Arcane Trickster':[0,0,0,2,2,2,2,2,2,2,3,3,3,3,3,3,3,3,3,3],
+};
 
 function _classCasterType(entry) {
   const ct = CASTER_TYPE[entry.class];
@@ -3430,6 +3474,20 @@ function applySpellFilter(key, value) {
   else renderSpellTabContent();
 }
 
+function _preserveScroll(fn) {
+  const appEl = document.getElementById('app');
+  const bodyScrollY = window.scrollY || document.documentElement.scrollTop;
+  const appScrollTop = appEl ? appEl.scrollTop : 0;
+  fn();
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      window.scrollTo(0, bodyScrollY);
+      const appEl2 = document.getElementById('app');
+      if (appEl2) appEl2.scrollTop = appScrollTop;
+    });
+  });
+}
+
 function renderSpellTabContent() {
   const el = document.getElementById('spell-tab-content'); if (!el) return;
   const ch = db.characters[currentCharId]; if (!ch) return;
@@ -3438,9 +3496,15 @@ function renderSpellTabContent() {
     fetchAllSpells();
     return;
   }
+  // Preserve .spell-api-list scroll across every innerHTML replacement
+  const listScroll = document.querySelector('.spell-api-list')?.scrollTop || 0;
   if      (spellViewTab === 'all')      el.innerHTML = renderAllSpellsView(ch);
   else if (spellViewTab === 'known')    el.innerHTML = renderKnownView(ch);
   else if (spellViewTab === 'prepared') el.innerHTML = renderPreparedView(ch);
+  requestAnimationFrame(() => {
+    const listEl = document.querySelector('.spell-api-list');
+    if (listEl) listEl.scrollTop = listScroll;
+  });
   // Keep tab count badges in sync
   document.querySelectorAll('.spell-tab').forEach(btn => {
     const tab = btn.dataset.tab;
@@ -3557,7 +3621,8 @@ function renderSpellResultsHtml(ch) {
           const school = sp.school || '';
           const sc = SCHOOL_COLORS[school] || '#7b6d8d';
           const lvlLabel = sp.level_int === 0 ? 'Cantrip' : sp.level || '';
-          const inK = known.has(sp.name), inP = prepared.has(sp.name);
+          const inK = known.has(sp.name);
+          const inP = prepared.has(sp.name);
           const sourceMap = { "Player's Handbook (2024)": {abbr:'PHB24',color:'#c084fc'}, "Xanathar's Guide to Everything": {abbr:'XGE',color:'#3b82f6'}, "Tasha's Cauldron of Everything": {abbr:'TCE',color:'#14b8a6'}, "Explorer's Guide to Wildemount": {abbr:'EGW',color:'#f59e0b'}, "Free Basic Rules (2024)": {abbr:'BR24',color:'#9b6dff'}, "Free Basic Rules (2014)": {abbr:'BR14',color:'#9b6dff'}, "Player's Handbook": {abbr:'PHB14',color:'#6d7b9b'} };
           const srcInfo = sourceMap[sp.source] || {abbr:'?',color:'#7b6d8d'};
           const safeData = encodeURIComponent(JSON.stringify({name:sp.name,level_int:sp.level_int||0,school:sp.school||'',casting_time:sp.casting_time||'',range:sp.range||'',components:sp.components||'',concentration:sp.concentration||'no',ritual:sp.ritual||'no',dnd_class:sp.dnd_class||'',_custom:sp._custom||false}));
@@ -3572,8 +3637,12 @@ function renderSpellResultsHtml(ch) {
             </div>
             <div class="flex gap-1" style="flex-shrink:0">
               <button class="btn btn-sm" onclick="toggleSpellDesc('sd-all-${esc(sp.name).replace(/\s/g,'-')}')">▾</button>
-              <button class="btn btn-sm${inP?' btn-primary':''}" onclick="spellAddFromEncoded('prepared','${safeData}')">${inP?'✓ Prep':'Prepare'}</button>
-              <button class="btn btn-sm${inK?' btn-primary':''}" onclick="spellAddFromEncoded('known','${safeData}')">${inK?'✓ Known':'Learn'}</button>
+              ${sp.level_int === 0
+                ? (inK
+                    ? `<button class="btn btn-sm btn-primary" disabled style="opacity:0.6;cursor:default">✓ Known</button>`
+                    : `<button class="btn btn-sm" onclick="spellAddFromEncoded('known','${safeData}')">Learn</button>`)
+                : `<button class="btn btn-sm${inP?' btn-primary':''}" onclick="spellAddFromEncoded('prepared','${safeData}')">${inP?'✓ Prep':'Prepare'}</button>
+              <button class="btn btn-sm${inK?' btn-primary':''}" onclick="spellAddFromEncoded('known','${safeData}')">${inK?'✓ Known':'Learn'}</button>`}
             </div>
           </div>
           <div class="spell-desc hidden" id="sd-all-${esc(sp.name).replace(/\s/g,'-')}" style="margin:0 0 0.3rem 0.5rem;border-top:none;padding-top:0.2rem">${esc(sp.desc||'No description.')}</div>`;
@@ -3641,7 +3710,9 @@ function renderKnownView(ch) {
               ${isObj&&sp.ritual==='yes'?`<span class="spell-tag ritual">R</span>`:''}
             </div>
             <div class="spell-card-right">
-              <button class="btn btn-sm${inPrep?' btn-primary':''}" onclick="togglePrepareFromKnown(${i})" title="${inPrep?'Remove from Prepared':'Add to Prepared'}">${inPrep?'✓ Prep':'Prepare'}</button>
+              ${isObj && sp.level_int === 0
+                ? `<span style="font-size:0.7rem;color:var(--text-dim);align-self:center;padding:0 0.3rem">✓ Always Prepared</span>`
+                : `<button class="btn btn-sm${inPrep?' btn-primary':''}" onclick="togglePrepareFromKnown(${i})" title="${inPrep?'Remove from Prepared':'Add to Prepared'}">${inPrep?'✓ Prep':'Prepare'}</button>`}
               <button class="btn btn-sm" onclick="toggleSpellCard('${id}',this)" title="Toggle description">▴</button>
               <button class="btn btn-icon btn-danger" onclick="removeSpellEntry('known',${i})">&times;</button>
             </div>
@@ -3691,28 +3762,56 @@ function renderPreparedView(ch) {
 function spellAddFromEncoded(listType, encoded) {
   const ch = db.characters[currentCharId]; if (!ch) return;
   const sp = JSON.parse(decodeURIComponent(encoded));
-  ch.spells[listType] = ch.spells[listType] || [];
-  const already = ch.spells[listType].some(s => (typeof s==='object'?s.name:s) === sp.name);
-  if (!already) { ch.spells[listType].push(sp); }
-  // Preparing a spell also adds it to Known
-  if (listType === 'prepared') {
-    ch.spells.known = ch.spells.known || [];
-    const inKnown = ch.spells.known.some(s => (typeof s==='object'?s.name:s) === sp.name);
-    if (!inKnown) ch.spells.known.push(sp);
+  // Cantrip limit check — only when adding a genuinely new cantrip
+  if (sp.level_int === 0) {
+    const alreadyKnown = (ch.spells.known||[])
+      .some(s => (typeof s==='object' ? s.name : s) === sp.name);
+    if (!alreadyKnown) {
+      const max = _cantripMax(ch);
+      if (max !== null && _cantripCount(ch) >= max) {
+        const cls = (ch.classes||[]).find(c => CANTRIPS_KNOWN[c.subclass] || CANTRIPS_KNOWN[c.class]);
+        const clsName = cls ? cls.class : (ch.class || 'this class');
+        const clsLevel = cls ? cls.level : (ch.level || 1);
+        showToast(`Cantrip limit reached (${max} cantrips for ${clsName} level ${clsLevel})`);
+        return;
+      }
+    }
   }
-  saveData(db);
-  renderSpellTabContent();
+  if (sp.level_int === 0) {
+    // Cantrips: always store in known only, then full re-render so count header updates
+    ch.spells.known = ch.spells.known || [];
+    const already = ch.spells.known.some(s => (typeof s==='object'?s.name:s) === sp.name);
+    if (!already) ch.spells.known.push(sp);
+    _preserveScroll(() => { saveData(db); renderApp(); });
+    return;
+  }
+  // Leveled spells — toggle: clicking ✓ Prep / ✓ Known removes the spell; clicking Prepare / Learn adds it
+  ch.spells[listType] = ch.spells[listType] || [];
+  const existIdx = ch.spells[listType].findIndex(s => (typeof s==='object'?s.name:s) === sp.name);
+  if (existIdx >= 0) {
+    ch.spells[listType].splice(existIdx, 1);
+  } else {
+    ch.spells[listType].push(sp);
+    if (listType === 'prepared') {
+      ch.spells.known = ch.spells.known || [];
+      const inKnown = ch.spells.known.some(s => (typeof s==='object'?s.name:s) === sp.name);
+      if (!inKnown) ch.spells.known.push(sp);
+    }
+  }
+  _preserveScroll(() => { saveData(db); renderSpellTabContent(); });
 }
 
 function togglePrepareFromKnown(knownIdx) {
   const ch = db.characters[currentCharId]; if (!ch) return;
   const sp = ch.spells.known[knownIdx]; if (!sp) return;
+  // Cantrips live only in known — never toggle them to prepared
+  if (typeof sp === 'object' && sp.level_int === 0) return;
   const name = typeof sp==='object' ? sp.name : sp;
   ch.spells.prepared = ch.spells.prepared || [];
   const pIdx = ch.spells.prepared.findIndex(s => (typeof s==='object'?s.name:s) === name);
   if (pIdx >= 0) ch.spells.prepared.splice(pIdx, 1);
   else ch.spells.prepared.push(typeof sp==='object' ? {...sp} : sp);
-  saveData(db); renderSpellTabContent();
+  _preserveScroll(() => { saveData(db); renderSpellTabContent(); });
 }
 
 // ── Cast Modal ────────────────────────────────────────────────────────────────
@@ -3764,7 +3863,7 @@ function castCantrip(spellName) {
     if (isConc) ch.activeConcentration = { spellName, castLevel: 0 };
     saveData(db);
     showToast(`<strong>${esc(spellName)}</strong> cast!`);
-    if (isConc) renderApp();
+    if (isConc) _preserveScroll(() => renderApp());
   };
   if (isConc && ch.activeConcentration && ch.activeConcentration.spellName !== spellName) {
     showConfirm(`This will end your concentration on ${esc(ch.activeConcentration.spellName)}. Continue?`, docast);
@@ -3790,7 +3889,7 @@ function confirmCast(spellName, slotLevel) {
     if (isConc) ch.activeConcentration = { spellName, castLevel: slotLevel };
     saveData(db);
     closeModal();
-    renderApp(); // refresh slots, combat pill, everything
+    _preserveScroll(() => renderApp()); // refresh slots, combat pill, everything
   };
   if (isConc && ch.activeConcentration && ch.activeConcentration.spellName !== spellName) {
     showConfirm(`This will end your concentration on ${esc(ch.activeConcentration.spellName)}. Continue?`, docast);
@@ -3868,6 +3967,19 @@ function deleteCustomSpell(idx) {
   });
 }
 
+function _cantripCount(ch) {
+  return (ch.spells.known || []).filter(s => typeof s === 'object' && s.level_int === 0).length;
+}
+
+function _cantripMax(ch) {
+  let total = 0, found = false;
+  for (const c of (ch.classes||[])) {
+    const tbl = CANTRIPS_KNOWN[c.subclass] || CANTRIPS_KNOWN[c.class];
+    if (tbl) { found = true; total += tbl[Math.min(c.level, tbl.length - 1)] || 0; }
+  }
+  return found ? total : null;
+}
+
 function renderSpellsSection(ch) {
   const pb = profBonus(ch.level);
   const known    = (ch.spells.known    || []).length;
@@ -3932,6 +4044,15 @@ function renderSpellsSection(ch) {
     headerStats = `<p class="text-dim" style="font-size:0.82rem;margin-bottom:0.8rem">${esc(ch.class)} does not use spellcasting.</p>`;
   }
 
+  // Cantrips line — shown above spell slots when the character's class has a cantrip table
+  const _cMax = _cantripMax(ch);
+  const _cCount = _cantripCount(ch);
+  const cantripsLineHtml = isSpellcaster && _cMax !== null ? `
+    <div style="display:flex;align-items:baseline;gap:0.45rem;margin-bottom:0.45rem">
+      <span class="cs-field-label" style="margin-bottom:0">Cantrips</span>
+      <span style="font-size:0.88rem;font-weight:bold;color:${_cCount > _cMax ? 'var(--red-lt)' : 'var(--text)'}">${_cCount} / ${_cMax}</span>
+    </div>` : '';
+
   // Regular spell slots (hide grid if all zeros and has pact magic)
   const hasRegularSlots = [1,2,3,4,5,6,7,8,9].some(l => (ch.spells.slotsMax||{})[l] > 0);
   const slotsHtml = isSpellcaster && hasRegularSlots ? `
@@ -3981,6 +4102,7 @@ function renderSpellsSection(ch) {
   return `<div class="sheet-panel">
     <div class="cs-section-label">Spells</div>
     ${headerStats}
+    ${cantripsLineHtml}
     ${slotsHtml}
     ${pactHtml}
     <div class="spell-tabs">
@@ -4021,8 +4143,10 @@ function spellCastFx(el) {
 
 function removeSpellEntry(listType, idx) {
   const ch = db.characters[currentCharId]; if (!ch) return;
+  const sp = (ch.spells[listType] || [])[idx];
+  const isCantrip = typeof sp === 'object' && sp.level_int === 0;
   ch.spells[listType].splice(idx, 1);
-  saveData(db); renderSpellTabContent();
+  _preserveScroll(() => { saveData(db); if (isCantrip) renderApp(); else renderSpellTabContent(); });
 }
 
 function toggleSpellBubble(level, index) {
@@ -4976,31 +5100,26 @@ function renderProficienciesLanguages(ch) {
       ${toolNames.map(toolName => {
         const tnLow = toolName.toLowerCase();
         let toolData = null;
-        if (toolName.startsWith('Any ')) {
-          // Wildcard resolution
-          const remainder = toolName.slice(4).toLowerCase();
-          if (remainder === "artisan's tools") {
-            toolData = { name: toolName, type: "Artisan's Tools", desc: "Choose any Artisan's Tools to be proficient with." };
-          } else if (remainder === 'musical instrument') {
-            const rep = (TOOLS_DATA || []).find(t => t.name === 'Lute');
-            toolData = rep ? { ...rep } : { name: toolName, type: 'Musical Instrument', desc: '' };
-          } else {
-            // e.g. "gaming set" → find "Gaming Set"
-            toolData = (TOOLS_DATA || []).find(t => t.name.toLowerCase() === remainder)
-              || (TOOLS_DATA || []).find(t => { const tLow = t.name.toLowerCase(); return tLow.includes(remainder) || remainder.includes(tLow); });
-          }
-        } else {
-          toolData = (TOOLS_DATA || []).find(t => { const tLow = t.name.toLowerCase(); return tLow === tnLow || tLow.includes(tnLow) || tnLow.includes(tLow); });
+        // 1. Exact name match (case-insensitive)
+        toolData = (TOOLS_DATA || []).find(t => t.name.toLowerCase() === tnLow);
+        // 2. Proficiency string contains a TOOLS_DATA entry name
+        if (!toolData) {
+          toolData = (TOOLS_DATA || []).find(t => tnLow.includes(t.name.toLowerCase()));
         }
-        if (!toolData) return `<div class="tool-prof-plain">${esc(toolName)}</div>`;
+        // 3. Starts with "Any " → strip prefix, match by type field
+        if (!toolData && toolName.startsWith('Any ')) {
+          const typeName = toolName.slice(4).toLowerCase();
+          toolData = (TOOLS_DATA || []).find(t => t.type.toLowerCase() === typeName);
+        }
+        // 4. No match → generic card with name only
         const cardId = 'tool-' + toolName.replace(/[^a-z0-9]/gi, '-').toLowerCase();
         return `<div class="tool-prof-card">
           <button class="tool-prof-toggle" onclick="var d=document.getElementById('${cardId}');d.classList.toggle('open');this.querySelector('.tool-chevron').textContent=d.classList.contains('open')?'▴':'▾'">
             <span class="tool-prof-name">${esc(toolName)}</span>
-            <span class="tool-prof-type-badge">${esc(toolData.type)}</span>
+            ${toolData ? `<span class="tool-prof-type-badge">${esc(toolData.type)}</span>` : ''}
             <span class="tool-chevron">▾</span>
           </button>
-          ${toolData.desc ? `<div class="tool-prof-desc" id="${cardId}">${esc(toolData.desc)}</div>` : ''}
+          ${toolData?.desc ? `<div class="tool-prof-desc" id="${cardId}">${esc(toolData.desc)}</div>` : ''}
         </div>`;
       }).join('')}
     </div>` : '';
@@ -7058,6 +7177,7 @@ function openCharWizard() {
     abilityBonuses: {},
     abilityMethod: 'pointbuy',
     _speciesSource: '2024',
+    _bgSource: '2024',
     class: 'Fighter', level: 1,
     abilities: { str:8, dex:8, con:8, int:8, wis:8, cha:8 },
     maxHP: 10, maxHPSet: false
@@ -7093,16 +7213,17 @@ function _wizSpeciesCards() {
 }
 
 function _wizBackgroundCards() {
-  const list = SPECIES_DATA.backgrounds_2024 || [];
+  const srcKey = wizardData._bgSource === '2014' ? 'backgrounds_2014' : 'backgrounds_2024';
+  const list = SPECIES_DATA[srcKey] || [];
   return list.map((bg, i) => {
     const sel = wizardData.background === bg.name;
     const chips = (bg.abilityGroup || []).map(a => `<span class="wiz-stat-chip">${a.toUpperCase()}</span>`).join(' ');
     return `<div class="wiz-card ${sel?'selected':''}" onclick="wiz_selectBackground(${i})">
       <div style="font-weight:bold;font-size:0.9rem">${esc(bg.name)}</div>
-      <div style="margin-top:0.2rem">${chips}</div>
+      ${chips ? `<div style="margin-top:0.2rem">${chips}</div>` : ''}
       <div style="font-size:0.72rem;color:var(--text-dim);margin-top:0.15rem">Skills: ${(bg.skills||[]).map(s=>esc(s)).join(', ')}</div>
-      <div style="font-size:0.72rem;color:var(--text-dim)">Tool: ${(bg.tools||[]).map(t=>esc(t)).join(', ')}</div>
-      <div style="font-size:0.72rem;color:var(--gold-lt);margin-top:0.15rem">Feat: ${esc(bg.feat||'—')}</div>
+      ${(bg.tools||[]).length > 0 ? `<div style="font-size:0.72rem;color:var(--text-dim)">Tool: ${(bg.tools||[]).map(t=>esc(t)).join(', ')}</div>` : ''}
+      ${bg.feat ? `<div style="font-size:0.72rem;color:var(--gold-lt);margin-top:0.15rem">Feat: ${esc(bg.feat)}</div>` : ''}
     </div>`;
   }).join('');
 }
@@ -7132,7 +7253,12 @@ function renderWizardStep(step) {
         <button class="btn btn-primary" onclick="wizardNext(1)">Next →</button>
       </div>`;
   } else if (step === 2) {
+    const bs = wizardData._bgSource || '2024';
     body = `<h2>✾ Background</h2>${wizardProgress(2)}
+      <div class="wiz-source-toggle">
+        <button class="btn btn-sm ${bs==='2024'?'btn-primary':''}" onclick="wizardData._bgSource='2024';renderWizardStep(2)">2024 PHB</button>
+        <button class="btn btn-sm ${bs==='2014'?'btn-primary':''}" onclick="wizardData._bgSource='2014';renderWizardStep(2)">2014 PHB</button>
+      </div>
       <div class="wiz-card-grid">${_wizBackgroundCards()}</div>
       <div class="form-actions">
         <button class="btn" onclick="renderWizardStep(1)">← Back</button>
@@ -7207,9 +7333,10 @@ function renderWizardStep(step) {
 
     body = `<h2>✾ Ability Scores</h2>${wizardProgress(5)}
       ${methodToggle}${bonusSection}${scoreSection}
+      <div id="wiz-step5-error" style="color:var(--red-lt);font-size:0.8rem;margin-top:0.4rem;display:none"></div>
       <div class="form-actions">
         <button class="btn" onclick="renderWizardStep(4)">← Back</button>
-        <button class="btn btn-primary" onclick="renderWizardStep(6)">Next →</button>
+        <button class="btn btn-primary" onclick="wizardNext(5)">Next →</button>
       </div>`;
   } else if (step === 6) {
     // Review step
@@ -7285,6 +7412,29 @@ function wizardNext(step) {
     wizardData.name = v; renderWizardStep(1);
   } else if (step === 1) {
     renderWizardStep(2);
+  } else if (step === 5) {
+    // Validate background bonuses for 2024 backgrounds with stat groups
+    // Skip validation for 2014 backgrounds (no stat group)
+    if (wizardData._bgSource === '2014') {
+      renderWizardStep(6);
+      return;
+    }
+    const bg = wizardData.backgroundData;
+    if (bg && bg.abilityGroup && bg.abilityGroup.length > 0) {
+      // Check that both +2 and +1 bonuses are assigned
+      const bonuses = wizardData.abilityBonuses;
+      const has2 = Object.values(bonuses).includes(2);
+      const has1 = Object.values(bonuses).includes(1);
+      if (!has2 || !has1) {
+        const errEl = document.getElementById('wiz-step5-error');
+        if (errEl) {
+          errEl.textContent = 'Please assign your +2 and +1 background bonuses before continuing.';
+          errEl.style.display = '';
+        }
+        return;
+      }
+    }
+    renderWizardStep(6);
   }
 }
 
@@ -7304,7 +7454,8 @@ function wiz_selectSpecies(srcKey, idx) {
 }
 
 function wiz_selectBackground(idx) {
-  const bg = SPECIES_DATA.backgrounds_2024?.[idx];
+  const srcKey = wizardData._bgSource === '2014' ? 'backgrounds_2014' : 'backgrounds_2024';
+  const bg = SPECIES_DATA[srcKey]?.[idx];
   if (!bg) return;
   wizardData.background = bg.name;
   wizardData.backgroundData = bg;
