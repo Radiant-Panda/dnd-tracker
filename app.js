@@ -1000,7 +1000,7 @@ function deleteCharacter(id) {
 // ── NPC Manager ───────────────────────────────────────────────────────────────
 function renderNpcCards(campaign) {
   const npcs = (campaign.npcs||[]).map(id => db.npcs[id]).filter(Boolean);
-  if (npcs.length === 0) return `<div class="empty"><div class="empty-icon">&#128100;</div><p>No NPCs yet.</p></div>`;
+  if (npcs.length === 0) return `<div class="empty-frame"><div class="empty-frame-header">✦ ───── ✾ ───── ✦</div><div class="empty"><div class="empty-icon">&#128100;</div><p>No NPCs yet.</p></div></div>`;
   return `<div class="card-grid">${npcs.map(npc => `
     <div class="card" onclick="showNpc('${npc.id}')">
       <div class="badge">${esc(npc.role||'NPC')}</div>
@@ -1359,14 +1359,14 @@ function renderInitiativeTracker(campaign) {
   const init = campaign.initiative || {round:1,currentIndex:0,combatants:[]};
   const combatants = init.combatants || [];
   if (combatants.length === 0) return IS_PLAYER_VIEW
-    ? `<div class="empty"><div class="empty-icon">&#9876;</div><p>No active combat.</p></div>`
-    : `<div class="empty"><div class="empty-icon">&#9876;</div><p>No combatants yet.</p>
+    ? `<div class="empty-frame"><div class="empty-frame-header">✦ ───── ✾ ───── ✦</div><div class="empty"><div class="empty-icon">&#9876;</div><p>No active combat.</p></div></div>`
+    : `<div class="empty-frame"><div class="empty-frame-header">✦ ───── ✾ ───── ✦</div><div class="empty"><div class="empty-icon">&#9876;</div><p>No combatants yet.</p>
       <div style="margin-top:1rem;display:flex;gap:0.5rem;justify-content:center;flex-wrap:wrap">
         <button class="btn btn-primary" onclick="openAddCombatantModal()">+ Add Combatant</button>
         <button class="btn" onclick="openMonsterSearchModal()">&#128269; Monster Search</button>
         <button class="btn" onclick="addAllPcsToInitiative()">Add All PCs</button>
       </div>
-    </div>`;
+    </div></div>`;
   return `
     <div class="initiative-header">
       <span class="round-badge">Round ${init.round}</span>
@@ -7968,6 +7968,16 @@ const THEMES = {
 
 const THEME_STORAGE_KEY = 'dnd_theme_v1';
 
+// Convert hex (#rrggbb) to RGB object
+function _hexToRgb(hex) {
+  const h = hex.replace('#', '');
+  return {
+    r: parseInt(h.substr(0, 2), 16),
+    g: parseInt(h.substr(2, 2), 16),
+    b: parseInt(h.substr(4, 2), 16)
+  };
+}
+
 // Convert hex (#rrggbb) to rgba string with given alpha
 function _hexToRgba(hex, alpha) {
   const h = hex.replace('#', '');
@@ -8000,8 +8010,10 @@ function applyTheme(themeKey) {
   const surface  = theme.surface  || _lighten(theme.bg, 0.06);
   const surface2 = theme.surface2 || _lighten(theme.bg, 0.12);
   const goldLt   = theme.goldLt   || _paler(theme.gold, 0.35);
+  const accentRGB = _hexToRgb(theme.accent);
 
   root.style.setProperty('--accent',     theme.accent);
+  root.style.setProperty('--accent-rgb', `${accentRGB.r},${accentRGB.g},${accentRGB.b}`);
   root.style.setProperty('--accent-dim', _hexToRgba(theme.accent, 0.6));
   root.style.setProperty('--gold',       theme.gold);
   root.style.setProperty('--gold-lt',    goldLt);

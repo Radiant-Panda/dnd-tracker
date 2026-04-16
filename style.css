@@ -171,6 +171,28 @@ main {
 }
 .empty .empty-icon { font-size: 3rem; margin-bottom: 0.5rem; }
 
+.empty-frame {
+  border: 1.5px solid var(--border);
+  border-radius: 10px;
+  padding: 2.5rem 1.5rem 2rem;
+  background: rgba(var(--accent-rgb, 155,109,255), 0.03);
+  margin: 1rem auto;
+  max-width: 320px;
+}
+
+.empty-frame-header {
+  text-align: center;
+  color: var(--gold);
+  font-size: 0.65rem;
+  letter-spacing: 0.2em;
+  margin-bottom: 1.5rem;
+  opacity: 0.7;
+}
+
+.empty-frame .empty {
+  padding: 0;
+}
+
 /* ── Character Sheet — One Page Layout ── */
 .cs-header {
   background: linear-gradient(135deg, #1f1f26 0%, #26262f 100%);
@@ -3469,21 +3491,29 @@ input.hp-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0;
 .tab:hover::before  { opacity: 0.75; color: #b89dff; }
 .tab.active::before { opacity: 0.9;  color: #9b6dff; }
 
-/* Animated underline */
+/* Animated underline with gradient effect */
 .tab::after {
   content: '';
   position: absolute;
-  bottom: -1px; left: 0;
-  width: 100%; height: 2px;
-  background: #9b6dff;
+  bottom: -1px;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--accent) 30%,
+    var(--accent) 70%,
+    transparent 100%
+  );
   border-radius: 2px;
   transform: scaleX(0);
-  transform-origin: left center;
+  transform-origin: center;
   transition: transform 0.3s ease;
 }
 .tab:hover::after { transform: scaleX(1); }
 .tab.active {
-  color: #9b6dff;
+  color: var(--accent);
   border-bottom-color: transparent;
 }
 .tab.active::after {
@@ -3492,27 +3522,37 @@ input.hp-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0;
 
 /* ── Floral Decorations ── */
 
-/* 1. Climbing vine — left edge of every sheet panel */
+/* 1. Sheet panel — decorative left accent border with glow */
 .sheet-panel {
-  background:
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='200'%3E%3Cpath d='M6,0 Q10,25,6,50 Q2,75,6,100 Q10,125,6,150 Q2,175,6,200' stroke='%237c4fd4' stroke-width='1.5' fill='none' opacity='.2'/%3E%3Cellipse cx='10' cy='40' rx='5' ry='3' fill='%237c4fd4' opacity='.2' transform='rotate(30,10,40)'/%3E%3Cellipse cx='2' cy='80' rx='5' ry='3' fill='%237c4fd4' opacity='.2' transform='rotate(-30,2,80)'/%3E%3Cellipse cx='10' cy='120' rx='5' ry='3' fill='%237c4fd4' opacity='.2' transform='rotate(30,10,120)'/%3E%3Cellipse cx='2' cy='160' rx='5' ry='3' fill='%237c4fd4' opacity='.2' transform='rotate(-30,2,160)'/%3E%3C/svg%3E") left top / 12px auto repeat-y,
-    var(--surface);
+  border-left: 3px solid var(--accent);
+  box-shadow:
+    -3px 0 8px -2px rgba(var(--accent-rgb, 155,109,255), 0.4),
+    inset 0 0 1px var(--accent);
 }
 
-/* 2. Section label ornaments — flanking flowers */
+/* 2. Section label ornaments — ornate divider */
 .cs-section-label {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 0.5rem;
+  gap: 1rem;
+  padding: 0.5rem 1rem;
 }
-.cs-section-label::before,
+.cs-section-label::before {
+  content: "✦ ───────── ✾ ";
+  color: var(--border);
+  font-size: 0.65rem;
+  letter-spacing: -0.05em;
+  flex: 1;
+  text-align: right;
+}
 .cs-section-label::after {
-  content: "✾";
-  color: var(--gold-lt);
-  opacity: 0.55;
-  font-size: 0.85em;
-  flex-shrink: 0;
+  content: " ✾ ───────── ✦";
+  color: var(--border);
+  font-size: 0.65rem;
+  letter-spacing: -0.05em;
+  flex: 1;
+  text-align: left;
 }
 .panel-title {
   display: flex;
@@ -3528,17 +3568,24 @@ input.hp-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0;
   flex-shrink: 0;
 }
 
-/* 3. Campaign card corner flourish (bottom-right) */
+/* 3. Campaign card — centered floral watermark */
 .card::after {
-  content: '';
+  content: '✾';
   position: absolute;
-  bottom: 0.35rem;
-  right: 0.35rem;
-  width: 22px;
-  height: 22px;
-  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cellipse cx='10' cy='5' rx='2.5' ry='4' fill='%239d97c0'/%3E%3Cellipse cx='10' cy='15' rx='2.5' ry='4' fill='%239d97c0'/%3E%3Cellipse cx='5' cy='10' rx='4' ry='2.5' fill='%239d97c0'/%3E%3Cellipse cx='15' cy='10' rx='4' ry='2.5' fill='%239d97c0'/%3E%3Cellipse cx='6.5' cy='6.5' rx='2' ry='3.5' fill='%239d97c0' transform='rotate(-45,6.5,6.5)'/%3E%3Cellipse cx='13.5' cy='6.5' rx='2' ry='3.5' fill='%239d97c0' transform='rotate(45,13.5,6.5)'/%3E%3Cellipse cx='6.5' cy='13.5' rx='2' ry='3.5' fill='%239d97c0' transform='rotate(45,6.5,13.5)'/%3E%3Cellipse cx='13.5' cy='13.5' rx='2' ry='3.5' fill='%239d97c0' transform='rotate(-45,13.5,13.5)'/%3E%3Ccircle cx='10' cy='10' r='3' fill='%239d97c0'/%3E%3C/svg%3E") center / contain no-repeat;
-  opacity: 0.18;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 5rem;
+  color: var(--gold);
+  opacity: 0.04;
   pointer-events: none;
+  z-index: 0;
+  user-select: none;
+}
+
+.card > * {
+  position: relative;
+  z-index: 1;
 }
 
 /* 4. Modal overlay — subtle floral dot wallpaper */
@@ -3550,28 +3597,48 @@ input.hp-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0;
     rgba(0,0,0,0.87);
 }
 
-/* 5a. Body watermarks — large rose/peony in top-right and bottom-left */
+/* 5a. Body watermarks — large floral glyphs at viewport corners */
 body::before,
 body::after {
-  content: '';
   position: fixed;
-  width: 520px;
-  height: 520px;
-  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'%3E%3Cellipse cx='100' cy='38' rx='16' ry='30' fill='%239b6dff' transform='rotate(0,100,100)'/%3E%3Cellipse cx='100' cy='38' rx='16' ry='30' fill='%239b6dff' transform='rotate(45,100,100)'/%3E%3Cellipse cx='100' cy='38' rx='16' ry='30' fill='%239b6dff' transform='rotate(90,100,100)'/%3E%3Cellipse cx='100' cy='38' rx='16' ry='30' fill='%239b6dff' transform='rotate(135,100,100)'/%3E%3Cellipse cx='100' cy='38' rx='16' ry='30' fill='%239b6dff' transform='rotate(180,100,100)'/%3E%3Cellipse cx='100' cy='38' rx='16' ry='30' fill='%239b6dff' transform='rotate(225,100,100)'/%3E%3Cellipse cx='100' cy='38' rx='16' ry='30' fill='%239b6dff' transform='rotate(270,100,100)'/%3E%3Cellipse cx='100' cy='38' rx='16' ry='30' fill='%239b6dff' transform='rotate(315,100,100)'/%3E%3Cellipse cx='100' cy='54' rx='12' ry='22' fill='%239b6dff' transform='rotate(22.5,100,100)'/%3E%3Cellipse cx='100' cy='54' rx='12' ry='22' fill='%239b6dff' transform='rotate(67.5,100,100)'/%3E%3Cellipse cx='100' cy='54' rx='12' ry='22' fill='%239b6dff' transform='rotate(112.5,100,100)'/%3E%3Cellipse cx='100' cy='54' rx='12' ry='22' fill='%239b6dff' transform='rotate(157.5,100,100)'/%3E%3Cellipse cx='100' cy='54' rx='12' ry='22' fill='%239b6dff' transform='rotate(202.5,100,100)'/%3E%3Cellipse cx='100' cy='54' rx='12' ry='22' fill='%239b6dff' transform='rotate(247.5,100,100)'/%3E%3Cellipse cx='100' cy='54' rx='12' ry='22' fill='%239b6dff' transform='rotate(292.5,100,100)'/%3E%3Cellipse cx='100' cy='54' rx='12' ry='22' fill='%239b6dff' transform='rotate(337.5,100,100)'/%3E%3Ccircle cx='100' cy='100' r='20' fill='%239b6dff'/%3E%3C/svg%3E") center / contain no-repeat;
-  opacity: 0.04;
+  font-size: 20rem;
+  opacity: 0.025;
+  color: var(--accent);
   pointer-events: none;
-  z-index: 0;
+  z-index: -1;
+  user-select: none;
 }
-body::before { top: -80px; right: -80px; }
-body::after  { bottom: -80px; left: -80px; }
 
-/* 5b. Header — decorative vine-wave divider below border */
+body::before {
+  content: '✾';
+  bottom: -80px;
+  left: -80px;
+  transform: rotate(-15deg);
+}
+
+body::after {
+  content: '❧';
+  top: -100px;
+  right: -100px;
+  transform: rotate(25deg);
+}
+
+/* 5b. Header — decorative vine-and-ornament divider below border */
 header::after {
-  content: '';
+  content: '❧ ✦ ❧ ✦ ❧ ✦ ❧ ✦ ❧ ✦ ❧ ✦ ❧ ✦ ❧ ✦ ❧ ✦ ❧ ✦ ❧ ✦ ❧';
   display: block;
-  height: 9px;
-  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100' height='9' viewBox='0 0 100 9'%3E%3Cpath d='M0,4.5 Q12.5,1,25,4.5 Q37.5,8,50,4.5 Q62.5,1,75,4.5 Q87.5,8,100,4.5' stroke='%239d97c0' stroke-width='1' fill='none'/%3E%3Ccircle cx='25' cy='4.5' r='1.5' fill='%239d97c0'/%3E%3Ccircle cx='50' cy='4.5' r='1.5' fill='%239d97c0'/%3E%3Ccircle cx='75' cy='4.5' r='1.5' fill='%239d97c0'/%3E%3Cellipse cx='19' cy='2.5' rx='3.5' ry='2' fill='%239d97c0' opacity='.5' transform='rotate(-25,19,2.5)'/%3E%3Cellipse cx='44' cy='6.5' rx='3.5' ry='2' fill='%239d97c0' opacity='.5' transform='rotate(25,44,6.5)'/%3E%3Cellipse cx='69' cy='2.5' rx='3.5' ry='2' fill='%239d97c0' opacity='.5' transform='rotate(-25,69,2.5)'/%3E%3C/svg%3E") left center / 100px 9px repeat-x;
-  opacity: 0.45;
+  position: absolute;
+  bottom: -12px;
+  left: 0;
+  right: 0;
+  height: 12px;
+  text-align: center;
+  font-size: 0.7rem;
+  letter-spacing: 0.5rem;
+  color: var(--gold);
+  opacity: 0.6;
+  white-space: nowrap;
+  overflow: hidden;
 }
 
 /* ── Auth Gate ── */
@@ -3763,25 +3830,22 @@ header::after {
 .portrait-frame::before,
 .portrait-frame::after {
   position: absolute;
-  font-size: 0.95rem;
+  font-size: 1.5rem;
   color: var(--gold);
-  opacity: 0.65;
-  text-shadow: 0 0 4px rgba(212,175,55,0.55);
+  text-shadow: 0 0 12px var(--gold);
   pointer-events: none;
   z-index: 3;
   line-height: 1;
 }
 .portrait-frame::before {
   content: '✾';
-  top: 4px;
-  left: 6px;
-  transform: rotate(-20deg);
+  top: -8px;
+  left: -8px;
 }
 .portrait-frame::after {
   content: '✾';
-  bottom: 4px;
-  right: 6px;
-  transform: rotate(20deg);
+  bottom: -8px;
+  right: -8px;
 }
 /* Secondary corners via a wrapper element (optional; harmless if absent) */
 .portrait-corners {
@@ -3794,13 +3858,13 @@ header::after {
 .portrait-corners::after {
   position: absolute;
   content: '✿';
-  font-size: 0.75rem;
-  color: var(--gold-lt);
-  opacity: 0.55;
-  text-shadow: 0 0 3px rgba(212,175,55,0.4);
+  font-size: 1.1rem;
+  color: var(--gold);
+  text-shadow: 0 0 10px var(--gold);
+  pointer-events: none;
 }
-.portrait-corners::before { top: 4px; right: 6px; transform: rotate(20deg); }
-.portrait-corners::after  { bottom: 4px; left: 6px; transform: rotate(-20deg); }
+.portrait-corners::before { top: -8px; right: -8px; }
+.portrait-corners::after  { bottom: -8px; left: -8px; }
 
 /* ── Background particle canvas ─────────────────────────────────────── */
 #bg-particles {
