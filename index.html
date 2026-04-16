@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>D&D Campaign Tracker</title>
-  <link rel="stylesheet" href="style.css?v=82">
+  <link rel="stylesheet" href="style.css?v=85">
 </head>
 <body>
   <!-- Auth gate — shown when not signed in -->
@@ -32,6 +32,10 @@
           Import
           <input type="file" id="import-file" accept=".json" onchange="importData(event)" style="display:none">
         </label>
+        <div class="theme-wrap">
+          <button class="btn btn-sm theme-btn" id="theme-btn" onclick="toggleThemeDropdown(event)" title="Change color theme" aria-label="Change color theme">🎨</button>
+          <div class="theme-dropdown hidden" id="theme-dropdown"></div>
+        </div>
         <button class="btn btn-sm" onclick="signOut()" title="Sign out">Sign out</button>
       </div>
     </div>
@@ -61,6 +65,6 @@
   <script src="data/feats_items.js?v=1"></script>
   <script src="data/tools_data.js?v=1"></script>
   <script src="data/weapons_data.js?v=1"></script>
-  <script src="app.js?v=145"></script>
+  <script src="app.js?v=149"></script>
 </body>
 </html>

@@ -2583,7 +2583,7 @@ function renderPortraitCard(ch) {
       </div>`
     : `<span class="portrait-icon">${icon}</span>`;
   return `<div class="portrait-card">
-    <div class="portrait-frame">${portraitInner}</div>
+    <div class="portrait-frame">${portraitInner}<span class="portrait-corners"></span></div>
     <div class="portrait-info">
       <div class="portrait-name">${esc(ch.name)}</div>
       <div class="portrait-meta">${esc(ch.race || '—')} ${formatClassLine(ch)} &bull; Lv ${ch.level}</div>
@@ -3759,6 +3759,31 @@ function renderPreparedView(ch) {
     </div>`).join('')}</div>`;
 }
 
+function _updateCantripCountDisplay() {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  const _cMax = _cantripMax(ch);
+  const _cCount = _cantripCount(ch);
+  // Update the cantrip count in the spells section (e.g., "5 / 5")
+  const countElements = document.querySelectorAll('.sheet-panel:has(.spell-tabs) > div');
+  for (const el of countElements) {
+    if (el.textContent.includes('Cantrips')) {
+      const spans = el.querySelectorAll('span');
+      for (const sp of spans) {
+        if (sp.textContent.match(/\d+\s*\/\s*\d+/)) {
+          sp.textContent = `${_cCount} / ${_cMax}`;
+          sp.style.color = _cCount > _cMax ? 'var(--red-lt)' : 'var(--text)';
+        }
+      }
+    }
+  }
+  // Update the Known tab badge
+  const knownTabBtn = document.querySelector('.spell-tab[data-tab="known"]');
+  if (knownTabBtn) {
+    const badge = knownTabBtn.querySelector('.spell-count');
+    if (badge) badge.textContent = (ch.spells.known || []).length;
+  }
+}
+
 function spellAddFromEncoded(listType, encoded) {
   const ch = db.characters[currentCharId]; if (!ch) return;
   const sp = JSON.parse(decodeURIComponent(encoded));
@@ -3778,11 +3803,32 @@ function spellAddFromEncoded(listType, encoded) {
     }
   }
   if (sp.level_int === 0) {
-    // Cantrips: always store in known only, then full re-render so count header updates
+    // Cantrips: surgical update instead of full re-render
+    const appEl = document.getElementById('app');
+    const st = appEl ? appEl.scrollTop : 0;
+    const listSt = document.querySelector('.spell-api-list')?.scrollTop || 0;
+
     ch.spells.known = ch.spells.known || [];
     const already = ch.spells.known.some(s => (typeof s==='object'?s.name:s) === sp.name);
     if (!already) ch.spells.known.push(sp);
-    _preserveScroll(() => { saveData(db); renderApp(); });
+
+    saveData(db);
+    _updateCantripCountDisplay();
+
+    // Update visible tab content synchronously
+    if (spellViewTab === 'all') {
+      // Re-render just the spell results (updates Learn → ✓ Known button)
+      updateSpellResults();
+      // .spell-api-list was replaced by updateSpellResults — restore its scroll on the new element
+      const newListEl = document.querySelector('.spell-api-list');
+      if (newListEl && listSt > 0) newListEl.scrollTop = listSt;
+    } else if (spellViewTab === 'known') {
+      const tabContentEl = document.getElementById('spell-tab-content');
+      if (tabContentEl) tabContentEl.innerHTML = renderKnownView(ch);
+    }
+
+    // Restore app scroll synchronously
+    if (appEl) appEl.scrollTop = st;
     return;
   }
   // Leveled spells — toggle: clicking ✓ Prep / ✓ Known removes the spell; clicking Prepare / Learn adds it
@@ -3857,13 +3903,21 @@ function castCantrip(spellName) {
   const sp = allSpells.find(s => typeof s === 'object' && s.name === spellName);
   const isConc = sp?.concentration === 'yes';
   const docast = () => {
+    const appEl = document.getElementById('app');
+    const st = appEl ? appEl.scrollTop : 0;
+
     ch.sessionLog = ch.sessionLog || [];
     ch.sessionLog.unshift({ text: `${spellName} (cantrip)`, ts: Date.now() });
     if (ch.sessionLog.length > 100) ch.sessionLog = ch.sessionLog.slice(0, 100);
     if (isConc) ch.activeConcentration = { spellName, castLevel: 0 };
     saveData(db);
     showToast(`<strong>${esc(spellName)}</strong> cast!`);
-    if (isConc) _preserveScroll(() => renderApp());
+
+    if (isConc) {
+      // Concentration change requires updating combat info + spells section
+      renderCharacterSheet();
+      if (appEl) appEl.scrollTop = st;
+    }
   };
   if (isConc && ch.activeConcentration && ch.activeConcentration.spellName !== spellName) {
     showConfirm(`This will end your concentration on ${esc(ch.activeConcentration.spellName)}. Continue?`, docast);
@@ -4146,7 +4200,31 @@ function removeSpellEntry(listType, idx) {
   const sp = (ch.spells[listType] || [])[idx];
   const isCantrip = typeof sp === 'object' && sp.level_int === 0;
   ch.spells[listType].splice(idx, 1);
-  _preserveScroll(() => { saveData(db); if (isCantrip) renderApp(); else renderSpellTabContent(); });
+
+  if (isCantrip) {
+    // Surgical update for cantrip removal
+    const appEl = document.getElementById('app');
+    const st = appEl ? appEl.scrollTop : 0;
+    const listSt = document.querySelector('.spell-api-list')?.scrollTop || 0;
+
+    saveData(db);
+    _updateCantripCountDisplay();
+
+    // Update visible tab content synchronously
+    if (spellViewTab === 'all') {
+      updateSpellResults();
+      const newListEl = document.querySelector('.spell-api-list');
+      if (newListEl && listSt > 0) newListEl.scrollTop = listSt;
+    } else if (spellViewTab === 'known') {
+      const tabContentEl = document.getElementById('spell-tab-content');
+      if (tabContentEl) tabContentEl.innerHTML = renderKnownView(ch);
+    }
+
+    // Restore app scroll synchronously
+    if (appEl) appEl.scrollTop = st;
+  } else {
+    _preserveScroll(() => { saveData(db); renderSpellTabContent(); });
+  }
 }
 
 function toggleSpellBubble(level, index) {
@@ -4154,6 +4232,7 @@ function toggleSpellBubble(level, index) {
   const cur = ch.spells.slots[level] || 0;
   ch.spells.slots[level] = index < cur ? index : index + 1;
   saveData(db); renderApp();
+  _popSpellSlot(level, index);
 }
 
 function updateSpellSlotMax(level, value) {
@@ -5950,15 +6029,19 @@ function renderCharacterSheet() {
       </div>
       <div class="cs-col-mid">
         ${renderCombatSection(ch)}
+        <div class="floral-divider">✾ ✿ ✾</div>
         ${renderResourcesPanel(ch)}
         ${renderAttacksSection(ch)}
+        <div class="floral-divider">✾ ✿ ✾</div>
         ${renderEquipmentCurrency(ch)}
         ${renderSpellsSection(ch)}
       </div>
       <div class="cs-col-right">
         ${renderPersonalitySection(ch)}
+        <div class="floral-divider">✾ ✿ ✾</div>
         ${renderFeaturesSection(ch)}
         ${renderProficienciesLanguages(ch)}
+        <div class="floral-divider">✾ ✿ ✾</div>
         ${renderNotesSection(ch)}
       </div>
     </div>`;
@@ -6380,6 +6463,7 @@ function applyDamage() {
   }
   ch.combat.currentHP = Math.max(0, ch.combat.currentHP - remaining);
   closeModal(); saveData(db); renderApp();
+  _flashHPDamage();
 }
 
 function applyDamageInline() {
@@ -6395,6 +6479,7 @@ function applyDamageInline() {
   }
   ch.combat.currentHP = Math.max(0, ch.combat.currentHP - remaining);
   saveData(db); renderApp();
+  _flashHPDamage();
 }
 
 function applyHealInline() {
@@ -6404,6 +6489,7 @@ function applyHealInline() {
   const ch = db.characters[currentCharId]; if (!ch) return;
   ch.combat.currentHP = Math.min(ch.combat.maxHP, ch.combat.currentHP + amount);
   saveData(db); renderApp();
+  _flashHPHeal();
 }
 
 function openHealPrompt() {
@@ -6422,6 +6508,7 @@ function applyHeal() {
   const ch = db.characters[currentCharId]; if (!ch) return;
   ch.combat.currentHP = Math.min(ch.combat.maxHP, ch.combat.currentHP + amount);
   closeModal(); saveData(db); renderApp();
+  _flashHPHeal();
 }
 
 function adjustTempHP(delta) {
@@ -6488,6 +6575,7 @@ function doLongRest() {
   // Restore resources
   restoreResources('long', currentCharId);
   saveData(db); renderApp();
+  _shimmerLongRestBtn();
 }
 
 function openShortRestDialog() {
@@ -7844,6 +7932,260 @@ function importData(event) {
 function esc(str) {
   if(str==null) return '';
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Color Theme Selector
+// ══════════════════════════════════════════════════════════════════════════════
+
+const THEMES = {
+  arcane: {
+    name: 'Arcane',
+    accent: '#9b6dff', gold: '#c084fc', goldLt: '#d8b4fe',
+    bg: '#0f0a1a', surface: '#1f1f26', surface2: '#26262f',
+  },
+  emerald: {
+    name: 'Emerald',
+    accent: '#4ade80', gold: '#86efac', goldLt: '#bbf7d0',
+    bg: '#0a1a0f', surface: '#0f2415', surface2: '#163020',
+  },
+  crimson: {
+    name: 'Crimson',
+    accent: '#ef4444', gold: '#fca5a5', goldLt: '#fecaca',
+    bg: '#1a0808', surface: '#250d0d', surface2: '#301212',
+  },
+  sapphire: {
+    name: 'Sapphire',
+    accent: '#60a5fa', gold: '#93c5fd', goldLt: '#bfdbfe',
+    bg: '#0a0f1a', surface: '#101525', surface2: '#161e30',
+  },
+  'rose-gold': {
+    name: 'Rose Gold',
+    accent: '#f472b6', gold: '#fbcfe8', goldLt: '#fce7f3',
+    bg: '#1a0d14', surface: '#251018', surface2: '#30141e',
+  },
+};
+
+const THEME_STORAGE_KEY = 'dnd_theme_v1';
+
+// Convert hex (#rrggbb) to rgba string with given alpha
+function _hexToRgba(hex, alpha) {
+  const h = hex.replace('#', '');
+  const r = parseInt(h.substr(0, 2), 16);
+  const g = parseInt(h.substr(2, 2), 16);
+  const b = parseInt(h.substr(4, 2), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+// Lighten a hex color by mixing it with white by amt (0-1)
+function _lighten(hex, amt) {
+  const h = hex.replace('#', '');
+  const r = parseInt(h.substr(0, 2), 16);
+  const g = parseInt(h.substr(2, 2), 16);
+  const b = parseInt(h.substr(4, 2), 16);
+  const lr = Math.round(r + (255 - r) * amt);
+  const lg = Math.round(g + (255 - g) * amt);
+  const lb = Math.round(b + (255 - b) * amt);
+  return `rgb(${lr},${lg},${lb})`;
+}
+
+// Lighten a gold by slight amount for --gold-lt (a paler variant)
+function _paler(hex, amt) {
+  return _lighten(hex, amt);
+}
+
+function applyTheme(themeKey) {
+  const theme = THEMES[themeKey] || THEMES.arcane;
+  const root = document.documentElement;
+  const surface  = theme.surface  || _lighten(theme.bg, 0.06);
+  const surface2 = theme.surface2 || _lighten(theme.bg, 0.12);
+  const goldLt   = theme.goldLt   || _paler(theme.gold, 0.35);
+
+  root.style.setProperty('--accent',     theme.accent);
+  root.style.setProperty('--accent-dim', _hexToRgba(theme.accent, 0.6));
+  root.style.setProperty('--gold',       theme.gold);
+  root.style.setProperty('--gold-lt',    goldLt);
+  root.style.setProperty('--bg',         theme.bg);
+  root.style.setProperty('--surface',    surface);
+  root.style.setProperty('--surface2',   surface2);
+  root.style.setProperty('--border',     _hexToRgba(theme.accent, 0.25));
+  // Also update body backgroundColor for the hard-coded base
+  document.body.style.backgroundColor = theme.bg;
+  try { localStorage.setItem(THEME_STORAGE_KEY, themeKey); } catch (e) {}
+  renderThemeSwatches(themeKey);
+}
+
+function renderThemeSwatches(selectedKey) {
+  const dd = document.getElementById('theme-dropdown');
+  if (!dd) return;
+  const items = Object.entries(THEMES).map(([key, t]) => `
+    <div class="theme-swatch-item" onclick="applyTheme('${key}')">
+      <div class="theme-swatch ${key === selectedKey ? 'selected' : ''}" style="background:${t.accent}"></div>
+      <div class="theme-name">${t.name}</div>
+    </div>
+  `).join('');
+  dd.innerHTML = `<div class="theme-dropdown-title">✾ Color Theme</div>
+    <div class="theme-swatch-list">${items}</div>`;
+}
+
+function toggleThemeDropdown(e) {
+  if (e) e.stopPropagation();
+  const dd = document.getElementById('theme-dropdown');
+  if (!dd) return;
+  const isHidden = dd.classList.contains('hidden');
+  if (isHidden) {
+    const current = (() => { try { return localStorage.getItem(THEME_STORAGE_KEY) || 'arcane'; } catch (e) { return 'arcane'; } })();
+    renderThemeSwatches(current);
+    dd.classList.remove('hidden');
+    // Close on outside click (next tick so this click doesn't trigger it)
+    setTimeout(() => {
+      document.addEventListener('click', _closeThemeDropdownOnOutside, { once: true });
+    }, 0);
+  } else {
+    dd.classList.add('hidden');
+  }
+}
+
+function _closeThemeDropdownOnOutside(e) {
+  const dd = document.getElementById('theme-dropdown');
+  const btn = document.getElementById('theme-btn');
+  if (!dd || dd.classList.contains('hidden')) return;
+  if (dd.contains(e.target) || (btn && btn.contains(e.target))) {
+    // Re-register listener — swatch clicks re-render but should not close dropdown
+    document.addEventListener('click', _closeThemeDropdownOnOutside, { once: true });
+    return;
+  }
+  dd.classList.add('hidden');
+}
+
+// Restore theme on load
+(function _initTheme() {
+  let saved = 'arcane';
+  try { saved = localStorage.getItem(THEME_STORAGE_KEY) || 'arcane'; } catch (e) {}
+  if (!THEMES[saved]) saved = 'arcane';
+  // Apply immediately (before render) so FOUC is minimized
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => applyTheme(saved));
+  } else {
+    applyTheme(saved);
+  }
+})();
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Visual Enhancements — Particle System & Micro-animation Helpers
+// ══════════════════════════════════════════════════════════════════════════════
+
+function _prefersReducedMotion() {
+  return window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+// Background particle system: tiny drifting purple dots & occasional ✦ glyphs
+(function _initBgParticles() {
+  if (typeof document === 'undefined') return;
+  if (_prefersReducedMotion()) return;
+
+  function start() {
+    if (document.getElementById('bg-particles')) return;
+    const canvas = document.createElement('canvas');
+    canvas.id = 'bg-particles';
+    (document.body || document.documentElement).appendChild(canvas);
+    const ctx = canvas.getContext('2d');
+
+    let W = 0, H = 0, DPR = Math.min(window.devicePixelRatio || 1, 2);
+    function resize() {
+      W = window.innerWidth; H = window.innerHeight;
+      canvas.width = W * DPR; canvas.height = H * DPR;
+      canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+      ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    const MAX = 35;
+    const particles = [];
+    function spawn() {
+      particles.push({
+        x: Math.random() * W,
+        y: H + 8,
+        vy: 0.18 + Math.random() * 0.35,
+        size: 1 + Math.random() * 1.3,
+        life: 0,
+        maxLife: 6000 + Math.random() * 4000,
+        drift: (Math.random() - 0.5) * 0.22,
+        glyph: Math.random() < 0.13 ? '✦' : null
+      });
+    }
+
+    let last = performance.now();
+    function tick(now) {
+      requestAnimationFrame(tick);
+      if (document.hidden) { last = now; return; }
+      const dt = Math.min(50, now - last);
+      last = now;
+
+      if (particles.length < MAX && Math.random() < 0.015 * dt) spawn();
+
+      ctx.clearRect(0, 0, W, H);
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.life += dt;
+        if (p.life > p.maxLife) { particles.splice(i, 1); continue; }
+        p.y -= p.vy;
+        p.x += p.drift;
+        const t = p.life / p.maxLife;
+        const alpha = t < 0.15 ? t / 0.15 : (1 - t) * 0.65;
+        if (p.glyph) {
+          ctx.fillStyle = 'rgba(196,180,84,' + (alpha * 0.55).toFixed(3) + ')';
+          ctx.font = Math.round(8 + p.size * 3) + 'px serif';
+          ctx.fillText(p.glyph, p.x, p.y);
+        } else {
+          ctx.fillStyle = 'rgba(155,109,255,' + (alpha * 0.45).toFixed(3) + ')';
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
+    requestAnimationFrame(tick);
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+  else start();
+})();
+
+// ── Animation trigger helpers ─────────────────────────────────────────────────
+function _flashHPDamage() {
+  if (_prefersReducedMotion()) return;
+  const btn = document.querySelector('.hp-dmg-btn');
+  if (btn) { btn.classList.remove('flash'); void btn.offsetWidth; btn.classList.add('flash'); setTimeout(() => btn.classList.remove('flash'), 400); }
+  const val = document.getElementById('hp-current-val');
+  if (val) { val.classList.remove('hp-shake'); void val.offsetWidth; val.classList.add('hp-shake'); setTimeout(() => val.classList.remove('hp-shake'), 400); }
+}
+
+function _flashHPHeal() {
+  if (_prefersReducedMotion()) return;
+  const btn = document.querySelector('.hp-heal-btn');
+  if (btn) { btn.classList.remove('flash'); void btn.offsetWidth; btn.classList.add('flash'); setTimeout(() => btn.classList.remove('flash'), 400); }
+  const val = document.getElementById('hp-current-val');
+  if (val) { val.classList.remove('hp-bounce'); void val.offsetWidth; val.classList.add('hp-bounce'); setTimeout(() => val.classList.remove('hp-bounce'), 400); }
+}
+
+function _popSpellSlot(level, index) {
+  if (_prefersReducedMotion()) return;
+  const rows = document.querySelectorAll('.spell-slot-row');
+  const bubbles = rows[level - 1]?.querySelectorAll('.spell-bubble');
+  const el = bubbles && bubbles[index];
+  if (!el) return;
+  el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop');
+  setTimeout(() => el.classList.remove('pop'), 240);
+}
+
+function _shimmerLongRestBtn() {
+  if (_prefersReducedMotion()) return;
+  const btn = document.querySelector('.hp-long-btn');
+  if (!btn) return;
+  btn.classList.remove('shimmer'); void btn.offsetWidth; btn.classList.add('shimmer');
+  setTimeout(() => btn.classList.remove('shimmer'), 780);
 }
 
 // ── Init ───────────────────────────────────────────────────────────────────────

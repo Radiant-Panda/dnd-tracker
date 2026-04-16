@@ -35,8 +35,8 @@ body {
 
 /* ── Header ── */
 header {
-  background: linear-gradient(135deg, #141418 0%, #1f1f26 100%);
-  border-bottom: 2px solid var(--gold);
+  background: linear-gradient(135deg, var(--bg) 0%, var(--surface) 100%);
+  border-bottom: 2px solid var(--border);
   position: sticky;
   top: 0;
   z-index: 100;
@@ -3632,4 +3632,274 @@ header::after {
   font-size: 0.78rem;
   margin-top: 1.5rem;
   opacity: 0.7;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Theme Selector Dropdown
+   ═══════════════════════════════════════════════════════════════════════ */
+.theme-wrap {
+  position: relative;
+  display: inline-block;
+}
+.theme-btn {
+  padding: 0.25rem 0.5rem;
+  font-size: 1rem;
+  line-height: 1;
+}
+.theme-dropdown {
+  position: absolute;
+  top: calc(100% + 0.45rem);
+  right: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(0,0,0,0.55);
+  padding: 0.7rem 0.75rem;
+  z-index: 9999;
+  min-width: 220px;
+  backdrop-filter: blur(6px);
+}
+.theme-dropdown.hidden { display: none; }
+.theme-dropdown-title {
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: var(--text-dim);
+  margin-bottom: 0.55rem;
+  text-align: center;
+}
+.theme-swatch-list {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 0.55rem;
+}
+.theme-swatch-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  cursor: pointer;
+  padding: 0.2rem;
+  border-radius: 6px;
+  transition: background 0.15s;
+}
+.theme-swatch-item:hover { background: rgba(255,255,255,0.04); }
+.theme-swatch {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  box-shadow: 0 0 6px rgba(0,0,0,0.4);
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+.theme-swatch-item:hover .theme-swatch { transform: scale(1.1); }
+.theme-swatch.selected {
+  border-color: var(--gold);
+  box-shadow: 0 0 10px rgba(212,175,55,0.55);
+}
+.theme-name {
+  font-size: 0.58rem;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  text-align: center;
+  line-height: 1;
+  white-space: nowrap;
+}
+.theme-swatch-item:hover .theme-name { color: var(--text); }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Visual Enhancements — Ornaments, Frames, Particles, Animations
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* ── Floral dividers — use between major sections on the sheet ───────── */
+.floral-divider {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0.75rem 0;
+  color: var(--gold-lt);
+  opacity: 0.55;
+  font-size: 0.72rem;
+  letter-spacing: 0.35em;
+  gap: 0.6rem;
+  pointer-events: none;
+  user-select: none;
+}
+.floral-divider::before,
+.floral-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(to right, transparent, rgba(212,175,55,0.45), transparent);
+}
+
+/* ── Additional corner flourishes on panel titles & initiative tracker ── */
+.card-header::before,
+.card-header::after,
+.initiative-header::before,
+.initiative-header::after {
+  content: '❧';
+  color: var(--gold);
+  opacity: 0.4;
+  font-size: 0.8em;
+  margin: 0 0.35rem;
+  flex-shrink: 0;
+}
+.initiative-header {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+/* ── Decorative Portrait Frame ──────────────────────────────────────── */
+.portrait-frame {
+  position: relative;
+  box-shadow:
+    0 4px 16px rgba(0,0,0,0.3),
+    inset 0 0 20px rgba(155,109,255,0.08),
+    0 0 12px rgba(212,175,55,0.3);
+}
+.portrait-frame::before,
+.portrait-frame::after {
+  position: absolute;
+  font-size: 0.95rem;
+  color: var(--gold);
+  opacity: 0.65;
+  text-shadow: 0 0 4px rgba(212,175,55,0.55);
+  pointer-events: none;
+  z-index: 3;
+  line-height: 1;
+}
+.portrait-frame::before {
+  content: '✾';
+  top: 4px;
+  left: 6px;
+  transform: rotate(-20deg);
+}
+.portrait-frame::after {
+  content: '✾';
+  bottom: 4px;
+  right: 6px;
+  transform: rotate(20deg);
+}
+/* Secondary corners via a wrapper element (optional; harmless if absent) */
+.portrait-corners {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+}
+.portrait-corners::before,
+.portrait-corners::after {
+  position: absolute;
+  content: '✿';
+  font-size: 0.75rem;
+  color: var(--gold-lt);
+  opacity: 0.55;
+  text-shadow: 0 0 3px rgba(212,175,55,0.4);
+}
+.portrait-corners::before { top: 4px; right: 6px; transform: rotate(20deg); }
+.portrait-corners::after  { bottom: 4px; left: 6px; transform: rotate(-20deg); }
+
+/* ── Background particle canvas ─────────────────────────────────────── */
+#bg-particles {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0.75;
+}
+
+/* ── Sheet panel hover — subtle lift (transition always safe) ────────── */
+.sheet-panel {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+/* ── Micro-animations (honors prefers-reduced-motion) ────────────────── */
+@media (prefers-reduced-motion: no-preference) {
+  /* HP Damage — shake + flash */
+  @keyframes hp-shake {
+    0%, 100% { transform: translateX(0); }
+    20% { transform: translateX(-4px); }
+    40% { transform: translateX(3px); }
+    60% { transform: translateX(-3px); }
+    80% { transform: translateX(2px); }
+  }
+  .hp-shake {
+    animation: hp-shake 0.3s ease-in-out;
+    display: inline-block;
+  }
+  @keyframes hp-damage-flash {
+    0%, 100% { filter: none; }
+    40% {
+      filter: brightness(1.2);
+      box-shadow: 0 0 16px rgba(239,68,68,0.55);
+      background: rgba(239,68,68,0.3);
+    }
+  }
+  .hp-dmg-btn.flash { animation: hp-damage-flash 0.35s ease; }
+
+  /* HP Heal — bounce + flash */
+  @keyframes hp-bounce {
+    0% { transform: scale(1); }
+    40% { transform: scale(1.15); }
+    100% { transform: scale(1); }
+  }
+  .hp-bounce {
+    animation: hp-bounce 0.3s ease;
+    display: inline-block;
+  }
+  @keyframes hp-heal-flash {
+    0%, 100% { filter: none; }
+    40% {
+      filter: brightness(1.2);
+      box-shadow: 0 0 16px rgba(34,197,94,0.5);
+      background: rgba(34,197,94,0.28);
+    }
+  }
+  .hp-heal-btn.flash { animation: hp-heal-flash 0.35s ease; }
+
+  /* Spell slot bubble pop */
+  @keyframes spell-pop {
+    0%   { transform: scale(1); }
+    30%  { transform: scale(0.7); }
+    60%  { transform: scale(1.1); }
+    100% { transform: scale(1); }
+  }
+  .spell-bubble.pop { animation: spell-pop 0.22s ease; }
+
+  /* Long Rest — golden shimmer sweep */
+  @keyframes golden-shimmer {
+    0%   { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+  }
+  .hp-long-btn.shimmer {
+    background-image: linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(212,175,55,0.55) 45%,
+      rgba(252,225,130,0.7) 50%,
+      rgba(212,175,55,0.55) 55%,
+      transparent 100%
+    );
+    background-size: 200% 100%;
+    animation: golden-shimmer 0.75s ease-out;
+  }
+
+  /* Tab content fade-in */
+  @keyframes tab-fade-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+  #spell-tab-content > * { animation: tab-fade-in 0.15s ease-out; }
+
+  /* Sheet panel hover lift */
+  .sheet-panel:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 3px 14px rgba(124,79,212,0.18);
+  }
 }
