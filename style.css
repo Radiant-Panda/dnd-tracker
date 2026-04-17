@@ -1511,6 +1511,12 @@ main {
   border: 1px solid rgba(80,160,255,0.3);
   border-radius: 0.3rem;
   padding: 0.15rem 0.2rem;
+  -moz-appearance: textfield;
+}
+.temp-hp-input::-webkit-outer-spin-button,
+.temp-hp-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 .temp-hp-input:focus {
   outline: none;
