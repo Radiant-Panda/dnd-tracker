@@ -1000,7 +1000,7 @@ function deleteCharacter(id) {
 // ── NPC Manager ───────────────────────────────────────────────────────────────
 function renderNpcCards(campaign) {
   const npcs = (campaign.npcs||[]).map(id => db.npcs[id]).filter(Boolean);
-  if (npcs.length === 0) return `<div class="empty-frame"><div class="empty-frame-header">✦ ───── ✾ ───── ✦</div><div class="empty"><div class="empty-icon">&#128100;</div><p>No NPCs yet.</p></div></div>`;
+  if (npcs.length === 0) return `<div class="empty-frame"><div class="empty-frame-header">✦ ───── ✾ ───── ✦</div><div class="empty"><div class="empty-icon empty-icon-themed"><svg viewBox="0 0 24 24" width="3rem" height="3rem" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="7" r="4"/><path d="M12 14c-6.075 0-9 2.686-9 4v1h18v-1c0-1.314-2.925-4-9-4z"/></svg></div><p>No NPCs yet.</p></div></div>`;
   return `<div class="card-grid">${npcs.map(npc => `
     <div class="card" onclick="showNpc('${npc.id}')">
       <div class="badge">${esc(npc.role||'NPC')}</div>
@@ -1349,7 +1349,7 @@ function _renderCombatLogEntries(init) {
   if (!log.length) return `<p style="color:var(--text-dim);font-size:0.78rem;text-align:center;padding:0.4rem">No events yet.</p>`;
   return log.map(e =>
     `<div style="display:flex;align-items:baseline;gap:0.4rem;padding:0.15rem 0">
-      <span style="font-size:0.6rem;background:rgba(155,109,255,0.25);color:#c4b5fd;border:1px solid rgba(155,109,255,0.35);border-radius:99px;padding:1px 5px;flex-shrink:0;white-space:nowrap">R${e.round}</span>
+      <span style="font-size:0.6rem;background:rgba(var(--accent-rgb),0.25);color:#c4b5fd;border:1px solid rgba(var(--accent-rgb),0.35);border-radius:99px;padding:1px 5px;flex-shrink:0;white-space:nowrap">R${e.round}</span>
       <span style="font-size:0.75rem;color:var(--text-dim)">${esc(e.text)}</span>
     </div>`
   ).join('');
@@ -1435,7 +1435,7 @@ function renderInitiativeTracker(campaign) {
         </div>`;
       }).join('')}
     </div>
-    ${_combatLogOpen ? `<div id="combat-log-panel" style="margin-top:0.75rem;background:rgba(0,0,0,0.25);border:1px solid rgba(155,109,255,0.25);border-radius:6px;padding:0.5rem 0.6rem">
+    ${_combatLogOpen ? `<div id="combat-log-panel" style="margin-top:0.75rem;background:rgba(0,0,0,0.25);border:1px solid rgba(var(--accent-rgb),0.25);border-radius:6px;padding:0.5rem 0.6rem">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.35rem">
         <span style="font-size:0.72rem;font-weight:700;color:#c4b5fd;letter-spacing:0.05em">COMBAT LOG</span>
         <div style="display:flex;gap:0.3rem">
@@ -2663,7 +2663,7 @@ function openPortraitCropModal(imageSrc) {
     ctx.fillRect(0, CY, CX, CROP);
     ctx.fillRect(CX + CROP, CY, PREVIEW - CX - CROP, CROP);
     // Crop border
-    ctx.strokeStyle = 'rgba(155,109,255,0.95)';
+    ctx.strokeStyle = 'rgba(var(--accent-rgb),0.95)';
     ctx.lineWidth = 2;
     ctx.strokeRect(CX, CY, CROP, CROP);
     // Rule-of-thirds guides
@@ -2781,18 +2781,18 @@ function openPortraitFramer(newDataUrl) {
         <div class="pf-slider-row">
           <label class="pf-label">Zoom</label>
           <input type="range" id="pf-zoom" min="100" max="300" value="${zoom}" step="1"
-            oninput="pfUpdate()" style="accent-color:#9b6dff;flex:1">
+            oninput="pfUpdate()" style="accent-color:var(--accent);flex:1">
           <span id="pf-zoom-val" class="pf-val">${zoom}%</span>
         </div>
         <div class="pf-slider-row">
           <label class="pf-label">Horizontal</label>
           <input type="range" id="pf-x" min="0" max="100" value="${px}" step="1"
-            oninput="pfUpdate()" style="accent-color:#9b6dff;flex:1">
+            oninput="pfUpdate()" style="accent-color:var(--accent);flex:1">
         </div>
         <div class="pf-slider-row">
           <label class="pf-label">Vertical</label>
           <input type="range" id="pf-y" min="0" max="100" value="${py}" step="1"
-            oninput="pfUpdate()" style="accent-color:#9b6dff;flex:1">
+            oninput="pfUpdate()" style="accent-color:var(--accent);flex:1">
         </div>
       </div>
       <div style="display:flex;gap:0.5rem;width:100%;max-width:320px">
@@ -3628,7 +3628,7 @@ function renderSpellResultsHtml(ch) {
           const safeData = encodeURIComponent(JSON.stringify({name:sp.name,level_int:sp.level_int||0,school:sp.school||'',casting_time:sp.casting_time||'',range:sp.range||'',components:sp.components||'',concentration:sp.concentration||'no',ritual:sp.ritual||'no',dnd_class:sp.dnd_class||'',_custom:sp._custom||false}));
           return `<div class="spell-browser-row">
             <div class="spell-browser-left">
-              ${sp._custom?`<span style="font-size:0.6rem;color:#c084fc;border:1px solid rgba(192,132,252,0.4);border-radius:3px;padding:0 3px;flex-shrink:0">✏</span>`:''}
+              ${sp._custom?`<span style="font-size:0.6rem;color:var(--gold);border:1px solid rgba(var(--accent-rgb),0.4);border-radius:3px;padding:0 3px;flex-shrink:0">✏</span>`:''}
               <span class="spell-name" style="font-size:0.82rem">${esc(sp.name)}</span>
               <span class="spell-badge" style="border-color:${sc};color:${sc};font-size:0.58rem">${esc(lvlLabel)}${lvlLabel&&school?' · ':''}${esc(school)}</span>
               ${srcInfo.abbr !== '?' ? `<span class="spell-source-badge" style="background:${srcInfo.color}">${srcInfo.abbr}</span>` : ''}
@@ -4792,7 +4792,7 @@ function updateFeatResults() {
           ? `<button class="btn btn-sm btn-primary" disabled style="opacity:0.7">✓ Added</button>`
           : `<button class="btn btn-sm" onclick="addFeatByIdx(${fi})">+ Add</button>`}
       </div>
-      <div id="${uid}" style="display:none;width:100%;padding:0.3rem 0.25rem 0.4rem;font-size:0.78rem;color:var(--text-dim);border-top:1px solid rgba(155,109,255,0.15);margin-top:0.2rem">
+      <div id="${uid}" style="display:none;width:100%;padding:0.3rem 0.25rem 0.4rem;font-size:0.78rem;color:var(--text-dim);border-top:1px solid rgba(var(--accent-rgb),0.15);margin-top:0.2rem">
         <p style="margin:0 0 0.3rem">${esc(f.desc || '')}</p>
         ${abLine ? `<div style="color:var(--gold-lt);font-size:0.74rem">Ability bonus: ${esc(abLine)}</div>` : ''}
       </div>
@@ -5039,7 +5039,7 @@ function updateMagicResults() {
             : `<button class="btn btn-sm" onclick="addMagicItemByIdx(${i})">+ Add</button>`}
         </div>
       </div>
-      <div id="${uid}" style="display:none;width:100%;padding:0.3rem 0.25rem 0.4rem;font-size:0.78rem;color:var(--text-dim);border-top:1px solid rgba(155,109,255,0.15);margin-top:0.2rem">
+      <div id="${uid}" style="display:none;width:100%;padding:0.3rem 0.25rem 0.4rem;font-size:0.78rem;color:var(--text-dim);border-top:1px solid rgba(var(--accent-rgb),0.15);margin-top:0.2rem">
         ${esc(item.desc || 'No description available.')}
       </div>
     </div>`;
@@ -5138,7 +5138,7 @@ function renderProficienciesLanguages(ch) {
   const known = ch.knownLanguages || ['Common'];
   const allKnown = new Set(known);
   const pills = known.map(l =>
-    `<span class="lang-pill">${esc(l)}<button class="lang-pill-remove" onclick="removeLanguage(${JSON.stringify(l)})" title="Remove">×</button></span>`
+    `<span class="lang-pill">${esc(l)}<button class="lang-pill-remove" onclick='removeLanguage(${JSON.stringify(l)})' title="Remove">×</button></span>`
   ).join('');
 
   const allLangs = [...STANDARD_LANGUAGES.standard, ...STANDARD_LANGUAGES.exotic, ...STANDARD_LANGUAGES.secret];
@@ -6820,14 +6820,14 @@ function updateWeaponResults() {
       const dice = dmgParts[0];
       const dmgType = dmgParts.slice(1).join(' ');
       const chips = w.properties.map(p =>
-        `<span style="font-size:0.6rem;border:1px solid rgba(155,109,255,0.45);color:var(--text-dim);border-radius:3px;padding:0 3px;white-space:nowrap">${esc(p)}</span>`
+        `<span style="font-size:0.6rem;border:1px solid rgba(var(--accent-rgb),0.45);color:var(--text-dim);border-radius:3px;padding:0 3px;white-space:nowrap">${esc(p)}</span>`
       ).join('');
       const rangeTxt = w.range ? `<span style="font-size:0.65rem;color:var(--text-dim)">${esc(w.range)}</span>` : '';
       return `<div class="wpn-row" onclick="pickWeapon(${idx})"
           style="display:flex;align-items:center;gap:0.4rem;flex-wrap:wrap;
                  padding:0.3rem 0.5rem;border-radius:5px;cursor:pointer;
                  border:1px solid var(--border);margin-bottom:0.25rem">
-        <span style="font-size:0.82rem;font-weight:600;min-width:110px">${esc(w.name)}${w._monkBadge ? '<span style="font-size:0.55rem;background:#9b6dff;color:#fff;padding:0.1rem 0.3rem;border-radius:2px;margin-left:0.3rem">Monk</span>' : ''}</span>
+        <span style="font-size:0.82rem;font-weight:600;min-width:110px">${esc(w.name)}${w._monkBadge ? '<span style="font-size:0.55rem;background:var(--accent);color:#fff;padding:0.1rem 0.3rem;border-radius:2px;margin-left:0.3rem">Monk</span>' : ''}</span>
         <span style="font-size:0.82rem;color:#f59e0b;font-weight:600">${esc(dice)}</span>
         <span style="font-size:0.72rem;color:var(--text-dim)">${esc(dmgType)}</span>
         ${rangeTxt}
@@ -7697,7 +7697,7 @@ function _wizManualSection() {
     return `<div class="wizard-ability-box">
       <label>${ABILITY_SHORT[a]}</label>
       <input type="number" value="${base}" min="3" max="18" oninput="wizardData.abilities['${a}']=+this.value||10;wizardData._manualSet=true;renderWizardStep(5)"
-        style="width:100%;text-align:center;background:transparent;border:none;border-bottom:1px solid rgba(155,109,255,0.3);color:var(--gold);font-size:1.2rem;font-weight:bold;font-family:inherit">
+        style="width:100%;text-align:center;background:transparent;border:none;border-bottom:1px solid rgba(var(--accent-rgb),0.3);color:var(--gold);font-size:1.2rem;font-weight:bold;font-family:inherit">
       ${bonus ? `<div style="font-size:0.7rem;color:var(--gold);margin-top:0.15rem">${base} + ${bonus} = <strong>${total}</strong></div>` : ''}
       ${rollInfo ? `<div style="font-size:0.65rem;color:var(--text-dim);margin-top:0.1rem">🎲 ${rollInfo}</div>` : ''}
       <button class="btn btn-sm" style="margin-top:0.25rem;font-size:0.65rem;padding:0.1rem 0.3rem" onclick="wiz_rollSingle('${a}')">Roll</button>
@@ -7941,28 +7941,33 @@ function esc(str) {
 const THEMES = {
   arcane: {
     name: 'Arcane',
-    accent: '#9b6dff', gold: '#c084fc', goldLt: '#d8b4fe',
+    accent: '#9b6dff', accentRGB: '155,109,255', gold: '#c084fc', goldLt: '#d8b4fe',
     bg: '#0f0a1a', surface: '#1f1f26', surface2: '#26262f',
+    hpGradient: 'linear-gradient(90deg, #ec4899, #9b6dff)',
   },
   emerald: {
     name: 'Emerald',
-    accent: '#4ade80', gold: '#86efac', goldLt: '#bbf7d0',
+    accent: '#4ade80', accentRGB: '74,222,128', gold: '#86efac', goldLt: '#bbf7d0',
     bg: '#0a1a0f', surface: '#0f2415', surface2: '#163020',
+    hpGradient: 'linear-gradient(90deg, #fde047, #4ade80)',
   },
   crimson: {
     name: 'Crimson',
-    accent: '#ef4444', gold: '#fca5a5', goldLt: '#fecaca',
+    accent: '#ef4444', accentRGB: '239,68,68', gold: '#fca5a5', goldLt: '#fecaca',
     bg: '#1a0808', surface: '#250d0d', surface2: '#301212',
+    hpGradient: 'linear-gradient(90deg, #fb923c, #ef4444)',
   },
   sapphire: {
     name: 'Sapphire',
-    accent: '#60a5fa', gold: '#93c5fd', goldLt: '#bfdbfe',
+    accent: '#60a5fa', accentRGB: '96,165,250', gold: '#93c5fd', goldLt: '#bfdbfe',
     bg: '#0a0f1a', surface: '#101525', surface2: '#161e30',
+    hpGradient: 'linear-gradient(90deg, #22d3ee, #60a5fa)',
   },
   'rose-gold': {
     name: 'Rose Gold',
-    accent: '#f472b6', gold: '#fbcfe8', goldLt: '#fce7f3',
+    accent: '#f472b6', accentRGB: '244,114,182', gold: '#fbcfe8', goldLt: '#fce7f3',
     bg: '#1a0d14', surface: '#251018', surface2: '#30141e',
+    hpGradient: 'linear-gradient(90deg, #fcd34d, #f472b6)',
   },
 };
 
@@ -8010,17 +8015,18 @@ function applyTheme(themeKey) {
   const surface  = theme.surface  || _lighten(theme.bg, 0.06);
   const surface2 = theme.surface2 || _lighten(theme.bg, 0.12);
   const goldLt   = theme.goldLt   || _paler(theme.gold, 0.35);
-  const accentRGB = _hexToRgb(theme.accent);
+  const accentRGB = theme.accentRGB || `${_hexToRgb(theme.accent).r},${_hexToRgb(theme.accent).g},${_hexToRgb(theme.accent).b}`;
 
-  root.style.setProperty('--accent',     theme.accent);
-  root.style.setProperty('--accent-rgb', `${accentRGB.r},${accentRGB.g},${accentRGB.b}`);
-  root.style.setProperty('--accent-dim', _hexToRgba(theme.accent, 0.6));
-  root.style.setProperty('--gold',       theme.gold);
-  root.style.setProperty('--gold-lt',    goldLt);
-  root.style.setProperty('--bg',         theme.bg);
-  root.style.setProperty('--surface',    surface);
-  root.style.setProperty('--surface2',   surface2);
-  root.style.setProperty('--border',     _hexToRgba(theme.accent, 0.25));
+  root.style.setProperty('--accent',      theme.accent);
+  root.style.setProperty('--accent-rgb',  accentRGB);
+  root.style.setProperty('--accent-dim',  _hexToRgba(theme.accent, 0.6));
+  root.style.setProperty('--gold',        theme.gold);
+  root.style.setProperty('--gold-lt',     goldLt);
+  root.style.setProperty('--bg',          theme.bg);
+  root.style.setProperty('--surface',     surface);
+  root.style.setProperty('--surface2',    surface2);
+  root.style.setProperty('--border',      _hexToRgba(theme.accent, 0.25));
+  root.style.setProperty('--hp-gradient', theme.hpGradient || 'linear-gradient(90deg, #ec4899, #9b6dff)');
   // Also update body backgroundColor for the hard-coded base
   document.body.style.backgroundColor = theme.bg;
   try { localStorage.setItem(THEME_STORAGE_KEY, themeKey); } catch (e) {}
@@ -8151,7 +8157,7 @@ function _prefersReducedMotion() {
           ctx.font = Math.round(8 + p.size * 3) + 'px serif';
           ctx.fillText(p.glyph, p.x, p.y);
         } else {
-          ctx.fillStyle = 'rgba(155,109,255,' + (alpha * 0.45).toFixed(3) + ')';
+          ctx.fillStyle = 'rgba(var(--accent-rgb),' + (alpha * 0.45).toFixed(3) + ')';
           ctx.beginPath();
           ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
           ctx.fill();
