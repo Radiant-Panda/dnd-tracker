@@ -144,6 +144,8 @@ main {
   color: var(--gold-lt);
   margin-bottom: 0.3rem;
   font-weight: bold;
+  padding-right: 4.5rem;
+  word-wrap: break-word;
 }
 .card-sub { font-size: 0.82rem; color: var(--text-dim); }
 .card-actions {
@@ -3597,30 +3599,52 @@ input.hp-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0;
     rgba(0,0,0,0.87);
 }
 
-/* 5a. Body watermarks — large floral glyphs at viewport corners */
-body::before,
-body::after {
+/* 5a. Body watermarks — intentional corner anchors */
+body::before {
+  content: '✾';
   position: fixed;
-  font-size: 20rem;
-  opacity: 0.025;
+  bottom: -2rem;
+  left: -2rem;
+  font-size: 16rem;
+  opacity: 0.04;
   color: var(--accent);
   pointer-events: none;
   z-index: -1;
   user-select: none;
-}
-
-body::before {
-  content: '✾';
-  bottom: -80px;
-  left: -80px;
   transform: rotate(-15deg);
+  line-height: 1;
 }
 
 body::after {
-  content: '❧';
-  top: -100px;
-  right: -100px;
-  transform: rotate(25deg);
+  content: '✾';
+  position: fixed;
+  top: -2rem;
+  right: -2rem;
+  font-size: 16rem;
+  opacity: 0.04;
+  color: var(--accent);
+  pointer-events: none;
+  z-index: -1;
+  user-select: none;
+  transform: rotate(15deg);
+  line-height: 1;
+}
+
+/* 5b. Additional positioned floral accents — balanced symmetrical layout */
+#bg-florals {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: -1;
+  user-select: none;
+}
+.bg-floral {
+  position: fixed;
+  pointer-events: none;
+  z-index: -1;
+  user-select: none;
+  color: var(--accent);
+  line-height: 1;
 }
 
 /* 5b. Header — decorative vine-and-ornament divider below border */
