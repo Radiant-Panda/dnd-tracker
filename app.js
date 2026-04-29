@@ -1,5 +1,629 @@
 // ── Data Layer ────────────────────────────────────────────────────────────────
 const STORAGE_KEY = 'dnd_tracker_v1';
+const STORAGE_KEY_BACKUP = 'dnd_tracker_v1_backup';
+
+// Firebase configuration — replace placeholder values with your project's config
+const FIREBASE_CONFIG = {
+  apiKey:            "REPLACE_ME",
+  authDomain:        "REPLACE_ME.firebaseapp.com",
+  projectId:         "REPLACE_ME",
+  storageBucket:     "REPLACE_ME.appspot.com",
+  messagingSenderId: "REPLACE_ME",
+  appId:             "REPLACE_ME"
+};
+
+// ── Firebase / Firestore Internals ───────────────────────────────────────────
+let _fireDb = null;          // Firestore instance (null when unconfigured)
+let _fireStorage = null;     // Firebase Storage instance (null when unconfigured)
+let _fireAuth = null;        // Firebase Auth instance
+let _firestoreReady = false; // true once Firebase is initialised
+let _storageReady = false;   // true once Firebase Storage is initialised
+let _authReady = false;      // true once Firebase Auth is initialised
+let _fsWriteTimer = null;    // debounce handle
+const _FS_DEBOUNCE = 1500;   // ms to wait before writing to Firestore
+let _FS_USER = 'local';      // authenticated user's UID (set on sign-in)
+
+// Snapshot of each doc's JSON — used for change detection
+let _dbSnap = { campaigns: {}, characters: {}, npcs: {} };
+
+// Flag to suppress Firestore re-writes when we're applying a Firestore snapshot
+let _fromFirestore = false;
+
+function _initFirebase() {
+  if (!FIREBASE_CONFIG.apiKey || FIREBASE_CONFIG.apiKey === 'REPLACE_ME') return;
+  if (typeof firebase === 'undefined') { console.warn('[Firebase] SDK not loaded'); return; }
+  try {
+    // Only init once
+    if (!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG);
+    _fireDb = firebase.firestore();
+    _firestoreReady = true;
+    if (firebase.storage) {
+      _fireStorage = firebase.storage();
+      _storageReady = true;
+    }
+    if (firebase.auth) {
+      _fireAuth = firebase.auth();
+      _authReady = true;
+    }
+    console.log('[Firebase] Initialized — Firestore' +
+      (_storageReady ? ' + Storage' : '') +
+      (_authReady ? ' + Auth' : '') + ' ready');
+  } catch (e) { console.warn('[Firebase] Init failed:', e); }
+}
+
+// ── Authentication ──────────────────────────────────────────────────────────
+
+function _showAuthGate() {
+  document.getElementById('auth-gate').style.display = '';
+  document.getElementById('app-header').style.display = 'none';
+  document.getElementById('app').style.display = 'none';
+}
+
+function _showApp() {
+  document.getElementById('auth-gate').style.display = 'none';
+  document.getElementById('app-header').style.display = '';
+  document.getElementById('app').style.display = '';
+}
+
+async function signInWithGoogle() {
+  if (!_authReady) {
+    // Firebase not configured — run in local-only mode
+    _FS_USER = 'local';
+    _showApp();
+    renderBreadcrumb();
+    renderApp();
+    initData();
+    return;
+  }
+  try {
+    const provider = new firebase.auth.GoogleAuthProvider();
+    await _fireAuth.signInWithPopup(provider);
+    // onAuthStateChanged will handle the rest
+  } catch (e) {
+    console.warn('[Auth] Sign-in failed:', e.message);
+    if (typeof showToast === 'function') {
+      showToast('<span style="color:#ef4444">Sign-in failed:</span> ' + e.message, 5000);
+    }
+  }
+}
+
+function signOut() {
+  if (_authReady && _fireAuth) {
+    _fireAuth.signOut();
+  }
+  // Tear down Firestore listeners
+  _snapshotUnsubs.forEach(fn => fn());
+  _snapshotUnsubs = [];
+  // Clear local state
+  _FS_USER = 'local';
+  db = { campaigns: [], characters: {}, npcs: {} };
+  currentView = 'campaigns';
+  currentCampaignId = null;
+  currentCharId = null;
+  currentNpcId = null;
+  _takeSnapshot(db);
+  _showAuthGate();
+}
+
+async function _onAuthStateChanged(user) {
+  if (!user) {
+    _showAuthGate();
+    return;
+  }
+
+  // Set user ID for all Firestore/Storage paths
+  _FS_USER = user.uid;
+  console.log('[Auth] Signed in as', user.displayName, '(' + user.uid + ')');
+
+  // Show the app
+  _showApp();
+
+  // Load data from localStorage first (instant render)
+  db = loadData();
+  renderBreadcrumb();
+  renderApp();
+
+  // Check for local data that should be migrated to this user's Firestore
+  const hasLocalData = db.campaigns.length > 0 || Object.keys(db.characters).length > 0;
+
+  // Try loading from Firestore for this user
+  await _initDataForUser(hasLocalData);
+}
+
+async function _initDataForUser(hasLocalData) {
+  if (!_firestoreReady) {
+    _takeSnapshot(db);
+    return;
+  }
+  const base = `users/${_FS_USER}`;
+  try {
+    const [campSnap, charSnap, npcSnap] = await Promise.all([
+      _fireDb.collection(`${base}/campaigns`).get(),
+      _fireDb.collection(`${base}/characters`).get(),
+      _fireDb.collection(`${base}/npcs`).get(),
+    ]);
+
+    const hasRemoteData = !campSnap.empty || !charSnap.empty || !npcSnap.empty;
+
+    if (hasRemoteData) {
+      // Load from Firestore
+      const remoteCampaigns = [];
+      campSnap.forEach(doc => {
+        const c = doc.data();
+        if (!c.npcs) c.npcs = [];
+        if (!c.initiative) c.initiative = null;
+        if (!c.campaignTab) c.campaignTab = 'characters';
+        if (c.activeCharId === undefined) c.activeCharId = (c.characters || [])[0] || null;
+        if (!c.journal) c.journal = [];
+        remoteCampaigns.push(c);
+      });
+      const remoteChars = {};
+      charSnap.forEach(doc => {
+        const ch = doc.data();
+        migrateCharacter(ch);
+        remoteChars[ch.id || doc.id] = ch;
+      });
+      const remoteNpcs = {};
+      npcSnap.forEach(doc => {
+        const npc = doc.data();
+        remoteNpcs[npc.id || doc.id] = npc;
+      });
+
+      db.campaigns  = remoteCampaigns;
+      db.characters = remoteChars;
+      db.npcs       = remoteNpcs;
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(db)); } catch (_) {}
+      console.log('[Firestore] Loaded data from cloud');
+      renderApp();
+
+      // If there was also local data that's different, offer to merge
+      if (hasLocalData) {
+        const localRaw = localStorage.getItem(STORAGE_KEY_BACKUP);
+        if (localRaw) {
+          try {
+            const local = JSON.parse(localRaw);
+            const localHasContent = (local.campaigns || []).length > 0 || Object.keys(local.characters || {}).length > 0;
+            if (localHasContent) {
+              showToast('Cloud data loaded. Local backup available via Export if needed.', 4000);
+            }
+          } catch (_) {}
+        }
+      }
+    } else if (hasLocalData) {
+      // No remote data — offer to migrate local data up
+      console.log('[Firestore] No cloud data — offering local data migration');
+      showToast(
+        '<span style="cursor:pointer" onclick="_migrateLocalToCloud()">Local data found — <b>click here</b> to sync it to the cloud.</span>',
+        10000
+      );
+    }
+
+    _takeSnapshot(db);
+    _setupFirestoreListeners();
+  } catch (e) {
+    console.warn('[Firestore] Initial load failed — using localStorage:', e.message);
+    _takeSnapshot(db);
+  }
+}
+
+async function _migrateLocalToCloud() {
+  if (!_firestoreReady) return;
+  _takeSnapshot({ campaigns: [], characters: {}, npcs: {} });
+  await _writeChangesToFirestore(db);
+  showToast('<span style="color:#22c55e">&#10003; Data synced to cloud!</span>', 3000);
+}
+
+// ── Firebase Storage — Portrait Helpers ──────────────────────────────────────
+
+// Upload a base64 data URL to Firebase Storage, return the download URL
+async function _uploadPortraitToStorage(charId, dataUrl) {
+  if (!_storageReady) throw new Error('Storage not ready');
+  const path = `portraits/${_FS_USER}/${charId}.jpg`;
+  const ref = _fireStorage.ref(path);
+  // Convert data URL to Blob for upload
+  const resp = await fetch(dataUrl);
+  const blob = await resp.blob();
+  await ref.put(blob, { contentType: 'image/jpeg' });
+  return await ref.getDownloadURL();
+}
+
+// Delete a portrait from Firebase Storage
+async function _deletePortraitFromStorage(charId) {
+  if (!_storageReady) return;
+  const path = `portraits/${_FS_USER}/${charId}.jpg`;
+  try {
+    await _fireStorage.ref(path).delete();
+    console.log(`[Storage] Deleted portrait for ${charId}`);
+  } catch (e) {
+    // Ignore "not found" errors — portrait may not exist in Storage
+    if (e.code !== 'storage/object-not-found') {
+      console.warn('[Storage] Delete failed:', e.message);
+    }
+  }
+}
+
+// Check if a portrait URL is a Firebase Storage URL
+function _isStorageUrl(url) {
+  return typeof url === 'string' && url.includes('firebasestorage.googleapis.com');
+}
+
+// Check if a portrait is a base64 data URL
+function _isBase64Portrait(url) {
+  return typeof url === 'string' && url.startsWith('data:image');
+}
+
+// Save portrait — upload to Storage if available, fall back to base64 locally
+async function _savePortraitWithUpload(charId, dataUrl) {
+  const ch = db.characters[charId]; if (!ch) return;
+
+  // Show loading spinner on portrait card
+  const portraitFrame = document.querySelector('.portrait-frame');
+  if (portraitFrame) {
+    portraitFrame.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;width:100%;height:100%;color:var(--muted)">
+      <div class="portrait-uploading"><span class="portrait-spinner"></span> Uploading...</div>
+    </div>`;
+  }
+
+  if (_storageReady) {
+    try {
+      const downloadUrl = await _uploadPortraitToStorage(charId, dataUrl);
+      ch.portrait = downloadUrl;
+      console.log(`[Storage] Portrait uploaded for ${charId}`);
+      saveData(db);
+      renderApp();
+      return;
+    } catch (e) {
+      console.warn('[Storage] Upload failed, saving base64 locally:', e.message);
+    }
+  }
+
+  // Fallback: save base64 directly (offline or Storage unavailable)
+  ch.portrait = dataUrl;
+  saveData(db);
+  renderApp();
+}
+
+// Migrate a base64 portrait to Storage (called during migrateCharacter)
+function _queuePortraitMigration(charId) {
+  // Defer so it doesn't block character loading
+  setTimeout(async () => {
+    const ch = db.characters[charId];
+    if (!ch || !_isBase64Portrait(ch.portrait) || !_storageReady) return;
+    try {
+      const downloadUrl = await _uploadPortraitToStorage(charId, ch.portrait);
+      ch.portrait = downloadUrl;
+      saveData(db);
+      renderApp();
+      console.log(`[Storage] Migrated base64 portrait for ${charId}`);
+    } catch (e) {
+      console.warn(`[Storage] Portrait migration failed for ${charId}:`, e.message);
+    }
+  }, 2000);
+}
+
+// Take a snapshot of the current db state for change detection
+function _takeSnapshot(data) {
+  _dbSnap = { campaigns: {}, characters: {}, npcs: {} };
+  (data.campaigns || []).forEach(c => { _dbSnap.campaigns[c.id] = JSON.stringify(c); });
+  Object.entries(data.characters || {}).forEach(([id, ch]) => { _dbSnap.characters[id] = JSON.stringify(ch); });
+  Object.entries(data.npcs || {}).forEach(([id, npc]) => { _dbSnap.npcs[id] = JSON.stringify(npc); });
+}
+
+// Debounced Firestore write — called by saveData()
+function _debouncedFirestoreWrite(data) {
+  if (!_firestoreReady || _fromFirestore) return;
+  clearTimeout(_fsWriteTimer);
+  _fsWriteTimer = setTimeout(() => _writeChangesToFirestore(data), _FS_DEBOUNCE);
+}
+
+async function _writeChangesToFirestore(data) {
+  if (!_firestoreReady) return;
+  const base = `users/${_FS_USER}`;
+  const batch = _fireDb.batch();
+  let changeCount = 0;
+
+  // ── Campaigns ──
+  const curCampaigns = {};
+  (data.campaigns || []).forEach(c => {
+    const json = JSON.stringify(c);
+    curCampaigns[c.id] = json;
+    if (_dbSnap.campaigns[c.id] !== json) {
+      batch.set(_fireDb.doc(`${base}/campaigns/${c.id}`), JSON.parse(json));
+      changeCount++;
+    }
+  });
+  // Detect deleted campaigns
+  Object.keys(_dbSnap.campaigns).forEach(id => {
+    if (!curCampaigns[id]) { batch.delete(_fireDb.doc(`${base}/campaigns/${id}`)); changeCount++; }
+  });
+
+  // ── Characters ──
+  const curChars = {};
+  Object.entries(data.characters || {}).forEach(([id, ch]) => {
+    const json = JSON.stringify(ch);
+    curChars[id] = json;
+    if (_dbSnap.characters[id] !== json) {
+      batch.set(_fireDb.doc(`${base}/characters/${id}`), JSON.parse(json));
+      changeCount++;
+    }
+  });
+  Object.keys(_dbSnap.characters).forEach(id => {
+    if (!curChars[id]) { batch.delete(_fireDb.doc(`${base}/characters/${id}`)); changeCount++; }
+  });
+
+  // ── NPCs ──
+  const curNpcs = {};
+  Object.entries(data.npcs || {}).forEach(([id, npc]) => {
+    const json = JSON.stringify(npc);
+    curNpcs[id] = json;
+    if (_dbSnap.npcs[id] !== json) {
+      batch.set(_fireDb.doc(`${base}/npcs/${id}`), JSON.parse(json));
+      changeCount++;
+    }
+  });
+  Object.keys(_dbSnap.npcs).forEach(id => {
+    if (!curNpcs[id]) { batch.delete(_fireDb.doc(`${base}/npcs/${id}`)); changeCount++; }
+  });
+
+  if (changeCount === 0) return;
+  try {
+    await batch.commit();
+    _takeSnapshot(data);
+    console.log(`[Firestore] Wrote ${changeCount} doc(s)`);
+  } catch (e) {
+    console.warn('[Firestore] Write failed — data safe in localStorage:', e.message);
+  }
+}
+
+// ── Firestore → local real-time listeners ────────────────────────────────────
+let _snapshotUnsubs = [];
+
+function _setupFirestoreListeners() {
+  if (!_firestoreReady) return;
+  // Tear down any existing listeners
+  _snapshotUnsubs.forEach(fn => fn());
+  _snapshotUnsubs = [];
+  const base = `users/${_FS_USER}`;
+
+  // Campaigns listener
+  _snapshotUnsubs.push(
+    _fireDb.collection(`${base}/campaigns`).onSnapshot(snap => {
+      if (snap.metadata.hasPendingWrites) return; // ignore local echoes
+      _fromFirestore = true;
+      const remoteCampaigns = {};
+      snap.forEach(doc => { remoteCampaigns[doc.id] = doc.data(); });
+      // Merge: keep remote as source of truth for existing docs, preserve local-only additions
+      const remoteIds = new Set(Object.keys(remoteCampaigns));
+      const merged = [];
+      // Add all remote campaigns (update or new)
+      Object.values(remoteCampaigns).forEach(c => {
+        // Ensure campaign migrations
+        if (!c.npcs) c.npcs = [];
+        if (!c.initiative) c.initiative = null;
+        if (!c.campaignTab) c.campaignTab = 'characters';
+        if (c.activeCharId === undefined) c.activeCharId = (c.characters || [])[0] || null;
+        if (!c.journal) c.journal = [];
+        merged.push(c);
+      });
+      db.campaigns = merged;
+      _takeSnapshot(db);
+      saveData(db); // localStorage only (re-write suppressed by _fromFirestore flag)
+      _fromFirestore = false;
+      renderApp();
+    }, err => console.warn('[Firestore] Campaigns listener error:', err))
+  );
+
+  // Characters listener
+  _snapshotUnsubs.push(
+    _fireDb.collection(`${base}/characters`).onSnapshot(snap => {
+      if (snap.metadata.hasPendingWrites) return;
+      _fromFirestore = true;
+      snap.docChanges().forEach(change => {
+        if (change.type === 'removed') {
+          delete db.characters[change.doc.id];
+        } else {
+          const ch = change.doc.data();
+          migrateCharacter(ch);
+          db.characters[ch.id || change.doc.id] = ch;
+        }
+      });
+      _takeSnapshot(db);
+      saveData(db);
+      _fromFirestore = false;
+      renderApp();
+    }, err => console.warn('[Firestore] Characters listener error:', err))
+  );
+
+  // NPCs listener
+  _snapshotUnsubs.push(
+    _fireDb.collection(`${base}/npcs`).onSnapshot(snap => {
+      if (snap.metadata.hasPendingWrites) return;
+      _fromFirestore = true;
+      snap.docChanges().forEach(change => {
+        if (change.type === 'removed') {
+          delete db.npcs[change.doc.id];
+        } else {
+          const npc = change.doc.data();
+          db.npcs[npc.id || change.doc.id] = npc;
+        }
+      });
+      _takeSnapshot(db);
+      saveData(db);
+      _fromFirestore = false;
+      renderApp();
+    }, err => console.warn('[Firestore] NPCs listener error:', err))
+  );
+}
+
+// ── Async init — sets up Firebase and auth listener ─────────────────────────
+function initData() {
+  _initFirebase();
+  if (!_authReady) {
+    // No auth available — run in local-only mode, show app immediately
+    _FS_USER = 'local';
+    _showApp();
+    _takeSnapshot(db);
+    renderBreadcrumb();
+    renderApp();
+    return;
+  }
+  // Auth available — listen for auth state changes
+  _fireAuth.onAuthStateChanged(_onAuthStateChanged);
+}
+
+// ── Player View Bootstrap ────────────────────────────────────────────────────
+async function _initPlayerView() {
+  _initFirebase();
+  if (!_firestoreReady) {
+    _pvShowError('Player view requires an active connection. Please try again later.');
+    return;
+  }
+  // Player view doesn't need auth — reads are public per Firestore rules
+  _showApp();
+  document.getElementById('app').innerHTML = '<div style="text-align:center;padding:4rem 1rem;color:var(--muted)"><span class="portrait-spinner" style="display:inline-block;width:32px;height:32px;border-width:3px"></span><p style="margin-top:1rem">Loading character...</p></div>';
+
+  try {
+    // We need the GM's uid to build the Firestore path
+    // The share URL includes ?gm={gmUid}
+    if (!_pvGmUid) {
+      _pvShowError('Invalid share link — missing GM identifier.');
+      return;
+    }
+    const base = `users/${_pvGmUid}`;
+
+    // Load campaign and character docs
+    const [campDoc, charDoc] = await Promise.all([
+      _fireDb.doc(`${base}/campaigns/${_PV_CAMPAIGN}`).get(),
+      _fireDb.doc(`${base}/characters/${_PV_PLAYER}`).get(),
+    ]);
+
+    if (!campDoc.exists || !charDoc.exists) {
+      _pvShowError('Campaign or character not found.');
+      return;
+    }
+
+    const ch = charDoc.data();
+    if (!ch.shareToken || ch.shareToken !== _PV_TOKEN) {
+      _pvShowError('Invalid or expired link.');
+      return;
+    }
+
+    // Set up app state
+    const camp = campDoc.data();
+    if (!camp.npcs) camp.npcs = [];
+    if (!camp.initiative) camp.initiative = null;
+    if (!camp.campaignTab) camp.campaignTab = 'characters';
+    if (!camp.journal) camp.journal = [];
+    migrateCharacter(ch);
+
+    db.campaigns = [camp];
+    db.characters = { [ch.id]: ch };
+    db.npcs = {};
+
+    currentCampaignId = camp.id || _PV_CAMPAIGN;
+    currentCharId = ch.id || _PV_PLAYER;
+    currentView = 'character';
+
+    // Update header for player view
+    _pvUpdateHeader(ch.name);
+
+    renderBreadcrumb();
+    renderApp();
+
+    // Set up real-time listeners
+    _pvListeners.push(
+      _fireDb.doc(`${base}/campaigns/${_PV_CAMPAIGN}`).onSnapshot(snap => {
+        if (!snap.exists) return;
+        const updated = snap.data();
+        if (!updated.npcs) updated.npcs = [];
+        if (!updated.initiative) updated.initiative = null;
+        if (!updated.campaignTab) updated.campaignTab = 'characters';
+        if (!updated.journal) updated.journal = [];
+        db.campaigns = [updated];
+        // Re-render if viewing the campaign/initiative
+        if (currentView === 'campaign') renderApp();
+      }, err => console.warn('[PlayerView] Campaign listener error:', err))
+    );
+
+    _pvListeners.push(
+      _fireDb.doc(`${base}/characters/${_PV_PLAYER}`).onSnapshot(snap => {
+        if (!snap.exists || snap.metadata.hasPendingWrites) return;
+        const updated = snap.data();
+        migrateCharacter(updated);
+        db.characters[updated.id || _PV_PLAYER] = updated;
+        if (currentView === 'character') renderApp();
+      }, err => console.warn('[PlayerView] Character listener error:', err))
+    );
+
+    console.log('[PlayerView] Loaded — player:', ch.name);
+  } catch (e) {
+    console.error('[PlayerView] Init failed:', e);
+    _pvShowError('Failed to load character. Check your connection and try again.');
+  }
+}
+
+function _pvShowError(msg) {
+  _showApp();
+  document.getElementById('app').innerHTML = `
+    <div style="text-align:center;padding:4rem 1rem">
+      <div style="font-size:2.5rem;margin-bottom:1rem">⚠</div>
+      <h2 style="color:var(--gold-lt);margin-bottom:0.5rem">Player View</h2>
+      <p style="color:var(--muted);max-width:400px;margin:0 auto">${esc(msg)}</p>
+    </div>`;
+}
+
+function _pvUpdateHeader(charName) {
+  const actions = document.querySelector('.header-actions');
+  if (actions) {
+    actions.innerHTML = `<span style="color:var(--muted);font-size:0.8rem;white-space:nowrap">Player View — <strong style="color:var(--gold-lt)">${esc(charName)}</strong></span>`;
+  }
+}
+
+// Player view saves — write directly to GM's Firestore (no debounce for HP)
+function _pvSaveCharacter() {
+  if (!IS_PLAYER_VIEW || !_firestoreReady || !_pvGmUid) return;
+  const ch = db.characters[_PV_PLAYER];
+  if (!ch) return;
+  const base = `users/${_pvGmUid}`;
+  _fireDb.doc(`${base}/characters/${_PV_PLAYER}`).set(ch).catch(e => {
+    console.warn('[PlayerView] Save failed:', e.message);
+  });
+}
+
+// ── GM: Share Link Generation ────────────────────────────────────────────────
+function openShareModal(charId) {
+  const ch = db.characters[charId]; if (!ch) return;
+  // Generate a share token if one doesn't exist
+  if (!ch.shareToken) {
+    ch.shareToken = uid();
+    saveData(db);
+  }
+  const base = window.location.origin + window.location.pathname;
+  const url = `${base}?campaign=${encodeURIComponent(currentCampaignId)}&player=${encodeURIComponent(charId)}&token=${encodeURIComponent(ch.shareToken)}&gm=${encodeURIComponent(_FS_USER)}`;
+  openModal(`<div style="text-align:center">
+    <h3 style="margin:0 0 0.75rem;color:var(--gold)">Share Character</h3>
+    <p style="color:var(--muted);font-size:0.85rem;margin:0 0 1rem">Share this link with your player. They'll see their character sheet and the combat tracker.</p>
+    <input type="text" id="share-url-input" value="${esc(url)}" readonly
+      style="width:100%;padding:0.5rem;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;font-size:0.78rem;margin-bottom:0.75rem"
+      onclick="this.select()">
+    <div class="form-actions" style="justify-content:center">
+      <button class="btn" onclick="closeModal()">Close</button>
+      <button class="btn btn-primary" onclick="_copyShareUrl()">Copy Link</button>
+    </div>
+  </div>`);
+}
+
+function _copyShareUrl() {
+  const input = document.getElementById('share-url-input');
+  if (!input) return;
+  input.select();
+  navigator.clipboard.writeText(input.value).then(() => {
+    showToast('<span style="color:#22c55e">&#10003; Link copied!</span>', 2000);
+  }).catch(() => {
+    document.execCommand('copy');
+    showToast('<span style="color:#22c55e">&#10003; Link copied!</span>', 2000);
+  });
+}
 
 function migrateCharacter(ch) {
   if (ch.inspiration === undefined) ch.inspiration = false;
@@ -73,12 +697,16 @@ function migrateCharacter(ch) {
   }
   // Inject base class resources inline (deduplicates by name)
   _injectBaseClassResourcesForCh(ch);
+  // Queue base64 portrait migration to Firebase Storage (async, non-blocking)
+  if (ch.id && _isBase64Portrait(ch.portrait)) {
+    _queuePortraitMigration(ch.id);
+  }
   return ch;
 }
 
 function loadData() {
   try {
-    const raw = JSON.parse(localStorage.getItem(STORAGE_KEY));
+    const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) || localStorage.getItem(STORAGE_KEY_BACKUP));
     if (!raw) return { campaigns: [], characters: {}, npcs: {} };
     if (!raw.npcs) raw.npcs = {};
     raw.campaigns.forEach(c => {
@@ -94,18 +722,38 @@ function loadData() {
 }
 
 function saveData(data) {
+  // ① Synchronous localStorage write — always immediate
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    const json = JSON.stringify(data);
+    localStorage.setItem(STORAGE_KEY, json);
+    // Also write to backup key for export/import resilience
+    try { localStorage.setItem(STORAGE_KEY_BACKUP, json); } catch (_) {}
   } catch (e) {
     if (e instanceof DOMException && (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED')) {
       showToast('<span style="color:#ef4444;font-weight:700">⚠ Storage nearly full</span> — remove a portrait or export your data to free space.', 7000);
     }
   }
+  // ② Player view: write character back to GM's Firestore immediately
+  if (IS_PLAYER_VIEW) {
+    _pvSaveCharacter();
+    return; // don't run GM's debounced Firestore write
+  }
+  // ③ Debounced Firestore write — async layer on top (GM only)
+  _debouncedFirestoreWrite(data);
 }
 
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 }
+
+// ── Player View Detection ────────────────────────────────────────────────────
+const _urlParams = new URLSearchParams(window.location.search);
+const _PV_CAMPAIGN = _urlParams.get('campaign');
+const _PV_PLAYER   = _urlParams.get('player');
+const _PV_TOKEN    = _urlParams.get('token');
+let IS_PLAYER_VIEW = !!((_PV_CAMPAIGN && _PV_PLAYER && _PV_TOKEN));
+let _pvGmUid       = _urlParams.get('gm') || null; // GM's uid for Firestore paths
+let _pvListeners   = []; // player-view onSnapshot unsubscribe handles
 
 // ── State ──────────────────────────────────────────────────────────────────────
 let db = loadData();
@@ -121,6 +769,7 @@ let wizardData = {};
 
 // ── Routing & Breadcrumb ───────────────────────────────────────────────────────
 function showCampaigns() {
+  if (IS_PLAYER_VIEW) return; // players can't navigate away
   currentView = 'campaigns'; currentCampaignId = null; currentCharId = null; currentNpcId = null;
   renderBreadcrumb(); renderApp();
 }
@@ -241,19 +890,19 @@ function renderCampaignDetail() {
     <div class="section-header">
       <h2>${esc(campaign.name)}</h2>
       <div class="flex gap-1 flex-wrap">
-        ${tab==='characters'?`<button class="btn btn-primary" onclick="openNewCharModal()">+ Add Character</button>`:''}
-        ${tab==='npcs'?`<button class="btn btn-primary" onclick="openNewNpcModal()">+ Add NPC</button>`:''}
-        ${tab==='initiative'?`<button class="btn btn-primary" onclick="openAddCombatantModal()">+ Add Combatant</button><button class="btn btn-sm" onclick="nextTurn()">Next Turn &#8594;</button><button class="btn btn-sm btn-danger" onclick="clearInitiative()">End Combat</button>`:''}
-        ${tab==='journal'?`<button class="btn btn-primary" onclick="addJournalEntry()">+ New Entry</button>`:''}
-        <button class="btn btn-sm" onclick="openMagicItemRandomizer()">🎲 Magic Items</button>
+        ${!IS_PLAYER_VIEW && tab==='characters'?`<button class="btn btn-primary" onclick="openNewCharModal()">+ Add Character</button>`:''}
+        ${!IS_PLAYER_VIEW && tab==='npcs'?`<button class="btn btn-primary" onclick="openNewNpcModal()">+ Add NPC</button>`:''}
+        ${!IS_PLAYER_VIEW && tab==='initiative'?`<button class="btn btn-primary" onclick="openAddCombatantModal()">+ Add Combatant</button><button class="btn btn-sm" onclick="nextTurn()">Next Turn &#8594;</button><button class="btn btn-sm btn-danger" onclick="clearInitiative()">End Combat</button>`:''}
+        ${!IS_PLAYER_VIEW && tab==='journal'?`<button class="btn btn-primary" onclick="addJournalEntry()">+ New Entry</button>`:''}
+        ${!IS_PLAYER_VIEW ? `<button class="btn btn-sm" onclick="openMagicItemRandomizer()">🎲 Magic Items</button>` : ''}
       </div>
     </div>
     ${campaign.description?`<p class="text-dim" style="margin-bottom:1rem">${esc(campaign.description)}</p>`:''}
     <div class="tabs">
       <div class="tab ${tab==='characters'?'active':''}" onclick="showCampaign('${campaign.id}','characters')">Characters</div>
-      <div class="tab ${tab==='npcs'?'active':''}" onclick="showCampaign('${campaign.id}','npcs')">NPCs</div>
-      <div class="tab ${tab==='initiative'?'active':''}" onclick="showCampaign('${campaign.id}','initiative')">&#9876; Initiative</div>
-      <div class="tab ${tab==='journal'?'active':''}" onclick="showCampaign('${campaign.id}','journal')">📖 Journal ${(campaign.journal||[]).length>0?`<span class="spell-count">${(campaign.journal||[]).length}</span>`:''}</div>
+      ${!IS_PLAYER_VIEW ? `<div class="tab ${tab==='npcs'?'active':''}" onclick="showCampaign('${campaign.id}','npcs')">NPCs</div>` : ''}
+      <div class="tab ${tab==='initiative'?'active':''}" onclick="showCampaign('${campaign.id}','initiative')">&#9876; Combat</div>
+      ${!IS_PLAYER_VIEW ? `<div class="tab ${tab==='journal'?'active':''}" onclick="showCampaign('${campaign.id}','journal')">📖 Journal ${(campaign.journal||[]).length>0?`<span class="spell-count">${(campaign.journal||[]).length}</span>`:''}</div>` : ''}
     </div>
     ${tab==='characters' ? renderCharacterCards(campaign) : ''}
     ${tab==='npcs'       ? renderNpcCards(campaign) : ''}
@@ -274,7 +923,8 @@ function renderCharacterCards(campaign) {
       <div class="hp-bar-wrap"><div class="hp-bar ${pct<=25?'low':pct<=50?'mid':''}" style="width:${pct}%"></div></div>
       <div class="card-actions" onclick="event.stopPropagation()">
         <button class="btn btn-sm" onclick="showCharacter('${ch.id}')">Open</button>
-        <button class="btn btn-sm btn-danger" onclick="deleteCharacter('${ch.id}')">Delete</button>
+        ${!IS_PLAYER_VIEW ? `<button class="btn btn-sm" onclick="openShareModal('${ch.id}')" title="Share with player">Share</button>` : ''}
+        ${!IS_PLAYER_VIEW ? `<button class="btn btn-sm btn-danger" onclick="deleteCharacter('${ch.id}')">Delete</button>` : ''}
       </div>
     </div>`;
   }).join('')}</div>`;
@@ -294,6 +944,9 @@ function createCharacter() {
 }
 function deleteCharacter(id) {
   showConfirm('Delete this character?', () => {
+    const ch = db.characters[id];
+    // Delete portrait from Firebase Storage if applicable
+    if (ch && _isStorageUrl(ch.portrait)) _deletePortraitFromStorage(id);
     delete db.characters[id];
     const c = db.campaigns.find(c => c.id === currentCampaignId);
     if (c) {
@@ -665,8 +1318,9 @@ function _renderCombatLogEntries(init) {
 function renderInitiativeTracker(campaign) {
   const init = campaign.initiative || {round:1,currentIndex:0,combatants:[]};
   const combatants = init.combatants || [];
-  if (combatants.length === 0) return `
-    <div class="empty"><div class="empty-icon">&#9876;</div><p>No combatants yet.</p>
+  if (combatants.length === 0) return IS_PLAYER_VIEW
+    ? `<div class="empty"><div class="empty-icon">&#9876;</div><p>No active combat.</p></div>`
+    : `<div class="empty"><div class="empty-icon">&#9876;</div><p>No combatants yet.</p>
       <div style="margin-top:1rem;display:flex;gap:0.5rem;justify-content:center;flex-wrap:wrap">
         <button class="btn btn-primary" onclick="openAddCombatantModal()">+ Add Combatant</button>
         <button class="btn" onclick="openMonsterSearchModal()">&#128269; Monster Search</button>
@@ -676,20 +1330,20 @@ function renderInitiativeTracker(campaign) {
   return `
     <div class="initiative-header">
       <span class="round-badge">Round ${init.round}</span>
-      <div class="flex gap-1">
+      ${!IS_PLAYER_VIEW ? `<div class="flex gap-1">
         <button class="btn btn-sm" onclick="openMonsterSearchModal()">&#128269; Monster Search</button>
         <button class="btn btn-sm" onclick="openAoeDamageModal()">&#128165; AoE Damage</button>
         <button class="btn btn-sm" onclick="addAllPcsToInitiative()">Add All PCs</button>
         <button class="btn btn-sm" onclick="sortInitiative()">Sort &#8595;</button>
         <button class="btn btn-sm${_combatLogOpen?' btn-primary':''}" onclick="toggleCombatLog()">📜 Log${(init.log||[]).length>0?` (${init.log.length})`:''}</button>
-      </div>
+      </div>` : ''}
     </div>
     <div class="initiative-list">
       ${combatants.map((cb,i) => {
         const isActive = i===(init.currentIndex%combatants.length);
         const hpPct = cb.maxHP>0?Math.round((cb.hp/cb.maxHP)*100):100;
         return `<div class="initiative-row ${isActive?'active':''}">
-          <div class="init-order"><input type="number" class="init-order-input" value="${cb.initiative}" min="1" max="30" title="Click to edit initiative" oninput="updateCombatantInitiative(${i},+this.value)"><button class="btn-reroll-init" onclick="rerollCombatantInitiative(${i})" title="Re-roll initiative">🎲</button></div>
+          <div class="init-order">${IS_PLAYER_VIEW ? `<span class="init-order-input" style="text-align:center">${cb.initiative}</span>` : `<input type="number" class="init-order-input" value="${cb.initiative}" min="1" max="30" title="Click to edit initiative" oninput="updateCombatantInitiative(${i},+this.value)"><button class="btn-reroll-init" onclick="rerollCombatantInitiative(${i})" title="Re-roll initiative">🎲</button>`}</div>
           <div class="init-body">
             <div class="init-top">
               <span class="init-name">${esc(cb.name)}</span>
@@ -699,8 +1353,10 @@ function renderInitiativeTracker(campaign) {
             </div>
             <div class="init-stats">
               <span>AC <strong>${cb.ac}</strong></span>
-              <span>HP <input type="number" class="hp-input" value="${cb.hp}" min="0" max="${cb.maxHP}" oninput="updateCombatantHP(${i},+this.value)"> / ${cb.maxHP}${cb.tempHP > 0 ? ` (<span class="temp-hp-display">+${cb.tempHP} temp</span>)` : ''}<button class="btn btn-sm" style="padding:0.2rem 0.35rem; font-size:0.75rem; margin-left:0.3rem;" onclick="openTempHPInput(${i})" title="Add temp HP">+T</button></span>
-              <span><button class="btn btn-sm" onclick="toggleCombatantHP(${i})" title="Apply damage or healing">HP</button></span>
+              ${IS_PLAYER_VIEW
+                ? `<span>HP <strong>${cb.hp}</strong> / ${cb.maxHP}${cb.tempHP > 0 ? ` (<span class="temp-hp-display">+${cb.tempHP} temp</span>)` : ''}</span>`
+                : `<span>HP <input type="number" class="hp-input" value="${cb.hp}" min="0" max="${cb.maxHP}" oninput="updateCombatantHP(${i},+this.value)"> / ${cb.maxHP}${cb.tempHP > 0 ? ` (<span class="temp-hp-display">+${cb.tempHP} temp</span>)` : ''}<button class="btn btn-sm" style="padding:0.2rem 0.35rem; font-size:0.75rem; margin-left:0.3rem;" onclick="openTempHPInput(${i})" title="Add temp HP">+T</button></span>
+              <span><button class="btn btn-sm" onclick="toggleCombatantHP(${i})" title="Apply damage or healing">HP</button></span>`}
             </div>
             <div class="hp-bar-wrap" style="position:relative; overflow:hidden;"><div class="hp-bar ${hpPct<=25?'low':hpPct<=50?'mid':''}" style="width:${hpPct}%; position:relative; z-index:2;"></div>${cb.tempHP > 0 ? '<div class="hp-bar-temp" style="width:'+Math.min(100, Math.round(((cb.hp + cb.tempHP) / cb.maxHP) * 100))+'%; position:absolute; top:0; left:0; z-index:1;"></div>' : ''}</div>
             ${cb._hpOpen ? `<div class="cb-hp-popover" tabindex="-1" onfocusout="if(!this.contains(event.relatedTarget))closeCombatantHP(${i})">
@@ -732,10 +1388,10 @@ function renderInitiativeTracker(campaign) {
             ${cb.statBlock?`<button class="btn btn-sm stat-block-toggle" onclick="toggleStatBlock(${i})">&#128214; Stat Block</button>
             <div class="stat-block-panel" id="stat-block-${i}">${renderCombatantStatBlock(cb.statBlock, i)}</div>`:''}
           </div>
-          <div class="combatant-actions">
+          ${!IS_PLAYER_VIEW ? `<div class="combatant-actions">
             <button class="btn btn-icon note-btn ${cb.notes ? 'has-notes' : ''}" onclick="toggleCombatantNotes(${i})" title="Notes">${cb.notes ? '●' : ''}📝</button>
             <button class="btn btn-icon btn-danger" onclick="removeCombatant(${i})">&times;</button>
-          </div>
+          </div>` : ''}
         </div>`;
       }).join('')}
     </div>
@@ -749,11 +1405,11 @@ function renderInitiativeTracker(campaign) {
       </div>
       <div id="combat-log-entries" style="max-height:200px;overflow-y:auto">${_renderCombatLogEntries(init)}</div>
     </div>` : ''}
-    <div style="margin-top:1rem;display:flex;gap:0.5rem;flex-wrap:wrap">
+    ${!IS_PLAYER_VIEW ? `<div style="margin-top:1rem;display:flex;gap:0.5rem;flex-wrap:wrap">
       <button class="btn btn-primary" onclick="nextTurn()">Next Turn &#8594;</button>
       <button class="btn btn-sm" onclick="openAddCombatantModal()">+ Add Combatant</button>
       <button class="btn btn-sm btn-danger" onclick="clearInitiative()">End Combat</button>
-    </div>`;
+    </div>` : ''}`;
 }
 
 function openAddCombatantModal() {
@@ -2007,9 +2663,9 @@ function openPortraitCropModal(imageSrc) {
     const sw = CROP / s.zoom, sh = CROP / s.zoom;
     ctx.drawImage(s.img, sx, sy, sw, sh, 0, 0, OUT, OUT);
     const dataUrl = out.toDataURL('image/jpeg', 0.85);
-    ch_field('portrait', dataUrl);
     closeModal();
-    renderApp();
+    // Upload to Firebase Storage (async), fall back to base64
+    _savePortraitWithUpload(currentCharId, dataUrl);
   };
 
   setTimeout(() => {
@@ -2120,17 +2776,28 @@ function pfUpdate() {
 
 function savePortrait() {
   const ch = db.characters[currentCharId]; if (!ch) return;
-  ch.portrait    = window._pfSrc;
+  const newSrc = window._pfSrc;
   ch.portraitZoom = parseInt(document.getElementById('pf-zoom')?.value) || 100;
   ch.portraitX   = parseInt(document.getElementById('pf-x')?.value);
   ch.portraitY   = parseInt(document.getElementById('pf-y')?.value);
-  saveData(db);
   closeModal();
-  renderApp();
+  // If the source is a base64 data URL, upload to Storage
+  if (_isBase64Portrait(newSrc)) {
+    _savePortraitWithUpload(currentCharId, newSrc);
+  } else {
+    // Already a Storage URL — just save zoom/pan changes
+    ch.portrait = newSrc;
+    saveData(db);
+    renderApp();
+  }
 }
 
 function removePortrait() {
   const ch = db.characters[currentCharId]; if (!ch) return;
+  // Delete from Firebase Storage if it's a Storage URL
+  if (_isStorageUrl(ch.portrait)) {
+    _deletePortraitFromStorage(currentCharId);
+  }
   delete ch.portrait;
   ch.portraitZoom = 100; ch.portraitX = 50; ch.portraitY = 50;
   saveData(db); renderApp();
@@ -6232,7 +6899,7 @@ function openCharPanel() {
   panel.innerHTML = `
     <div class="char-panel-header">
       <span class="char-panel-title">✿ Characters (${chars.length}/20)</span>
-      <button class="btn btn-sm btn-primary" onclick="openCharWizard()"${atLimit ? ' disabled title="Limit reached"' : ''}>+ New</button>
+      ${!IS_PLAYER_VIEW ? `<button class="btn btn-sm btn-primary" onclick="openCharWizard()"${atLimit ? ' disabled title="Limit reached"' : ''}>+ New</button>` : ''}
     </div>
     ${chars.length === 0
       ? `<p class="text-dim" style="text-align:center;padding:0.8rem 0;font-size:0.85rem">No characters yet.</p>`
@@ -6315,6 +6982,8 @@ function duplicateCharacter(charId) {
 
 function deleteCharacterFromPanel(charId) {
   showConfirm('Delete this character?', () => {
+    const ch = db.characters[charId];
+    if (ch && _isStorageUrl(ch.portrait)) _deletePortraitFromStorage(charId);
     delete db.characters[charId];
     const c = db.campaigns.find(c => c.id === currentCampaignId);
     if (c) {
@@ -6964,6 +7633,8 @@ function importData(event) {
       showConfirm('This will replace all current data. Continue?', ()=>{
         db=imported; if(!db.npcs) db.npcs={};
         Object.values(db.characters).forEach(ch=>migrateCharacter(ch));
+        // Reset snapshot so Firestore sees everything as new/changed
+        _takeSnapshot({ campaigns: [], characters: {}, npcs: {} });
         saveData(db); showCampaigns(); showAlert('Import successful!', true);
       });
     } catch { showAlert('Invalid file.'); }
@@ -6978,5 +7649,10 @@ function esc(str) {
 }
 
 // ── Init ───────────────────────────────────────────────────────────────────────
-renderBreadcrumb();
-renderApp();
+if (IS_PLAYER_VIEW) {
+  // Player view: skip auth, load character directly from Firestore
+  _initPlayerView();
+} else {
+  // GM mode: Firebase auth controls the app lifecycle
+  initData();
+}

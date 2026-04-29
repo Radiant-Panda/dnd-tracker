@@ -1,0 +1,18 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // GM: full read/write to their own data
+    match /users/{userId}/{document=**} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+    // Players can read campaigns and characters they have a token for
+    match /users/{gmId}/campaigns/{campaignId} {
+      allow read: if true; // token check happens in app logic
+    }
+    match /users/{gmId}/characters/{charId} {
+      allow read: if true;
+      allow update: if resource.data.shareToken != null
+                    && request.resource.data.shareToken == resource.data.shareToken;
+    }
+  }
+}
