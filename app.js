@@ -594,7 +594,12 @@ function _pvShowError(msg) {
 function _pvUpdateHeader(charName) {
   const actions = document.querySelector('.header-actions');
   if (actions) {
-    actions.innerHTML = `<span style="color:var(--muted);font-size:0.8rem;white-space:nowrap">Player View — <strong style="color:var(--gold-lt)">${esc(charName)}</strong></span>`;
+    actions.innerHTML = `
+      <span style="color:var(--muted);font-size:0.8rem;white-space:nowrap">Player View — <strong style="color:var(--gold-lt)">${esc(charName)}</strong></span>
+      <div class="theme-wrap">
+        <button class="btn btn-sm theme-btn" id="theme-btn" onclick="toggleThemeDropdown(event)" title="Change color theme" aria-label="Change color theme">🎨</button>
+        <div class="theme-dropdown hidden" id="theme-dropdown"></div>
+      </div>`;
   }
 }
 
@@ -795,6 +800,14 @@ let IS_PLAYER_VIEW = !!((_PV_CAMPAIGN && _PV_PLAYER && _PV_TOKEN));
 let _pvGmUid       = _urlParams.get('gm') || null; // GM's uid for Firestore paths
 let _pvListeners   = []; // player-view onSnapshot unsubscribe handles
 
+// ── Setup View Detection ─────────────────────────────────────────────────────
+// Setup mode = anonymous player following a setup link to create a new character.
+// IS_PLAYER_VIEW wins if both URL patterns are somehow present.
+const IS_SETUP_VIEW = !IS_PLAYER_VIEW && _urlParams.get('mode') === 'setup';
+const SETUP_GM_UID = IS_SETUP_VIEW ? _urlParams.get('gmId') : null;
+const SETUP_CAMPAIGN_ID = IS_SETUP_VIEW ? _urlParams.get('campaignId') : null;
+const SETUP_TOKEN = IS_SETUP_VIEW ? _urlParams.get('token') : null;
+
 // ── State ──────────────────────────────────────────────────────────────────────
 let db = loadData();
 let currentView = 'campaigns';
@@ -945,6 +958,7 @@ function renderCampaignDetail() {
         ${!IS_PLAYER_VIEW && tab==='initiative'?`<button class="btn btn-primary" onclick="openAddCombatantModal()">+ Add Combatant</button><button class="btn btn-sm" onclick="nextTurn()">Next Turn &#8594;</button><button class="btn btn-sm btn-danger" onclick="clearInitiative()">End Combat</button>`:''}
         ${!IS_PLAYER_VIEW && tab==='journal'?`<button class="btn btn-primary" onclick="addJournalEntry()">+ New Entry</button>`:''}
         ${!IS_PLAYER_VIEW ? `<button class="btn btn-sm" onclick="openMagicItemRandomizer()">🎲 Magic Items</button>` : ''}
+        ${!IS_PLAYER_VIEW ? `<button class="btn btn-sm" onclick="openSetupLinkModal()" title="Generate a link players can use to create their own characters">✦ Player Setup Link</button>` : ''}
       </div>
     </div>
     ${campaign.description?`<p class="text-dim" style="margin-bottom:1rem">${esc(campaign.description)}</p>`:''}
@@ -958,6 +972,53 @@ function renderCampaignDetail() {
     ${tab==='npcs'       ? renderNpcCards(campaign) : ''}
     ${tab==='initiative' ? renderInitiativeTracker(campaign) : ''}
     ${tab==='journal'    ? renderJournalTab(campaign) : ''}`;
+}
+
+// ── Player Setup Link (GM-side) ──────────────────────────────────────────────
+function openSetupLinkModal() {
+  const camp = db.campaigns.find(c => c.id === currentCampaignId);
+  if (!camp) return;
+  const hasToken = !!camp.setupToken;
+  const uid = firebase.auth().currentUser?.uid || '';
+  const link = hasToken
+    ? `${window.location.origin}${window.location.pathname}?mode=setup&gmId=${uid}&campaignId=${camp.id}&token=${camp.setupToken}`
+    : '';
+  const safeLink = link.replace(/'/g, "\\'");
+  openModal(`
+    <h2>✦ Player Setup Link</h2>
+    <p style="color:var(--text-dim);font-size:0.9rem">
+      Share this link with players so they can create their own characters.
+      Characters they create will appear in this campaign automatically.
+    </p>
+    ${hasToken ? `
+      <div style="margin:1rem 0;padding:1rem;background:var(--surface2);border-radius:8px;word-break:break-all;font-family:monospace;font-size:0.85rem">
+        ${esc(link)}
+      </div>
+      <button class="btn btn-primary" onclick="navigator.clipboard.writeText('${safeLink}').then(()=>showToast('Link copied!'))">Copy Link</button>
+      <button class="btn btn-danger" onclick="_revokeSetupToken()" style="margin-left:0.5rem">Revoke Link</button>
+    ` : `
+      <p>No active setup link. Generate one to invite players.</p>
+      <button class="btn btn-primary" onclick="_generateSetupToken()">Generate Setup Link</button>
+    `}
+  `);
+}
+
+function _generateSetupToken() {
+  const camp = db.campaigns.find(c => c.id === currentCampaignId);
+  if (!camp) return;
+  camp.setupToken = 'setup_' + Math.random().toString(36).slice(2, 14);
+  saveData(db);
+  openSetupLinkModal(); // re-render
+}
+
+function _revokeSetupToken() {
+  const camp = db.campaigns.find(c => c.id === currentCampaignId);
+  if (!camp) return;
+  showConfirm('Revoke the setup link? Existing characters are unaffected, but the link will stop working.', () => {
+    camp.setupToken = null;
+    saveData(db);
+    openSetupLinkModal();
+  });
 }
 
 // ── Characters Tab ────────────────────────────────────────────────────────────
@@ -7614,7 +7675,7 @@ function openCharWizard() {
     abilityMethod: 'pointbuy',
     _speciesSource: '2024',
     _bgSource: '2024',
-    class: 'Fighter', level: 1,
+    class: 'Fighter', level: 1, subclass: '',
     abilities: { str:8, dex:8, con:8, int:8, wis:8, cha:8 },
     maxHP: 10, maxHPSet: false
   };
@@ -7622,9 +7683,17 @@ function openCharWizard() {
 }
 
 function wizardProgress(current) {
-  return `<div class="wizard-progress">${[0,1,2,3,4,5,6,7].map(i =>
+  return `<div class="wizard-progress">${[0,1,2,3,4,5,6,7,8].map(i =>
     `<div class="wizard-step-dot ${i < current ? 'done' : i === current ? 'current' : ''}"></div>`
   ).join('')}</div>`;
+}
+
+// Determine whether the subclass step (5) should be skipped for the current data
+function _wizSubclassAvailable() {
+  if ((wizardData.level || 1) < 3) return false;
+  if (typeof SUBCLASS_DATA === 'undefined') return false;
+  const subs = SUBCLASS_DATA[wizardData.class];
+  return !!(subs && Object.keys(subs).length > 0);
 }
 
 function _wizSpeciesCards() {
@@ -7726,6 +7795,40 @@ function renderWizardStep(step) {
         <button class="btn btn-primary" onclick="renderWizardStep(5)">Next →</button>
       </div>`;
   } else if (step === 5) {
+    // Subclass — skip entirely if level < 3 or no subclass data for this class
+    if (!_wizSubclassAvailable()) {
+      return renderWizardStep(6);
+    }
+    const subData = SUBCLASS_DATA[wizardData.class];
+    const subNames = Object.keys(subData);
+    function _wizEditionSuffix(name) {
+      const src = subData[name]?.source || '';
+      if (src.includes('2024')) return ' (2024)';
+      if (src.includes('2014') || src === 'PHB') return ' (2014)';
+      if (src) return ` (${src})`;
+      return '';
+    }
+    const cards = subNames.map(name => {
+      const sel = wizardData.subclass === name;
+      const sub = subData[name];
+      const desc = sub?.description ? esc(String(sub.description)).slice(0, 110) : '';
+      const safeName = String(name).replace(/'/g, "\\'");
+      return `<div class="wiz-card ${sel?'selected':''}" onclick="wiz_selectSubclass('${safeName}')">
+        <div style="font-weight:bold;font-size:0.9rem">${esc(name)}${_wizEditionSuffix(name)}</div>
+        ${desc ? `<div style="font-size:0.72rem;color:var(--text-dim);margin-top:0.2rem">${desc}</div>` : ''}
+      </div>`;
+    }).join('');
+    body = `<h2>✾ Subclass</h2>${wizardProgress(5)}
+      <p style="font-size:0.78rem;color:var(--text-dim);margin-bottom:0.6rem">
+        Choose a ${esc(wizardData.class)} subclass. You can change this later.
+      </p>
+      <div class="wiz-card-grid">${cards}</div>
+      <div class="form-actions">
+        <button class="btn" onclick="renderWizardStep(4)">← Back</button>
+        <button class="btn" onclick="wizardData.subclass='';renderWizardStep(6)">Skip subclass for now</button>
+        <button class="btn btn-primary" onclick="renderWizardStep(6)">Next →</button>
+      </div>`;
+  } else if (step === 6) {
     // Ability Scores with method selector + bonus picker
     if (!wizardData.abilityMethod) wizardData.abilityMethod = 'pointbuy';
     const method = wizardData.abilityMethod;
@@ -7767,14 +7870,14 @@ function renderWizardStep(step) {
       scoreSection = _wizManualSection();
     }
 
-    body = `<h2>✾ Ability Scores</h2>${wizardProgress(5)}
+    body = `<h2>✾ Ability Scores</h2>${wizardProgress(6)}
       ${methodToggle}${bonusSection}${scoreSection}
-      <div id="wiz-step5-error" style="color:var(--red-lt);font-size:0.8rem;margin-top:0.4rem;display:none"></div>
+      <div id="wiz-step6-error" style="color:var(--red-lt);font-size:0.8rem;margin-top:0.4rem;display:none"></div>
       <div class="form-actions">
-        <button class="btn" onclick="renderWizardStep(4)">← Back</button>
-        <button class="btn btn-primary" onclick="wizardNext(5)">Next →</button>
+        <button class="btn" onclick="${_wizSubclassAvailable() ? 'renderWizardStep(5)' : 'renderWizardStep(4)'}">← Back</button>
+        <button class="btn btn-primary" onclick="wizardNext(6)">Next →</button>
       </div>`;
-  } else if (step === 6) {
+  } else if (step === 7) {
     // Review step
     const bg = wizardData.backgroundData;
     const pb = profBonus(wizardData.level);
@@ -7788,7 +7891,7 @@ function renderWizardStep(step) {
         ${bonus ? `<div style="font-size:0.65rem;color:var(--text-dim)">${base}+${bonus}</div>` : ''}
       </div>`;
     }).join('');
-    body = `<h2>✾ Review</h2>${wizardProgress(6)}
+    body = `<h2>✾ Review</h2>${wizardProgress(7)}
       <div style="background:var(--surface2);border-radius:var(--radius);padding:0.75rem;font-size:0.82rem;margin-bottom:0.8rem">
         <div style="font-weight:bold;color:var(--gold-lt);font-size:1rem;margin-bottom:0.4rem">${CLASS_ICONS[wizardData.class] || '⚔'} ${esc(wizardData.name)}</div>
         <div style="margin-bottom:0.3rem">
@@ -7802,22 +7905,23 @@ function renderWizardStep(step) {
         ${bg?.skills?.length ? `<div style="margin-bottom:0.3rem"><strong>Skills:</strong> ${bg.skills.map(s=>esc(s)).join(', ')}</div>` : ''}
         <div style="margin-bottom:0.3rem">
           <strong>Class:</strong> ${esc(wizardData.class)} &nbsp;·&nbsp; <strong>Level:</strong> ${wizardData.level} &nbsp;·&nbsp; PB +${pb}
+          ${wizardData.subclass ? ` &nbsp;·&nbsp; <strong>Subclass:</strong> ${esc(wizardData.subclass)}` : ''}
         </div>
         <div style="font-size:0.75rem;color:var(--text-dim)">Scores: ${wizardData.abilityMethod==='pointbuy'?'Point Buy':wizardData.abilityMethod==='array'?'Standard Array':'Manual Roll'}</div>
       </div>
       <div class="wizard-ability-grid" style="margin-bottom:0.8rem">${scoresHtml}</div>
       <div class="form-actions">
-        <button class="btn" onclick="renderWizardStep(5)">← Back</button>
-        <button class="btn btn-primary" onclick="renderWizardStep(7)">Next →</button>
+        <button class="btn" onclick="renderWizardStep(6)">← Back</button>
+        <button class="btn btn-primary" onclick="renderWizardStep(8)">Next →</button>
       </div>`;
-  } else if (step === 7) {
+  } else if (step === 8) {
     const hd = HIT_DICE[wizardData.class] || 8;
     const conBase = wizardData.abilities.con || 10;
     const conBonus = wizardData.abilityBonuses.con || 0;
     const conMod = Math.floor(((conBase + conBonus) - 10) / 2);
     const suggested = Math.max(1, (hd + conMod) * wizardData.level);
     if (!wizardData.maxHPSet) wizardData.maxHP = suggested;
-    body = `<h2>✾ Hit Points</h2>${wizardProgress(7)}
+    body = `<h2>✾ Hit Points</h2>${wizardProgress(8)}
       <div class="form-group"><label>Maximum HP</label>
         <input type="number" id="wiz-hp" value="${wizardData.maxHP}" min="1">
         <div style="font-size:0.75rem;color:var(--text-dim);margin-top:0.4rem">
@@ -7827,17 +7931,17 @@ function renderWizardStep(step) {
       </div>
       <div style="background:var(--surface2);border-radius:var(--radius);padding:0.75rem;font-size:0.82rem;margin:0.5rem 0 0.8rem">
         <div style="font-weight:bold;color:var(--gold-lt);margin-bottom:0.3rem">${CLASS_ICONS[wizardData.class] || '⚔'} ${esc(wizardData.name)}</div>
-        <div style="color:var(--text-dim)">Level ${wizardData.level} ${esc(wizardData.race || '—')} ${esc(wizardData.class)} &nbsp;&bull;&nbsp; PB +${profBonus(wizardData.level)}</div>
+        <div style="color:var(--text-dim)">Level ${wizardData.level} ${esc(wizardData.race || '—')} ${esc(wizardData.class)}${wizardData.subclass ? ' (' + esc(wizardData.subclass) + ')' : ''} &nbsp;&bull;&nbsp; PB +${profBonus(wizardData.level)}</div>
       </div>
       <div class="form-actions">
-        <button class="btn" onclick="renderWizardStep(6)">← Back</button>
+        <button class="btn" onclick="renderWizardStep(7)">← Back</button>
         <button class="btn btn-primary" onclick="wizardFinish()">Create Character ✦</button>
       </div>`;
   }
   openModal(body);
   setTimeout(() => {
     const inp = document.querySelector('#modal-content input[type="text"], #modal-content input[type="number"]');
-    if (inp && step !== 1 && step !== 2 && step !== 3 && step !== 4 && step !== 6) inp.focus();
+    if (inp && step !== 1 && step !== 2 && step !== 3 && step !== 4 && step !== 5 && step !== 7) inp.focus();
   }, 40);
 }
 
@@ -7848,11 +7952,11 @@ function wizardNext(step) {
     wizardData.name = v; renderWizardStep(1);
   } else if (step === 1) {
     renderWizardStep(2);
-  } else if (step === 5) {
+  } else if (step === 6) {
     // Validate background bonuses for 2024 backgrounds with stat groups
     // Skip validation for 2014 backgrounds (no stat group)
     if (wizardData._bgSource === '2014') {
-      renderWizardStep(6);
+      renderWizardStep(7);
       return;
     }
     const bg = wizardData.backgroundData;
@@ -7862,7 +7966,7 @@ function wizardNext(step) {
       const has2 = Object.values(bonuses).includes(2);
       const has1 = Object.values(bonuses).includes(1);
       if (!has2 || !has1) {
-        const errEl = document.getElementById('wiz-step5-error');
+        const errEl = document.getElementById('wiz-step6-error');
         if (errEl) {
           errEl.textContent = 'Please assign your +2 and +1 background bonuses before continuing.';
           errEl.style.display = '';
@@ -7870,8 +7974,13 @@ function wizardNext(step) {
         return;
       }
     }
-    renderWizardStep(6);
+    renderWizardStep(7);
   }
+}
+
+function wiz_selectSubclass(name) {
+  wizardData.subclass = name;
+  renderWizardStep(5);
 }
 
 function wiz_selectSpecies(srcKey, idx) {
@@ -7914,7 +8023,7 @@ function wiz_toggleBonus(ability) {
     if (!has2) bonuses[ability] = 2;
     else if (!has1) bonuses[ability] = 1;
   }
-  renderWizardStep(5);
+  renderWizardStep(6);
 }
 
 // ── Ability Score Methods ──
@@ -7934,7 +8043,7 @@ function wiz_setAbilityMethod(method) {
     }
   }
   wizardData._diceRolls = wizardData._diceRolls || {};
-  renderWizardStep(5);
+  renderWizardStep(6);
 }
 
 function _wizPointBuySpent() {
@@ -7981,7 +8090,7 @@ function wiz_pbAdjust(ability, dir) {
   const costDiff = (PB_COST[next] || 0) - (PB_COST[cur] || 0);
   if (costDiff > (PB_BUDGET - _wizPointBuySpent())) return;
   wizardData.abilities[ability] = next;
-  renderWizardStep(5);
+  renderWizardStep(6);
   // Pulse animation
   setTimeout(() => {
     const el = document.querySelector('.pb-remaining');
@@ -8032,7 +8141,7 @@ function wiz_arrayAssign(ability, value) {
     delete wizardData._arrayAssign[ability];
     wizardData.abilities[ability] = 8;
   }
-  renderWizardStep(5);
+  renderWizardStep(6);
 }
 
 function _wizManualSection() {
@@ -8044,7 +8153,7 @@ function _wizManualSection() {
     const rollInfo = rolls[a];
     return `<div class="wizard-ability-box">
       <label>${ABILITY_SHORT[a]}</label>
-      <input type="number" value="${base}" min="3" max="18" oninput="wizardData.abilities['${a}']=+this.value||10;wizardData._manualSet=true;renderWizardStep(5)"
+      <input type="number" value="${base}" min="3" max="18" oninput="wizardData.abilities['${a}']=+this.value||10;wizardData._manualSet=true;renderWizardStep(6)"
         style="width:100%;text-align:center;background:transparent;border:none;border-bottom:1px solid rgba(var(--accent-rgb),0.3);color:var(--gold);font-size:1.2rem;font-weight:bold;font-family:inherit">
       ${bonus ? `<div style="font-size:0.7rem;color:var(--gold);margin-top:0.15rem">${base} + ${bonus} = <strong>${total}</strong></div>` : ''}
       ${rollInfo ? `<div style="font-size:0.65rem;color:var(--text-dim);margin-top:0.1rem">🎲 ${rollInfo}</div>` : ''}
@@ -8077,7 +8186,7 @@ function wiz_rollAll() {
     wizardData._diceRolls[a] = r.text;
   });
   wizardData._manualSet = true;
-  renderWizardStep(5);
+  renderWizardStep(6);
 }
 
 function wiz_rollSingle(ability) {
@@ -8086,13 +8195,24 @@ function wiz_rollSingle(ability) {
   wizardData._diceRolls = wizardData._diceRolls || {};
   wizardData._diceRolls[ability] = r.text;
   wizardData._manualSet = true;
-  renderWizardStep(5);
+  renderWizardStep(6);
 }
 
-function wiz_setClass(cls) { wizardData.class = cls; renderWizardStep(3); }
-function wiz_setLevel(lvl) { wizardData.level = Math.min(20, Math.max(1, lvl)); renderWizardStep(4); }
+function wiz_setClass(cls) {
+  if (wizardData.class !== cls) wizardData.subclass = ''; // class change invalidates subclass
+  wizardData.class = cls;
+  renderWizardStep(3);
+}
+function wiz_setLevel(lvl) {
+  wizardData.level = Math.min(20, Math.max(1, lvl));
+  if (wizardData.level < 3) wizardData.subclass = ''; // subclass requires level 3+
+  renderWizardStep(4);
+}
 
 function wizardFinish() {
+  if (IS_SETUP_VIEW) {
+    return _setupWizardFinish();
+  }
   if (CharacterStore.getAllForCampaign(currentCampaignId).length >= 20) {
     showAlert('20 character limit reached.'); return;
   }
@@ -8106,6 +8226,14 @@ function wizardFinish() {
   ch.combat.maxHP     = wizardData.maxHP;
   ch.combat.currentHP = wizardData.maxHP;
   ch.proficiencyBonus = profBonus(wizardData.level);
+  if (wizardData.subclass && ch.classes && ch.classes[0]) {
+    ch.classes[0].subclass = wizardData.subclass;
+    ch.subclass = wizardData.subclass; // backward-compat with code that reads ch.subclass directly
+  }
+  if (wizardData.subclass) {
+    ch.subclass = wizardData.subclass;
+    ch.class = wizardData.class;
+  }
   // Background data
   if (wizardData.backgroundData) {
     ch.background = wizardData.background;
@@ -8134,6 +8262,7 @@ function wizardFinish() {
   if (wizardData.raceData?.speed) ch.combat.speed = wizardData.raceData.speed;
   db.characters[ch.id] = ch;
   injectBaseClassResources(ch.id);
+  if (wizardData.subclass) syncSubclassFeatures(ch.id);
   applySpellSlots(ch);
   const c = db.campaigns.find(c => c.id === currentCampaignId);
   (c.characters = c.characters || []).push(ch.id);
@@ -8142,6 +8271,110 @@ function wizardFinish() {
   switchToCharacter(ch.id);
   // Open starting proficiencies picker
   openStartingProfsModal(ch);
+}
+
+// ── Setup-Mode Wizard Finish ───────────────────────────────────────────────────
+// Used when an anonymous player created a character via a setup link.
+// Writes the character directly to the GM's Firestore path (no local db save)
+// and appends its ID to the campaign's characters array.
+async function _setupWizardFinish() {
+  wizardData.maxHP = Math.max(1, parseInt(document.getElementById('wiz-hp')?.value) || wizardData.maxHP || 1);
+  // Build character locally using the same logic as wizardFinish
+  const ch = newCharacter(wizardData.name, wizardData.race, wizardData.class, wizardData.level);
+  ch.id = 'char_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+  ch.abilities = { ...wizardData.abilities };
+  for (const [ab, bonus] of Object.entries(wizardData.abilityBonuses || {})) {
+    ch.abilities[ab] = (ch.abilities[ab] || 10) + bonus;
+  }
+  ch.combat.maxHP = wizardData.maxHP;
+  ch.combat.currentHP = wizardData.maxHP;
+  ch.proficiencyBonus = profBonus(wizardData.level);
+  if (wizardData.subclass && ch.classes && ch.classes[0]) {
+    ch.classes[0].subclass = wizardData.subclass;
+    ch.subclass = wizardData.subclass;
+  }
+  if (wizardData.subclass) {
+    ch.subclass = wizardData.subclass;
+    ch.class = wizardData.class;
+  }
+  if (wizardData.backgroundData) {
+    ch.background = wizardData.background;
+    (wizardData.backgroundData.skills || []).forEach(skill => {
+      if (!ch.skillProficiencies.includes(skill)) ch.skillProficiencies.push(skill);
+    });
+    const tools = (wizardData.backgroundData.tools || []).join(', ');
+    if (tools) ch.proficiencies = tools;
+    if (wizardData.backgroundData.feat) {
+      ch.featuresList = ch.featuresList || [];
+      const featName = wizardData.backgroundData.feat;
+      const featsPool = (typeof FEATS_ITEMS_DATA !== 'undefined' && FEATS_ITEMS_DATA?.feats) || [];
+      const featData = featsPool.find(x => x.name === featName)
+        || featsPool.find(x => x.name === featName.replace(/\s*\(.*\)$/, ''));
+      ch.featuresList.push({
+        name: featName,
+        desc: featData?.desc || 'Granted by your background.',
+        _feat: true,
+        _featSource: 'Background (' + wizardData.background + ')'
+      });
+    }
+  }
+  if (wizardData.raceData?.traits?.length) {
+    ch.featuresList = ch.featuresList || [];
+    wizardData.raceData.traits.forEach(trait => {
+      ch.featuresList.push({ name: trait.name, desc: trait.desc, _species: wizardData.race });
+    });
+  }
+  if (wizardData.raceData?.speed) ch.combat.speed = wizardData.raceData.speed;
+
+  // Apply class resources, spell slots, share token via the in-memory db
+  db = db || { characters: {}, campaigns: [], npcs: {} };
+  db.characters[ch.id] = ch;
+  try { injectBaseClassResources(ch.id); } catch (e) { console.warn('[Setup] injectBaseClassResources failed:', e); }
+  try { if (wizardData.subclass) syncSubclassFeatures(ch.id); } catch (e) { console.warn('[Setup] syncSubclassFeatures failed:', e); }
+  try { applySpellSlots(ch); } catch (e) { console.warn('[Setup] applySpellSlots failed:', e); }
+  ch.shareToken = 'tok_' + Math.random().toString(36).slice(2, 14);
+
+  // Show saving spinner
+  const appEl = document.getElementById('app');
+  closeModal();
+  appEl.innerHTML = `
+    <div style="padding:3rem;text-align:center">
+      <div style="font-size:2rem">✾</div>
+      <p>Saving your character…</p>
+    </div>`;
+
+  // Write to GM's Firestore
+  try {
+    const charRef = firebase.firestore().doc(`users/${SETUP_GM_UID}/characters/${ch.id}`);
+    await charRef.set(ch);
+    const campRef = firebase.firestore().doc(`users/${SETUP_GM_UID}/campaigns/${SETUP_CAMPAIGN_ID}`);
+    await campRef.update({
+      characters: firebase.firestore.FieldValue.arrayUnion(ch.id)
+    });
+  } catch (e) {
+    appEl.innerHTML = `
+      <div style="padding:2rem;max-width:600px;margin:0 auto;text-align:center">
+        <h2 style="color:var(--red-lt)">⚠ Could not save</h2>
+        <p>${esc(e.message || 'Network error')}</p>
+        <button class="btn btn-primary" onclick="_setupWizardFinish()">Try Again</button>
+      </div>`;
+    return;
+  }
+
+  // Show success screen with personal player link
+  const playerLink = `${window.location.origin}${window.location.pathname}?campaign=${SETUP_CAMPAIGN_ID}&player=${ch.id}&token=${ch.shareToken}&gm=${SETUP_GM_UID}`;
+  const safeLink = playerLink.replace(/'/g, "\\'");
+  appEl.innerHTML = `
+    <div style="padding:2rem;max-width:600px;margin:0 auto;text-align:center">
+      <div style="font-size:3rem">✦</div>
+      <h1>${esc(ch.name)} is ready!</h1>
+      <p style="color:var(--text-dim)">Bookmark this link — it's your personal character sheet.</p>
+      <div style="margin:1.5rem 0;padding:1rem;background:var(--surface2);border-radius:8px;word-break:break-all;font-family:monospace;font-size:0.85rem">
+        ${esc(playerLink)}
+      </div>
+      <button class="btn btn-primary" onclick="navigator.clipboard.writeText('${safeLink}').then(()=>showToast('Link copied!'))">Copy Link</button>
+      <a href="${playerLink}" class="btn" style="margin-left:0.5rem">Open Now</a>
+    </div>`;
 }
 
 // ── Starting Proficiencies Modal ───────────────────────────────────────────────
@@ -8555,7 +8788,10 @@ function _shimmerLongRestBtn() {
 }
 
 // ── Init ───────────────────────────────────────────────────────────────────────
-if (IS_PLAYER_VIEW) {
+if (IS_SETUP_VIEW) {
+  // Setup view: anonymous player creates a character via setup link
+  _setupBootstrap();
+} else if (IS_PLAYER_VIEW) {
   // Player view: skip auth, load character directly from Firestore
   _initPlayerView();
   window.addEventListener('online',  () => _updateOnlineBanner(true));
@@ -8564,4 +8800,65 @@ if (IS_PLAYER_VIEW) {
 } else {
   // GM mode: Firebase auth controls the app lifecycle
   initData();
+}
+
+// ── Setup View Bootstrap ─────────────────────────────────────────────────────
+async function _setupBootstrap() {
+  _initFirebase();
+  // Hide auth gate, show app shell
+  const gate = document.getElementById('auth-gate');
+  const header = document.getElementById('app-header');
+  const appEl = document.getElementById('app');
+  if (gate) gate.style.display = 'none';
+  if (header) header.style.display = 'none';
+  if (appEl) appEl.style.display = '';
+
+  if (!_firestoreReady) {
+    appEl.innerHTML =
+      '<div style="padding:2rem;text-align:center;color:var(--red-lt)">Could not initialize. Please refresh and try again.</div>';
+    return;
+  }
+
+  // Sign in anonymously so Firestore rules (request.auth != null) are satisfied
+  try {
+    await firebase.auth().signInAnonymously();
+  } catch (e) {
+    appEl.innerHTML =
+      '<div style="padding:2rem;text-align:center;color:var(--red-lt)">Could not initialize. Please refresh and try again.</div>';
+    return;
+  }
+
+  // Validate the setup link by reading the campaign doc
+  try {
+    const campSnap = await firebase.firestore()
+      .doc(`users/${SETUP_GM_UID}/campaigns/${SETUP_CAMPAIGN_ID}`).get();
+    if (!campSnap.exists) throw new Error('Campaign not found');
+    const camp = campSnap.data();
+    if (!camp.setupToken || camp.setupToken !== SETUP_TOKEN) {
+      throw new Error('Invalid or expired setup link');
+    }
+    window._setupCampaign = camp;
+    window._setupCampaignName = camp.name || 'Campaign';
+  } catch (e) {
+    appEl.innerHTML =
+      `<div style="padding:2rem;text-align:center;color:var(--red-lt)">
+        ⚠ ${esc(e.message || 'Invalid setup link')}<br><br>
+        <span style="color:var(--text-dim);font-size:0.9rem">Ask your GM for a new link.</span>
+      </div>`;
+    return;
+  }
+
+  // Initialize an in-memory db so the wizard can operate
+  db = db || { characters: {}, campaigns: [], npcs: {} };
+
+  // Show a friendly intro then open the wizard
+  appEl.innerHTML = `
+    <div style="padding:2rem;max-width:600px;margin:0 auto;text-align:center">
+      <div style="font-size:3rem">✾</div>
+      <h1>Welcome to ${esc(window._setupCampaignName)}</h1>
+      <p style="color:var(--text-dim);margin-bottom:2rem">
+        Your GM has invited you to create a character.
+      </p>
+      <button class="btn btn-primary" onclick="openCharWizard()">Begin Character Creation</button>
+    </div>`;
 }
