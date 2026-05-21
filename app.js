@@ -1550,10 +1550,9 @@ function _getConcentrationSpell(cb) {
   if (!cb.charId) return null;
   const ch = db.characters[cb.charId];
   if (!ch) return null;
-  if (ch.activeConcentration) return ch.activeConcentration.spellName;
-  const allSpells = [...(ch.spells?.prepared || []), ...(ch.spells?.known || [])];
-  const concSpell = allSpells.find(s => typeof s === 'object' && s.concentration === 'yes');
-  return concSpell ? concSpell.name : null;
+  // Only show concentration badge when explicitly set by casting a spell —
+  // do not scan the spell list (causes false positives and blocks clearing)
+  return ch.activeConcentration ? ch.activeConcentration.spellName : null;
 }
 function _checkConcentration(i, dmg) {
   const cb = getInitiative().combatants[i];
