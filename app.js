@@ -489,7 +489,15 @@ async function _initPlayerView() {
     _pvShowError('Player view requires an active connection. Please try again later.');
     return;
   }
-  // Player view doesn't need auth — reads are public per Firestore rules
+  // Sign in anonymously so Firestore rules (request.auth != null) are satisfied
+  if (_authReady) {
+    try {
+      await _fireAuth.signInAnonymously();
+    } catch (e) {
+      console.warn('[PlayerView] Anonymous sign-in failed:', e.message);
+      // Non-fatal — continue and let Firestore rules decide access
+    }
+  }
   _showApp();
   document.getElementById('app').innerHTML = '<div style="text-align:center;padding:4rem 1rem;color:var(--muted)"><span class="portrait-spinner" style="display:inline-block;width:32px;height:32px;border-width:3px"></span><p style="margin-top:1rem">Loading character...</p></div>';
 
@@ -597,12 +605,13 @@ function _pvSaveCharacter() {
   if (!ch) return;
   const base = `users/${_pvGmUid}`;
   _fireDb.doc(`${base}/characters/${_PV_PLAYER}`).update({
-    'combat.currentHP':  ch.combat.currentHP,
-    'combat.tempHP':     ch.combat.tempHP,
-    'spells.slots':      ch.spells.slots,
-    'spells.pactSlots':  ch.spells.pactSlots,
-    'resources':         ch.resources,
-    'exhaustionLevel':   ch.exhaustionLevel,
+    'combat.currentHP':   ch.combat.currentHP,
+    'combat.tempHP':      ch.combat.tempHP,
+    'combat.conditions':  ch.combat.conditions || [],
+    'spells.slots':       ch.spells.slots,
+    'spells.pactSlots':   ch.spells.pactSlots,
+    'resources':          ch.resources,
+    'exhaustionLevel':    ch.exhaustionLevel,
   }).catch(e => {
     console.warn('[PlayerView] Save failed:', e.message);
   });
@@ -679,6 +688,7 @@ function migrateCharacter(ch) {
   if (ch.spells.pactSlotsMax  === undefined) ch.spells.pactSlotsMax  = 0;
   if (ch.spells.pactSlotLevel === undefined) ch.spells.pactSlotLevel = 0;
   if (!ch.combat)          ch.combat = {ac:10,initiative:0,speed:30,maxHP:10,currentHP:10,tempHP:0,hitDice:'1d8',hitDiceUsed:{}};
+  if (!ch.combat.conditions) ch.combat.conditions = [];
   // Migrate hitDiceUsed from old single-number format to per-class object
   if (typeof ch.combat.hitDiceUsed === 'number') {
     const primaryClass = ch.class || 'Fighter';
@@ -1388,7 +1398,7 @@ function renderInitiativeTracker(campaign) {
             <div class="init-top">
               <span class="init-name">${esc(cb.name)}</span>
               <span class="init-type ${cb.type}">${cb.type}</span>
-              ${(()=>{ const cs = _getConcentrationSpell(cb); return cs ? `<span class="conc-badge" title="Concentrating on ${esc(cs)}">C: ${esc(cs)}</span>` : ''; })()}
+              ${(()=>{ const cs = _getConcentrationSpell(cb); return cs ? `<span class="conc-badge" title="Concentrating on ${esc(cs)}">C: ${esc(cs)}</span><button class="btn btn-sm conc-clear-combat" onclick="clearConcentrationForCombatant(${i})" title="End concentration" style="font-size:0.6rem;padding:0.1rem 0.3rem;margin-left:0.25rem;opacity:0.7">&times;</button>` : ''; })()}
               ${isActive?'<span class="active-arrow">&#9654; Active</span>':''}
             </div>
             <div class="init-stats">
@@ -1532,7 +1542,7 @@ function addAllPcsToInitiative() {
   const linked=new Set(init.combatants.filter(c=>c.charId).map(c=>c.charId));
   (campaign.characters||[]).forEach(id => {
     const ch=db.characters[id]; if(!ch||linked.has(id)) return;
-    init.combatants.push({id:uid(),charId:id,name:ch.name,initiative:Math.ceil(Math.random()*20),ac:ch.combat.ac,hp:ch.combat.currentHP,maxHP:ch.combat.maxHP,type:'player',conditions:[],notes:'',tempHP:ch.combat.tempHP||0});
+    init.combatants.push({id:uid(),charId:id,name:ch.name,initiative:Math.ceil(Math.random()*20),ac:ch.combat.ac,hp:ch.combat.currentHP,maxHP:ch.combat.maxHP,type:'player',conditions:ch.combat.conditions||[],notes:'',tempHP:ch.combat.tempHP||0});
   });
   saveData(db); renderApp();
 }
@@ -1540,7 +1550,7 @@ function _getConcentrationSpell(cb) {
   if (!cb.charId) return null;
   const ch = db.characters[cb.charId];
   if (!ch) return null;
-  if (ch.activeConcentration) return ch.activeConcentration;
+  if (ch.activeConcentration) return ch.activeConcentration.spellName;
   const allSpells = [...(ch.spells?.prepared || []), ...(ch.spells?.known || [])];
   const concSpell = allSpells.find(s => typeof s === 'object' && s.concentration === 'yes');
   return concSpell ? concSpell.name : null;
@@ -1766,9 +1776,26 @@ function copyCombatLog() {
 function clearInitiative() {
   showConfirm('End combat and clear all combatants?', () => {
     _combatLogOpen = false;
+    // Clear conditions on any linked characters
+    const combatants = getInitiative().combatants;
+    combatants.forEach(cb => {
+      if (cb.charId && db.characters[cb.charId]) {
+        db.characters[cb.charId].combat.conditions = [];
+      }
+    });
     getCampaign().initiative={round:1,currentIndex:0,combatants:[],log:[]};
     saveData(db); renderApp();
   });
+}
+
+function clearConcentrationForCombatant(i) {
+  const cb = getInitiative().combatants[i];
+  if (!cb || !cb.charId) return;
+  const ch = db.characters[cb.charId];
+  if (!ch) return;
+  ch.activeConcentration = null;
+  saveData(db);
+  renderApp();
 }
 
 function openAoeDamageModal() {
@@ -1888,6 +1915,9 @@ function toggleCondition(i, cond) {
     cb.conditions.push(dur > 0 ? { name: cond, duration: dur } : cond);
     combatLog(`${cb.name}: ${cond} applied${dur>0?` (${dur} rounds)`:''}`);
   }
+  if (cb.charId && db.characters[cb.charId]) {
+    db.characters[cb.charId].combat.conditions = [...cb.conditions];
+  }
   saveData(db);
   const isActive = cb.conditions.some(c => condName(c) === cond);
   document.querySelectorAll('.condition-option').forEach(el => {
@@ -1905,6 +1935,9 @@ function setConditionDuration(i, cond, dur) {
     cb.conditions[existIdx] = { name: cond, duration: dur };
   } else {
     cb.conditions[existIdx] = cond; // revert to indefinite string
+  }
+  if (cb.charId && db.characters[cb.charId]) {
+    db.characters[cb.charId].combat.conditions = [...cb.conditions];
   }
   saveData(db);
   const row=document.querySelectorAll('.initiative-row')[i];
@@ -2848,10 +2881,14 @@ function renderAbilityScores(ch) {
   return `<div class="sheet-panel">
     <div class="cs-section-label">Ability Scores</div>
     <div class="ability-grid">
-      ${ABILITIES.map(a=>`
+      ${ABILITIES.map(a => `
         <div class="ability-box">
           <div class="ability-name">${ABILITY_SHORT[a]}</div>
-          <input class="ability-score-input" type="number" id="ab-${a}" value="${ch.abilities[a]}" min="1" max="30" oninput="updateAbility('${a}',this.value)">
+          <div class="stat-value-row">
+            <button class="stat-step-btn" onclick="adjustAbility('${a}',-1)">−</button>
+            <input class="ability-score-input" type="number" id="ab-${a}" value="${ch.abilities[a]}" min="1" max="30" oninput="updateAbility('${a}',this.value)">
+            <button class="stat-step-btn" onclick="adjustAbility('${a}',1)">+</button>
+          </div>
           <div class="ability-mod-circle" id="mod-${a}">${modStr(ch.abilities[a])}</div>
         </div>`).join('')}
     </div>
@@ -3092,9 +3129,34 @@ function renderCombatSection(ch) {
   return `<div class="sheet-panel">
     <div class="cs-section-label">Combat</div>
     <div class="cs-combat-trio">
-      <div class="stat-box"><div class="stat-label">Armor Class</div><input type="number" value="${ch.combat.ac}" oninput="combatField('ac',+this.value)" style="width:100%;text-align:center;font-size:1.3rem;background:transparent;border:none;color:var(--gold);font-weight:bold"><button class="ac-calc-btn" onclick="openACCalcModal()">Calc AC</button></div>
-      <div class="stat-box"><div class="stat-label">Initiative</div><input type="number" value="${ch.combat.initiative}" oninput="combatField('initiative',+this.value)" style="width:100%;text-align:center;font-size:1.3rem;background:transparent;border:none;color:var(--gold);font-weight:bold"></div>
-      <div class="stat-box"><div class="stat-label">Speed</div><input type="number" value="${ch.combat.speed}" oninput="combatField('speed',+this.value)" style="width:100%;text-align:center;font-size:1.3rem;background:transparent;border:none;color:var(--gold);font-weight:bold"></div>
+      <div class="combat-stat-card">
+        <svg class="stat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 5v7c0 5 3.5 9 8 10 4.5-1 8-5 8-10V5l-8-3z"/></svg>
+        <div class="stat-label">Armor Class</div>
+        <div class="stat-value-row">
+          <button class="stat-step-btn" onclick="adjustCombatStat('ac',-1)">−</button>
+          <input type="number" class="stat-value-input" value="${ch.combat.ac}" oninput="combatField('ac',+this.value)">
+          <button class="stat-step-btn" onclick="adjustCombatStat('ac',1)">+</button>
+        </div>
+        <button class="ac-calc-btn" onclick="openACCalcModal()">Calc AC</button>
+      </div>
+      <div class="combat-stat-card">
+        <svg class="stat-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"/></svg>
+        <div class="stat-label">Initiative</div>
+        <div class="stat-value-row">
+          <button class="stat-step-btn" onclick="adjustCombatStat('initiative',-1)">−</button>
+          <input type="number" class="stat-value-input" value="${ch.combat.initiative}" oninput="combatField('initiative',+this.value)">
+          <button class="stat-step-btn" onclick="adjustCombatStat('initiative',1)">+</button>
+        </div>
+      </div>
+      <div class="combat-stat-card">
+        <svg class="stat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 8h10a3 3 0 0 0 0-6M3 14h14a3 3 0 0 1 0 6M3 20h6"/></svg>
+        <div class="stat-label">Speed</div>
+        <div class="stat-value-row">
+          <button class="stat-step-btn" onclick="adjustCombatStat('speed',-1)">−</button>
+          <input type="number" class="stat-value-input" value="${ch.combat.speed}" oninput="combatField('speed',+this.value)">
+          <button class="stat-step-btn" onclick="adjustCombatStat('speed',1)">+</button>
+        </div>
+      </div>
     </div>
     ${spellBoxes}
     <div class="hp-display" style="margin-top:0.6rem">
@@ -3713,12 +3775,12 @@ function renderKnownView(ch) {
               ${isObj && sp.level_int === 0
                 ? `<span style="font-size:0.7rem;color:var(--text-dim);align-self:center;padding:0 0.3rem">✓ Always Prepared</span>`
                 : `<button class="btn btn-sm${inPrep?' btn-primary':''}" onclick="togglePrepareFromKnown(${i})" title="${inPrep?'Remove from Prepared':'Add to Prepared'}">${inPrep?'✓ Prep':'Prepare'}</button>`}
-              <button class="btn btn-sm" onclick="toggleSpellCard('${id}',this)" title="Toggle description">▴</button>
+              <button class="btn btn-sm" onclick="toggleSpellCard('${id}',this)" title="Toggle description">▾</button>
               <button class="btn btn-icon btn-danger" onclick="removeSpellEntry('known',${i})">&times;</button>
             </div>
           </div>
           ${isObj&&(sp.casting_time||sp.range||sp.components)?`<div class="spell-meta">${[sp.casting_time,sp.range,sp.components].filter(Boolean).map(esc).join(' · ')}</div>`:''}
-          ${isObj?`<div class="spell-desc" id="${id}">${esc(sp.desc||'No description available.')}</div>`:''}
+          ${isObj?`<div class="spell-desc hidden" id="${id}">${esc(sp.desc||'No description available.')}</div>`:''}
         </div>`;
       }).join('')}
     </div>`).join('')}</div>`;
@@ -3748,12 +3810,12 @@ function renderPreparedView(ch) {
             </div>
             <div class="spell-card-right">
               <button class="btn btn-sm btn-primary btn-cast" onclick="spellCastFx(this);castPreparedByIdx(${i})">Cast</button>
-              <button class="btn btn-sm" onclick="toggleSpellCard('${id}',this)" title="Toggle description">▴</button>
+              <button class="btn btn-sm" onclick="toggleSpellCard('${id}',this)" title="Toggle description">▾</button>
               <button class="btn btn-icon btn-danger" onclick="removeSpellEntry('prepared',${i})">&times;</button>
             </div>
           </div>
           ${isObj&&(sp.casting_time||sp.range||sp.components)?`<div class="spell-meta">${[sp.casting_time,sp.range,sp.components].filter(Boolean).map(esc).join(' · ')}</div>`:''}
-          ${isObj?`<div class="spell-desc" id="${id}">${esc(sp.desc||'No description available.')}</div>`:''}
+          ${isObj?`<div class="spell-desc hidden" id="${id}">${esc(sp.desc||'No description available.')}</div>`:''}
         </div>`;
       }).join('')}
     </div>`).join('')}</div>`;
@@ -3858,6 +3920,252 @@ function togglePrepareFromKnown(knownIdx) {
   if (pIdx >= 0) ch.spells.prepared.splice(pIdx, 1);
   else ch.spells.prepared.push(typeof sp==='object' ? {...sp} : sp);
   _preserveScroll(() => { saveData(db); renderSpellTabContent(); });
+}
+
+// ── Subclass Spell Lists & Special Tables (modal) ────────────────────────────
+const _SUBCLASS_TERRAIN_VARIANTS = new Set(['Circle of the Land', 'Circle of the Land (2024)']);
+let _subclassTerrainPick = {}; // { "Subclass": "TerrainName" }
+
+function _getSubclassSpellLists() {
+  return (typeof SUBCLASS_SPELL_LISTS !== 'undefined') ? SUBCLASS_SPELL_LISTS : {};
+}
+function _getSubclassTables() {
+  return (typeof SUBCLASS_TABLES !== 'undefined') ? SUBCLASS_TABLES : {};
+}
+function _charSubclasses(ch) {
+  const out = [];
+  const seen = new Set();
+  (ch.classes || []).forEach(c => {
+    if (c.subclass && !seen.has(c.subclass)) { seen.add(c.subclass); out.push(c.subclass); }
+  });
+  if (ch.subclass && !seen.has(ch.subclass)) out.push(ch.subclass);
+  return out;
+}
+function _subclassTargetList(prepareType) {
+  return prepareType === 'always_prepared' ? 'prepared' : 'known';
+}
+function _resolveSpellByName(name) {
+  if (typeof allSpellsDb !== 'undefined' && Array.isArray(allSpellsDb)) {
+    const lc = String(name).toLowerCase();
+    return allSpellsDb.find(s => String(s.name).toLowerCase() === lc) || null;
+  }
+  return null;
+}
+function _spellListHasCI(list, name) {
+  const lc = String(name).toLowerCase();
+  return (list || []).some(s => String(typeof s === 'object' ? s.name : s).toLowerCase() === lc);
+}
+function _isTerrainSubclass(sub) {
+  return _SUBCLASS_TERRAIN_VARIANTS.has(sub);
+}
+
+function pickSubclassTerrain(subclass, terrain, charId) {
+  _subclassTerrainPick[subclass] = terrain;
+  if (charId) openSubclassModal(charId);
+}
+
+function addSubclassSpellOne(charId, spellName, prepareType) {
+  const ch = db.characters[charId]; if (!ch) return;
+  ch.spells = ch.spells || {};
+  ch.spells.known    = ch.spells.known    || [];
+  ch.spells.prepared = ch.spells.prepared || [];
+  const target = _subclassTargetList(prepareType);
+  const sp = _resolveSpellByName(spellName) || spellName;
+  if (target === 'prepared') {
+    if (!_spellListHasCI(ch.spells.prepared, spellName)) ch.spells.prepared.push(sp);
+    if (!_spellListHasCI(ch.spells.known, spellName))    ch.spells.known.push(sp);
+  } else {
+    if (!_spellListHasCI(ch.spells.known, spellName))    ch.spells.known.push(sp);
+  }
+  saveData(db);
+  openSubclassModal(charId); // re-render modal
+}
+
+function applySubclassSpells(charId) {
+  const ch = db.characters[charId]; if (!ch) return;
+  const lists = _getSubclassSpellLists();
+  ch.spells = ch.spells || {};
+  ch.spells.known    = ch.spells.known    || [];
+  ch.spells.prepared = ch.spells.prepared || [];
+  _charSubclasses(ch).forEach(sub => {
+    if (_isTerrainSubclass(sub)) return; // user picks manually
+    const data = lists[sub]; if (!data) return;
+    const prepareType = data.prepareType || 'always_prepared';
+    const spellsByLevel = data.spells || data.levels || {};
+    Object.entries(spellsByLevel).forEach(([lvlKey, spells]) => {
+      const lvl = parseInt(lvlKey, 10);
+      if (!isFinite(lvl) || ch.level < lvl) return;
+      const list = Array.isArray(spells) ? spells : (Array.isArray(spells.spells) ? spells.spells : null);
+      if (!list) return;
+      list.forEach(spName => {
+        const sp = _resolveSpellByName(spName) || spName;
+        if (prepareType === 'always_prepared') {
+          if (!_spellListHasCI(ch.spells.prepared, spName)) ch.spells.prepared.push(sp);
+          if (!_spellListHasCI(ch.spells.known, spName))    ch.spells.known.push(sp);
+        } else {
+          if (!_spellListHasCI(ch.spells.known, spName))    ch.spells.known.push(sp);
+        }
+      });
+    });
+  });
+  saveData(db);
+  openSubclassModal(charId); // re-render modal
+}
+
+function _hasSubclassData(ch) {
+  const lists = _getSubclassSpellLists();
+  const tables = _getSubclassTables();
+  return _charSubclasses(ch).some(sub => lists[sub] || tables[sub]);
+}
+
+function _renderSubclassSpellRow(charId, ch, spellName, prepareType) {
+  const inK = _spellListHasCI(ch.spells?.known    || [], spellName);
+  const inP = _spellListHasCI(ch.spells?.prepared || [], spellName);
+  const have = (prepareType === 'always_prepared') ? (inK && inP) : inK;
+  return `<div class="subclass-spell-row" style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;padding:0.3rem 0.5rem;border-bottom:1px dashed rgba(var(--accent-rgb),0.12)">
+    <span style="font-size:0.88rem">${esc(spellName)}</span>
+    ${have
+      ? `<span style="font-size:0.78rem;color:#4ade80;font-weight:bold">✓</span>`
+      : `<button class="btn btn-sm btn-primary" onclick="addSubclassSpellOne(${JSON.stringify(charId)}, ${JSON.stringify(spellName)}, '${prepareType}')" style="font-size:0.7rem;padding:0.1rem 0.5rem">+ Add</button>`}
+  </div>`;
+}
+
+function _renderSubclassSpellsSection(charId, ch, sub, data) {
+  const prepareType = data.prepareType || 'always_prepared';
+  const spellsByLevel = data.spells || data.levels || {};
+  const isTerrain = _isTerrainSubclass(sub);
+  const prepLabel = ({ always_prepared: 'Always prepared', expanded_list: 'Expanded spell list', always_known: 'Always known' })[prepareType] || prepareType;
+  const noteHtml = data.note ? `<div style="font-size:0.8rem;color:var(--text-dim);margin:0.4rem 0 0.6rem;font-style:italic">${esc(data.note)}</div>` : '';
+
+  // Terrain variant: spellsByLevel = { "Arctic": { 3: [...], 5: [...] }, ... }
+  if (isTerrain) {
+    const terrainNames = Object.keys(spellsByLevel);
+    if (!terrainNames.length) return '';
+    const picked = _subclassTerrainPick[sub] || terrainNames[0];
+    const opts = terrainNames.map(t => `<option value="${esc(t)}"${t === picked ? ' selected' : ''}>${esc(t)}</option>`).join('');
+    const terrainData = spellsByLevel[picked] || {};
+    const levelEntries = Object.entries(terrainData)
+      .map(([k, v]) => [parseInt(k, 10), v])
+      .filter(([n]) => isFinite(n))
+      .sort((a, b) => a[0] - b[0])
+      .filter(([n]) => ch.level >= n);
+
+    const groups = levelEntries.map(([lvl, spells]) => {
+      const list = Array.isArray(spells) ? spells : [];
+      const rows = list.map(sp => _renderSubclassSpellRow(charId, ch, sp, prepareType)).join('');
+      return `<div style="margin-top:0.6rem">
+        <strong style="font-size:0.85rem;color:var(--gold-lt)">Level ${lvl}</strong>
+        <div style="margin-top:0.2rem">${rows}</div>
+      </div>`;
+    }).join('');
+
+    return `<div class="subclass-spell-section" style="margin-bottom:1rem">
+      <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.3rem">
+        <strong style="color:var(--gold);font-size:1rem">${esc(sub)}</strong>
+        <span style="font-size:0.7rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px">${esc(prepLabel)}</span>
+      </div>
+      ${noteHtml}
+      <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.3rem">
+        <label style="font-size:0.78rem;color:var(--text-dim)">Land:</label>
+        <select onchange="pickSubclassTerrain(${JSON.stringify(sub)}, this.value, ${JSON.stringify(charId)})" style="font-size:0.85rem;padding:0.15rem 0.35rem">${opts}</select>
+      </div>
+      ${groups || '<div style="font-size:0.78rem;color:var(--text-dim);margin-top:0.3rem">No unlocked levels yet.</div>'}
+    </div>`;
+  }
+
+  // Standard subclass: spellsByLevel = { 3: [...], 5: [...] }
+  const levelEntries = Object.entries(spellsByLevel)
+    .map(([k, v]) => [parseInt(k, 10), v])
+    .filter(([n]) => isFinite(n))
+    .sort((a, b) => a[0] - b[0])
+    .filter(([n]) => ch.level >= n);
+
+  const groups = levelEntries.map(([lvl, spells]) => {
+    const list = Array.isArray(spells) ? spells : (Array.isArray(spells.spells) ? spells.spells : []);
+    const rows = list.map(sp => _renderSubclassSpellRow(charId, ch, sp, prepareType)).join('');
+    return `<div style="margin-top:0.6rem">
+      <strong style="font-size:0.85rem;color:var(--gold-lt)">Level ${lvl}</strong>
+      <div style="margin-top:0.2rem">${rows}</div>
+    </div>`;
+  }).join('');
+
+  const addAllBtn = `<button class="btn btn-primary" onclick="applySubclassSpells(${JSON.stringify(charId)})" style="margin-top:0.8rem;width:100%">Add all unlocked spells</button>`;
+
+  return `<div class="subclass-spell-section" style="margin-bottom:1rem">
+    <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.3rem">
+      <strong style="color:var(--gold);font-size:1rem">${esc(sub)}</strong>
+      <span style="font-size:0.7rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px">${esc(prepLabel)}</span>
+    </div>
+    ${noteHtml}
+    ${groups || '<div style="font-size:0.78rem;color:var(--text-dim);margin-top:0.3rem">No unlocked levels yet.</div>'}
+    ${levelEntries.length ? addAllBtn : ''}
+  </div>`;
+}
+
+function _renderSubclassTablesSection(sub, data) {
+  const tables = Array.isArray(data) ? data : (Array.isArray(data.tables) ? data.tables : []);
+  if (!tables.length) return '';
+
+  const tablesHtml = tables.map((t, ti) => {
+    const entries = t.entries || [];
+    const entriesHtml = entries.map(e => {
+      const txt = e.text != null ? e.text : (e.effect != null ? e.effect : '');
+      return `<tr>
+        <td style="min-width:60px;width:60px;padding:0.4rem 0.6rem;text-align:center;font-weight:bold;color:var(--gold);border-bottom:1px dashed rgba(var(--accent-rgb),0.15);font-family:'Georgia',serif;vertical-align:top">${esc(String(e.roll))}</td>
+        <td style="padding:0.4rem 0.6rem;font-size:0.88rem;line-height:1.45;border-bottom:1px dashed rgba(var(--accent-rgb),0.15);vertical-align:top">${esc(txt)}</td>
+      </tr>`;
+    }).join('');
+    return `<div class="subclass-table" style="margin-top:${ti === 0 ? '0.5rem' : '1.2rem'}">
+      <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.3rem">
+        <strong style="color:var(--gold-lt);font-size:0.95rem">${esc(t.name || 'Table')}</strong>
+        ${t.die ? `<span style="border:1px solid var(--border);color:var(--accent);font-size:0.7rem;padding:0.08rem 0.45rem;border-radius:99px;letter-spacing:1px">${esc(t.die)}</span>` : ''}
+      </div>
+      ${t.trigger ? `<div style="font-size:0.78rem;color:var(--text-dim);margin-bottom:0.4rem;font-style:italic">${esc(t.trigger)}</div>` : ''}
+      <table style="width:100%;border-collapse:collapse">${entriesHtml}</table>
+    </div>`;
+  }).join('');
+
+  return `<div class="subclass-tables-section" style="margin-bottom:1rem">
+    <div style="margin-bottom:0.3rem"><strong style="color:var(--gold);font-size:1rem">${esc(sub)}</strong></div>
+    ${tablesHtml}
+  </div>`;
+}
+
+function openSubclassModal(charId) {
+  const ch = db.characters[charId]; if (!ch) return;
+  const lists = _getSubclassSpellLists();
+  const tables = _getSubclassTables();
+  const subs = _charSubclasses(ch);
+
+  const spellsBlocks = subs.filter(sub => lists[sub])
+    .map(sub => _renderSubclassSpellsSection(charId, ch, sub, lists[sub]))
+    .filter(Boolean).join('');
+
+  const tablesBlocks = subs.filter(sub => tables[sub])
+    .map(sub => _renderSubclassTablesSection(sub, tables[sub]))
+    .filter(Boolean).join('');
+
+  if (!spellsBlocks && !tablesBlocks) {
+    openModal(`<h2>✦ Subclass Spells &amp; Tables</h2>
+      <p style="color:var(--text-dim)">No subclass spell list or special tables found for this character's subclass.</p>
+      <div class="form-actions"><button class="btn" onclick="closeModal()">Close</button></div>`);
+    // Widen the modal anyway
+    const modalEl = document.querySelector('#modal-overlay .modal');
+    if (modalEl) modalEl.style.maxWidth = '640px';
+    return;
+  }
+
+  const spellsHeading = spellsBlocks ? `<h3 style="color:var(--gold-lt);font-size:1rem;margin:0.4rem 0 0.6rem;border-bottom:1px solid rgba(var(--accent-rgb),0.25);padding-bottom:0.3rem">Subclass Spells</h3>${spellsBlocks}` : '';
+  const tablesHeading = tablesBlocks ? `<h3 style="color:var(--gold-lt);font-size:1rem;margin:1rem 0 0.6rem;border-bottom:1px solid rgba(var(--accent-rgb),0.25);padding-bottom:0.3rem">Special Tables</h3>${tablesBlocks}` : '';
+
+  openModal(`<h2 style="margin-bottom:0.4rem">✦ Subclass Spells &amp; Tables</h2>
+    ${spellsHeading}
+    ${tablesHeading}
+    <div class="form-actions" style="margin-top:1rem"><button class="btn" onclick="closeModal()">Close</button></div>`);
+
+  // Widen the modal for this specific use
+  const modalEl = document.querySelector('#modal-overlay .modal');
+  if (modalEl) modalEl.style.maxWidth = '640px';
 }
 
 // ── Cast Modal ────────────────────────────────────────────────────────────────
@@ -4641,8 +4949,12 @@ function renderFeaturesSection(ch) {
     ${sectionLabel('Species &amp; Racial Traits')}
     ${speciesCards}` : '';
 
-  const subSection = subFeatures.length ? `
-    ${sectionLabel('✦ Class &amp; Subclass Features')}
+  const hasSubclassModalData = _hasSubclassData(ch);
+  const subclassModalBtn = hasSubclassModalData
+    ? `<button class="btn btn-sm" onclick="openSubclassModal('${ch.id}')" style="font-size:0.7rem;padding:0.2rem 0.5rem;margin-left:0.5rem;vertical-align:middle;text-transform:none;letter-spacing:0">✦ Spells &amp; Tables</button>`
+    : '';
+  const subSection = (subFeatures.length || hasSubclassModalData) ? `
+    ${sectionLabel('✦ Class &amp; Subclass Features' + subclassModalBtn)}
     ${subCards}` : '';
 
   const bgSection = bgFeatures.length ? `
@@ -5570,6 +5882,25 @@ function showToast(html, duration = 5000) {
   }, duration);
 }
 
+function _updateOnlineBanner(isOnline) {
+  if (!IS_PLAYER_VIEW) return;
+  let banner = document.getElementById('offline-banner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'offline-banner';
+    banner.style.cssText = `
+      position: fixed; bottom: 1rem; left: 50%; transform: translateX(-50%);
+      background: var(--danger, #8b2e2e); color: #fff;
+      padding: 0.5rem 1.25rem; border-radius: 8px;
+      font-size: 0.85rem; z-index: 9999;
+      display: none; box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+    `;
+    banner.textContent = '⚠ You\'re offline — changes won\'t save until reconnected';
+    document.body.appendChild(banner);
+  }
+  banner.style.display = isOnline ? 'none' : 'block';
+}
+
 // ── Sync Subclass Features on Level Change ────────────────────────────────────
 function syncSubclassFeatures(charId) {
   const ch = db.characters[charId];
@@ -6169,6 +6500,12 @@ function renderClassEditor(ch, idx) {
   const eSubclasses = (typeof SUBCLASS_DATA !== 'undefined' && SUBCLASS_DATA[eClass]) ? Object.keys(SUBCLASS_DATA[eClass]) : [];
   function eSuffix(sn) { const src = SUBCLASS_DATA?.[eClass]?.[sn]?.source||''; if(src.includes('2024')) return ' (2024)'; if(src.includes('2014')||src==='PHB') return ' (2014)'; if(src) return ` (${src})`; return ''; }
   const ALL_CLASSES = ['Barbarian','Bard','Cleric','Druid','Fighter','Monk','Paladin','Ranger','Rogue','Sorcerer','Warlock','Wizard','Artificer','Blood Hunter'];
+  const subSpellLists = _getSubclassSpellLists();
+  const subTables = _getSubclassTables();
+  const hasModalData = eSub && (subSpellLists[eSub] || subTables[eSub]);
+  const modalBtn = hasModalData
+    ? `<button class="btn btn-sm" onclick="openSubclassModal('${ch.id}')" style="font-size:0.65rem;padding:0.15rem 0.45rem" title="Subclass spell list & special tables">✦ Spells &amp; Tables</button>`
+    : '';
   return `<div class="mc-editor">
     <select onchange="chClassField(${idx},'class',this.value)">
       ${ALL_CLASSES.map(c=>`<option${eClass===c?' selected':''}>${c}</option>`).join('')}
@@ -6182,6 +6519,7 @@ function renderClassEditor(ch, idx) {
       <span>${entry.level}</span>
       <button onclick="chClassField(${idx},'level',${entry.level + 1})">+</button>
     </div>
+    ${modalBtn}
     ${ch.classes.length > 1 ? `<button class="btn btn-sm btn-danger" onclick="removeCharClass(${idx})" style="font-size:0.65rem;padding:0.15rem 0.4rem">Remove</button>` : ''}
   </div>`;
 }
@@ -6332,6 +6670,13 @@ function combatField(field, value) {
     if (bar) { bar.style.width=pct+'%'; bar.className='hp-bar '+(pct<=25?'low':pct<=50?'mid':''); }
   }
 }
+function adjustCombatStat(field, delta) {
+  const ch = db.characters[currentCharId];
+  if (!ch) return;
+  ch.combat[field] = (+ch.combat[field] || 0) + delta;
+  saveData(db);
+  renderApp();
+}
 function updateAbility(ability, value) {
   db.characters[currentCharId].abilities[ability] = parseInt(value)||10;
   // Recalculate any ability-score-based resource maxes
@@ -6346,6 +6691,12 @@ function updateAbility(ability, value) {
     }
   });
   saveData(db); renderApp();
+}
+function adjustAbility(ability, delta) {
+  const ch = db.characters[currentCharId];
+  if (!ch) return;
+  const next = Math.max(1, Math.min(30, (+ch.abilities[ability] || 10) + delta));
+  updateAbility(ability, next);
 }
 function toggleInspiration() {
   const ch = db.characters[currentCharId]; ch.inspiration = !ch.inspiration;
@@ -8210,6 +8561,9 @@ function _shimmerLongRestBtn() {
 if (IS_PLAYER_VIEW) {
   // Player view: skip auth, load character directly from Firestore
   _initPlayerView();
+  window.addEventListener('online',  () => _updateOnlineBanner(true));
+  window.addEventListener('offline', () => _updateOnlineBanner(false));
+  _updateOnlineBanner(navigator.onLine);
 } else {
   // GM mode: Firebase auth controls the app lifecycle
   initData();
