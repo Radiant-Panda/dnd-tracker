@@ -1398,7 +1398,7 @@ function renderInitiativeTracker(campaign) {
             <div class="init-top">
               <span class="init-name">${esc(cb.name)}</span>
               <span class="init-type ${cb.type}">${cb.type}</span>
-              ${(()=>{ const cs = _getConcentrationSpell(cb); return cs ? `<span class="conc-badge" title="Concentrating on ${esc(cs)}">C: ${esc(cs)}</span><button class="btn btn-sm conc-clear-combat" onclick="clearConcentrationForCombatant(${i})" title="End concentration" style="font-size:0.6rem;padding:0.1rem 0.3rem;margin-left:0.25rem;opacity:0.7">&times;</button>` : ''; })()}
+              ${(()=>{ const cs = _getConcentrationSpell(cb); return cs ? `<span class="conc-badge" title="Concentrating on ${esc(cs)}">C: ${esc(cs)}</span><button class="btn btn-sm conc-clear-combat" onclick="clearConcentrationForCombatant('${cb.charId}')" title="End concentration" style="font-size:0.6rem;padding:0.1rem 0.3rem;margin-left:0.25rem;opacity:0.7">&times;</button>` : ''; })()}
               ${isActive?'<span class="active-arrow">&#9654; Active</span>':''}
             </div>
             <div class="init-stats">
@@ -1788,10 +1788,8 @@ function clearInitiative() {
   });
 }
 
-function clearConcentrationForCombatant(i) {
-  const cb = getInitiative().combatants[i];
-  if (!cb || !cb.charId) return;
-  const ch = db.characters[cb.charId];
+function clearConcentrationForCombatant(charId) {
+  const ch = db.characters[charId];
   if (!ch) return;
   ch.activeConcentration = null;
   saveData(db);
@@ -4026,7 +4024,7 @@ function _renderSubclassSpellRow(charId, ch, spellName, prepareType) {
     <span style="font-size:0.88rem">${esc(spellName)}</span>
     ${have
       ? `<span style="font-size:0.78rem;color:#4ade80;font-weight:bold">✓</span>`
-      : `<button class="btn btn-sm btn-primary" onclick="addSubclassSpellOne(${JSON.stringify(charId)}, ${JSON.stringify(spellName)}, '${prepareType}')" style="font-size:0.7rem;padding:0.1rem 0.5rem">+ Add</button>`}
+      : `<button class="btn btn-sm btn-primary" onclick="addSubclassSpellOne('${charId}', '${spellName.replace(/'/g, "\\'")}', '${prepareType}')" style="font-size:0.7rem;padding:0.1rem 0.5rem">+ Add</button>`}
   </div>`;
 }
 
