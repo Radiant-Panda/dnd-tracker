@@ -4183,7 +4183,7 @@ function _renderSubclassSpellsSection(charId, ch, sub, data) {
     </div>`;
   }).join('');
 
-  const addAllBtn = `<button class="btn btn-primary" onclick="applySubclassSpells(${JSON.stringify(charId)})" style="margin-top:0.8rem;width:100%">Add all unlocked spells</button>`;
+  const addAllBtn = `<button class="btn btn-primary" onclick="applySubclassSpells('${charId}')" style="margin-top:0.8rem;width:100%">Add all unlocked spells</button>`;
 
   return `<div class="subclass-spell-section" style="margin-bottom:1rem">
     <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.3rem">
