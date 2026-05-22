@@ -318,6 +318,7 @@ function _takeSnapshot(data) {
   (data.campaigns || []).forEach(c => { _dbSnap.campaigns[c.id] = JSON.stringify(c); });
   Object.entries(data.characters || {}).forEach(([id, ch]) => { _dbSnap.characters[id] = JSON.stringify(ch); });
   Object.entries(data.npcs || {}).forEach(([id, npc]) => { _dbSnap.npcs[id] = JSON.stringify(npc); });
+  window._dbSnap = _dbSnap; // keep window reference in sync for player listeners
 }
 
 // Debounced Firestore write — called by saveData()
@@ -380,6 +381,7 @@ async function _writeChangesToFirestore(data) {
   try {
     await batch.commit();
     _takeSnapshot(data);
+    _syncPlayerLinkedChars();
     console.log(`[Firestore] Wrote ${changeCount} doc(s)`);
   } catch (e) {
     console.warn('[Firestore] Write failed — data safe in localStorage:', e.message);
@@ -388,6 +390,39 @@ async function _writeChangesToFirestore(data) {
 
 // ── Firestore → local real-time listeners ────────────────────────────────────
 let _snapshotUnsubs = [];
+
+// Per-character listeners for player-editable chars (keeps GM db in sync with player saves)
+let _playerCharListeners = {};
+
+function _syncPlayerLinkedChars() {
+  if (IS_PLAYER_VIEW || !_fireDb) return;
+  const user = firebase.auth().currentUser;
+  if (!user) return;
+  const base = `users/${user.uid}`;
+  Object.entries(db.characters || {}).forEach(([id, ch]) => {
+    if (!ch.shareToken || _playerCharListeners[id]) return;
+    _playerCharListeners[id] = _fireDb
+      .doc(`${base}/characters/${id}`)
+      .onSnapshot(snap => {
+        if (!snap.exists || snap.metadata.hasPendingWrites) return;
+        const fresh = snap.data();
+        if (!fresh) return;
+        // Merge player-owned fields into GM's in-memory db
+        const merged = { ...db.characters[id] };
+        ['combat', 'spells'].forEach(f => {
+          if (fresh[f] !== undefined) merged[f] = fresh[f];
+        });
+        if (fresh.featuresList) merged.featuresList = fresh.featuresList;
+        db.characters[id] = merged;
+        // Update snapshot so next GM save doesn't re-overwrite these fields
+        if (window._dbSnap) {
+          window._dbSnap.characters = window._dbSnap.characters || {};
+          window._dbSnap.characters[id] = JSON.stringify(merged);
+        }
+        renderApp();
+      });
+  });
+}
 
 function _setupFirestoreListeners() {
   if (!_firestoreReady) return;
@@ -830,6 +865,7 @@ function showCampaign(id, tab) {
   currentView = 'campaign'; currentCampaignId = id; currentCharId = null; currentNpcId = null;
   if (tab) { const c = db.campaigns.find(c => c.id === id); if (c) c.campaignTab = tab; }
   renderBreadcrumb(); renderApp();
+  _syncPlayerLinkedChars();
 }
 function showCharacter(id) {
   currentView = 'character'; currentCharId = id;
@@ -4849,6 +4885,14 @@ function renderFeaturesSection(ch) {
   const speciesFeatures  = allFeatures.filter(f => f._species);
   const subFeatures      = allFeatures.filter(f => f._subclass);
   const bgFeatures       = allFeatures.filter(f => f._background);
+  // Re-flag any background-granted feats that lost their _feat flag after a round-trip
+  allFeatures.forEach(f => {
+    if (!f._feat && !f._subclass && !f._species && !f._background &&
+        (f._fromBackground ||
+         (typeof f._featSource === 'string' && f._featSource.startsWith('Background')))) {
+      f._feat = true;
+    }
+  });
   const featFeatures     = allFeatures.filter(f => f._feat);
   const customFeatures   = allFeatures.filter(f => !f._subclass && !f._species && !f._background && !f._feat);
 
@@ -4965,10 +5009,11 @@ function renderFeaturesSection(ch) {
           <span class="sf-source-badge" ${badgeStyle(srcInfo.color)}>${esc(srcInfo.abbr)}</span>
           <span class="sf-name">${esc(f.name)}</span>
           <span class="sf-toggle">▼</span>
-          <button class="feature-del-btn cf-del-btn" onclick="event.stopPropagation();removeFeature(${i})" title="Remove">&times;</button>
+          <button class="feature-del-btn cf-del-btn" onclick="event.stopPropagation();removeFeatureByName('${esc(f.name)}','_feat')" title="Remove">&times;</button>
         </div>
         <div class="sf-card-body hidden" id="${idKey}">
           <p class="sf-desc">${esc(f.desc || 'No description.')}</p>
+          ${f._fromBackground ? `<p style="font-size:0.75rem;color:var(--text-dim);margin-top:0.4rem">Granted by ${esc(f._fromBackground)} background</p>` : ''}
         </div>
       </div>`;
   }).join('');
@@ -5689,21 +5734,39 @@ function addFeature() {
   saveData(db); renderApp();
 }
 function removeFeature(i) {
-  db.characters[currentCharId].featuresList.splice(i, 1);
+  const ch = db.characters[currentCharId];
+  if (!ch || !ch.featuresList) return;
+  const target = ch.featuresList[i];
+  if (target !== undefined) {
+    ch.featuresList.splice(i, 1);
+  }
+  saveData(db); renderApp();
+}
+function removeFeatureByName(name, flag) {
+  const ch = db.characters[currentCharId];
+  if (!ch || !ch.featuresList) return;
+  const idx = ch.featuresList.findIndex(f =>
+    f.name === name && (flag ? f[flag] : true)
+  );
+  if (idx >= 0) ch.featuresList.splice(idx, 1);
   saveData(db); renderApp();
 }
 function updateFeatureField(i, field, value) {
   const ch = db.characters[currentCharId];
   if (ch.featuresList && ch.featuresList[i]) ch.featuresList[i][field] = value;
 }
-function populateClassFeatures() {
-  const ch = db.characters[currentCharId]; if (!ch) return;
+function populateClassFeatures(charIdOverride) {
+  const charId = charIdOverride || currentCharId;
+  const ch = db.characters[charId]; if (!ch) return;
   const cls = ch.class || ch.className || '';
   const lvl = parseInt(ch.level) || 1;
   const feats = getClassFeaturesUpToLevel(cls, lvl);
   if (!feats.length) return;
-  ch.featuresList = [...(ch.featuresList || []), ...feats];
-  saveData(db); renderApp();
+  const existingNames = new Set((ch.featuresList || []).map(f => f.name));
+  const newFeats = feats.filter(f => !existingNames.has(f.name));
+  (ch.featuresList = ch.featuresList || []);
+  newFeats.forEach(f => ch.featuresList.push(f));
+  if (!charIdOverride) { saveData(db); renderApp(); } // only save/render if called from current character
 }
 
 function renderDefensesSection(ch) {
@@ -8248,7 +8311,7 @@ function wizardFinish() {
       const featsPool = FEATS_ITEMS_DATA?.feats || [];
       const featData = featsPool.find(x => x.name === featName)
         || featsPool.find(x => x.name === featName.replace(/\s*\(.*\)$/, ''));
-      ch.featuresList.push({ name: featName, desc: featData?.desc || 'Granted by your background.', _feat: true, _featSource: 'Background (' + wizardData.background + ')' });
+      ch.featuresList.push({ name: featName, desc: featData?.desc || 'Granted by your background.', _feat: true, _featSource: 'PHB24', _fromBackground: wizardData.background });
     }
   }
   // Store species traits
@@ -8263,6 +8326,7 @@ function wizardFinish() {
   db.characters[ch.id] = ch;
   injectBaseClassResources(ch.id);
   if (wizardData.subclass) syncSubclassFeatures(ch.id);
+  populateClassFeatures(ch.id);
   applySpellSlots(ch);
   const c = db.campaigns.find(c => c.id === currentCampaignId);
   (c.characters = c.characters || []).push(ch.id);
@@ -8288,6 +8352,8 @@ async function _setupWizardFinish() {
   }
   ch.combat.maxHP = wizardData.maxHP;
   ch.combat.currentHP = wizardData.maxHP;
+  const dexMod = Math.floor(((wizardData.abilities.dex || 10) - 10) / 2);
+  ch.combat.initiative = dexMod;
   ch.proficiencyBonus = profBonus(wizardData.level);
   if (wizardData.subclass && ch.classes && ch.classes[0]) {
     ch.classes[0].subclass = wizardData.subclass;
@@ -8314,7 +8380,8 @@ async function _setupWizardFinish() {
         name: featName,
         desc: featData?.desc || 'Granted by your background.',
         _feat: true,
-        _featSource: 'Background (' + wizardData.background + ')'
+        _featSource: 'PHB24',
+        _fromBackground: wizardData.background
       });
     }
   }
@@ -8331,6 +8398,7 @@ async function _setupWizardFinish() {
   db.characters[ch.id] = ch;
   try { injectBaseClassResources(ch.id); } catch (e) { console.warn('[Setup] injectBaseClassResources failed:', e); }
   try { if (wizardData.subclass) syncSubclassFeatures(ch.id); } catch (e) { console.warn('[Setup] syncSubclassFeatures failed:', e); }
+  try { populateClassFeatures(ch.id); } catch (e) { console.warn('[Setup] populateClassFeatures failed:', e); }
   try { applySpellSlots(ch); } catch (e) { console.warn('[Setup] applySpellSlots failed:', e); }
   ch.shareToken = 'tok_' + Math.random().toString(36).slice(2, 14);
 
