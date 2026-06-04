@@ -21,6 +21,7 @@ let _firestoreReady = false; // true once Firebase is initialised
 let _storageReady = false;   // true once Firebase Storage is initialised
 let _authReady = false;      // true once Firebase Auth is initialised
 let _fsWriteTimer = null;    // debounce handle
+let _spellSearchTimer = null; // debounce handle for spell search
 const _FS_DEBOUNCE = 1500;   // ms to wait before writing to Firestore
 let _FS_USER = 'local';      // authenticated user's UID (set on sign-in)
 
@@ -46,9 +47,7 @@ function _initFirebase() {
       _fireAuth = firebase.auth();
       _authReady = true;
     }
-    console.log('[Firebase] Initialized — Firestore' +
-      (_storageReady ? ' + Storage' : '') +
-      (_authReady ? ' + Auth' : '') + ' ready');
+
   } catch (e) { console.warn('[Firebase] Init failed:', e); }
 }
 
@@ -95,6 +94,10 @@ function signOut() {
   // Tear down Firestore listeners
   _snapshotUnsubs.forEach(fn => fn());
   _snapshotUnsubs = [];
+  Object.values(_playerCharListeners).forEach(fn => fn());
+  _playerCharListeners = {};
+  _pvListeners.forEach(fn => fn());
+  _pvListeners = [];
   // Clear local state
   _FS_USER = 'local';
   db = { campaigns: [], characters: {}, npcs: {} };
@@ -114,7 +117,6 @@ async function _onAuthStateChanged(user) {
 
   // Set user ID for all Firestore/Storage paths
   _FS_USER = user.uid;
-  console.log('[Auth] Signed in as', user.displayName, '(' + user.uid + ')');
 
   // Show the app
   _showApp();
@@ -150,13 +152,7 @@ async function _initDataForUser(hasLocalData) {
       // Load from Firestore
       const remoteCampaigns = [];
       campSnap.forEach(doc => {
-        const c = doc.data();
-        if (!c.npcs) c.npcs = [];
-        if (!c.initiative) c.initiative = null;
-        if (!c.campaignTab) c.campaignTab = 'characters';
-        if (c.activeCharId === undefined) c.activeCharId = (c.characters || [])[0] || null;
-        if (!c.journal) c.journal = [];
-        remoteCampaigns.push(c);
+        remoteCampaigns.push(migrateCampaign(doc.data()));
       });
       const remoteChars = {};
       charSnap.forEach(doc => {
@@ -174,7 +170,7 @@ async function _initDataForUser(hasLocalData) {
       db.characters = remoteChars;
       db.npcs       = remoteNpcs;
       try { localStorage.setItem(STORAGE_KEY, JSON.stringify(db)); } catch (_) {}
-      console.log('[Firestore] Loaded data from cloud');
+
       renderApp();
 
       // If there was also local data that's different, offer to merge
@@ -192,7 +188,7 @@ async function _initDataForUser(hasLocalData) {
       }
     } else if (hasLocalData) {
       // No remote data — offer to migrate local data up
-      console.log('[Firestore] No cloud data — offering local data migration');
+
       showToast(
         '<span style="cursor:pointer" onclick="_migrateLocalToCloud()">Local data found — <b>click here</b> to sync it to the cloud.</span>',
         10000
@@ -242,7 +238,7 @@ async function _deletePortraitFromStorage(charId) {
   const path = `portraits/${_FS_USER}/${charId}.jpg`;
   try {
     await _fireStorage.ref(path).delete();
-    console.log(`[Storage] Deleted portrait for ${charId}`);
+
   } catch (e) {
     // Ignore "not found" errors — portrait may not exist in Storage
     if (e.code !== 'storage/object-not-found') {
@@ -279,7 +275,7 @@ async function _savePortraitWithUpload(charId, dataUrl) {
     try {
       const downloadUrl = await _uploadPortraitToStorage(charId, dataUrl);
       ch.portrait = downloadUrl;
-      console.log(`[Storage] Portrait uploaded for ${charId}`);
+
       saveData(db);
       renderApp();
       return;
@@ -305,7 +301,7 @@ function _queuePortraitMigration(charId) {
       ch.portrait = downloadUrl;
       saveData(db);
       renderApp();
-      console.log(`[Storage] Migrated base64 portrait for ${charId}`);
+
     } catch (e) {
       console.warn(`[Storage] Portrait migration failed for ${charId}:`, e.message);
     }
@@ -326,6 +322,11 @@ function _debouncedFirestoreWrite(data) {
   if (!_firestoreReady || _fromFirestore) return;
   clearTimeout(_fsWriteTimer);
   _fsWriteTimer = setTimeout(() => _writeChangesToFirestore(data), _FS_DEBOUNCE);
+}
+
+function _debouncedSpellSearch() {
+  clearTimeout(_spellSearchTimer);
+  _spellSearchTimer = setTimeout(updateSpellResults, 200);
 }
 
 async function _writeChangesToFirestore(data) {
@@ -382,7 +383,7 @@ async function _writeChangesToFirestore(data) {
     await batch.commit();
     _takeSnapshot(data);
     _syncPlayerLinkedChars();
-    console.log(`[Firestore] Wrote ${changeCount} doc(s)`);
+
   } catch (e) {
     console.warn('[Firestore] Write failed — data safe in localStorage:', e.message);
   }
@@ -398,6 +399,14 @@ function _syncPlayerLinkedChars() {
   if (IS_PLAYER_VIEW || !_fireDb) return;
   const user = firebase.auth().currentUser;
   if (!user) return;
+  // Remove listeners for characters that were deleted or had their shareToken revoked
+  Object.keys(_playerCharListeners).forEach(id => {
+    const ch = db.characters[id];
+    if (!ch || !ch.shareToken) {
+      _playerCharListeners[id]();
+      delete _playerCharListeners[id];
+    }
+  });
   const base = `users/${user.uid}`;
   Object.entries(db.characters || {}).forEach(([id, ch]) => {
     if (!ch.shareToken || _playerCharListeners[id]) return;
@@ -429,6 +438,8 @@ function _setupFirestoreListeners() {
   // Tear down any existing listeners
   _snapshotUnsubs.forEach(fn => fn());
   _snapshotUnsubs = [];
+  Object.values(_playerCharListeners).forEach(fn => fn());
+  _playerCharListeners = {};
   const base = `users/${_FS_USER}`;
 
   // Campaigns listener
@@ -442,15 +453,7 @@ function _setupFirestoreListeners() {
       const remoteIds = new Set(Object.keys(remoteCampaigns));
       const merged = [];
       // Add all remote campaigns (update or new)
-      Object.values(remoteCampaigns).forEach(c => {
-        // Ensure campaign migrations
-        if (!c.npcs) c.npcs = [];
-        if (!c.initiative) c.initiative = null;
-        if (!c.campaignTab) c.campaignTab = 'characters';
-        if (c.activeCharId === undefined) c.activeCharId = (c.characters || [])[0] || null;
-        if (!c.journal) c.journal = [];
-        merged.push(c);
-      });
+      Object.values(remoteCampaigns).forEach(c => { merged.push(migrateCampaign(c)); });
       db.campaigns = merged;
       _takeSnapshot(db);
       saveData(db); // localStorage only (re-write suppressed by _fromFirestore flag)
@@ -503,6 +506,7 @@ function _setupFirestoreListeners() {
 
 // ── Async init — sets up Firebase and auth listener ─────────────────────────
 function initData() {
+  try { localStorage.removeItem(SPELL_ALL_KEY); } catch (_) {} // free quota from old spell cache
   _initFirebase();
   if (!_authReady) {
     // No auth available — run in local-only mode, show app immediately
@@ -564,10 +568,7 @@ async function _initPlayerView() {
 
     // Set up app state
     const camp = campDoc.data();
-    if (!camp.npcs) camp.npcs = [];
-    if (!camp.initiative) camp.initiative = null;
-    if (!camp.campaignTab) camp.campaignTab = 'characters';
-    if (!camp.journal) camp.journal = [];
+    migrateCampaign(camp);
     migrateCharacter(ch);
 
     db.campaigns = [camp];
@@ -609,7 +610,7 @@ async function _initPlayerView() {
       }, err => console.warn('[PlayerView] Character listener error:', err))
     );
 
-    console.log('[PlayerView] Loaded — player:', ch.name);
+
   } catch (e) {
     console.error('[PlayerView] Init failed:', e);
     _pvShowError('Failed to load character. Check your connection and try again.');
@@ -690,6 +691,15 @@ function _copyShareUrl() {
     document.execCommand('copy');
     showToast('<span style="color:#22c55e">&#10003; Link copied!</span>', 2000);
   });
+}
+
+function migrateCampaign(c) {
+  if (!c.npcs) c.npcs = [];
+  if (!c.initiative) c.initiative = null;
+  if (!c.campaignTab) c.campaignTab = 'characters';
+  if (c.activeCharId === undefined) c.activeCharId = (c.characters || [])[0] || null;
+  if (!c.journal) c.journal = [];
+  return c;
 }
 
 function migrateCharacter(ch) {
@@ -789,13 +799,7 @@ function loadData() {
     const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) || localStorage.getItem(STORAGE_KEY_BACKUP));
     if (!raw) return { campaigns: [], characters: {}, npcs: {} };
     if (!raw.npcs) raw.npcs = {};
-    raw.campaigns.forEach(c => {
-      if (!c.npcs) c.npcs = [];
-      if (!c.initiative) c.initiative = null;
-      if (!c.campaignTab) c.campaignTab = 'characters';
-      if (c.activeCharId === undefined) c.activeCharId = (c.characters||[])[0] || null;
-      if (!c.journal) c.journal = [];
-    });
+    raw.campaigns.forEach(c => migrateCampaign(c));
     Object.values(raw.characters).forEach(ch => migrateCharacter(ch));
     return raw;
   } catch { return { campaigns: [], characters: {}, npcs: {} }; }
@@ -823,7 +827,9 @@ function saveData(data) {
 }
 
 function uid() {
-  return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  const arr = new Uint8Array(6);
+  crypto.getRandomValues(arr);
+  return Date.now().toString(36) + Array.from(arr, b => b.toString(16).padStart(2, '0')).join('');
 }
 
 // ── Player View Detection ────────────────────────────────────────────────────
@@ -1015,9 +1021,9 @@ function openSetupLinkModal() {
   const camp = db.campaigns.find(c => c.id === currentCampaignId);
   if (!camp) return;
   const hasToken = !!camp.setupToken;
-  const uid = firebase.auth().currentUser?.uid || '';
+  const currentUserUid = firebase.auth().currentUser?.uid || '';
   const link = hasToken
-    ? `${window.location.origin}${window.location.pathname}?mode=setup&gmId=${uid}&campaignId=${camp.id}&token=${camp.setupToken}`
+    ? `${window.location.origin}${window.location.pathname}?mode=setup&gmId=${currentUserUid}&campaignId=${camp.id}&token=${camp.setupToken}`
     : '';
   const safeLink = link.replace(/'/g, "\\'");
   openModal(`
@@ -1042,7 +1048,7 @@ function openSetupLinkModal() {
 function _generateSetupToken() {
   const camp = db.campaigns.find(c => c.id === currentCampaignId);
   if (!camp) return;
-  camp.setupToken = 'setup_' + Math.random().toString(36).slice(2, 14);
+  camp.setupToken = 'setup_' + uid();
   saveData(db);
   openSetupLinkModal(); // re-render
 }
@@ -2170,7 +2176,6 @@ function searchMonsters(resetCount) {
     }).join('')
     + (remaining > 0 ? `<button class="btn btn-sm" style="width:100%;margin-top:0.5rem" onclick="monsterShowCount+=80;searchMonsters(false)">Show more (${remaining} remaining)</button>` : '');
 }
-function showMoreMonsters() { monsterShowCount += 80; searchMonsters(false); }
 
 function _isLimitedMonster(m) {
   return !m.str && !Object.values(m.desc_sections || {}).some(v => v);
@@ -2706,7 +2711,7 @@ function renderPortraitCard(ch) {
   const py = ch.portraitY !== undefined ? ch.portraitY : 50;
   const portraitInner = hasPortrait
     ? `<div class="portrait-img-wrap">
-        <img src="${ch.portrait}" style="width:100%;height:100%;object-fit:cover;object-position:${px}% ${py}%;transform:scale(${zoom/100});transform-origin:${px}% ${py}%">
+        <img src="${esc(ch.portrait)}" style="width:100%;height:100%;object-fit:cover;object-position:${px}% ${py}%;transform:scale(${zoom/100});transform-origin:${px}% ${py}%">
       </div>`
     : `<span class="portrait-icon">${icon}</span>`;
   return `<div class="portrait-card">
@@ -3555,6 +3560,9 @@ const SCHOOL_COLORS = {
 const SPELL_ALL_KEY    = 'dnd_spells_local_v1';
 const CUSTOM_SPELLS_KEY = 'dnd_custom_spells_v1';
 
+const _SPELL_SRC_FILTER = { "Player's Handbook (2024)":'phb2024', "Xanathar's Guide to Everything":'xge', "Tasha's Cauldron of Everything":'tce', "Explorer's Guide to Wildemount":'egw', "Free Basic Rules (2024)":'basic2024', "Free Basic Rules (2014)":'basic2014', "Player's Handbook":'phb2014' };
+const _SPELL_SRC_DISPLAY = { "Player's Handbook (2024)":{abbr:'PHB24',color:'#c084fc'}, "Xanathar's Guide to Everything":{abbr:'XGE',color:'#3b82f6'}, "Tasha's Cauldron of Everything":{abbr:'TCE',color:'#14b8a6'}, "Explorer's Guide to Wildemount":{abbr:'EGW',color:'#f59e0b'}, "Free Basic Rules (2024)":{abbr:'BR24',color:'#9b6dff'}, "Free Basic Rules (2014)":{abbr:'BR14',color:'#9b6dff'}, "Player's Handbook":{abbr:'PHB14',color:'#6d7b9b'} };
+
 let allSpellsDb   = null; // sorted master list from API
 let customSpells  = null; // [{...}, ...]  user-created
 let spellViewTab  = 'all'; // 'all' | 'known' | 'prepared'
@@ -3562,14 +3570,8 @@ let spellFilters  = { q:'', level:'all', school:'all', cls:'all', source:'all', 
 let spellFetching = false;
 let spellShowCount = 100;
 
-function loadAllSpells() {
-  if (allSpellsDb) return;
-  try { allSpellsDb = JSON.parse(localStorage.getItem(SPELL_ALL_KEY)) || null; }
-  catch { allSpellsDb = null; }
-}
-function saveAllSpells() {
-  try { localStorage.setItem(SPELL_ALL_KEY, JSON.stringify(allSpellsDb)); } catch {}
-}
+function loadAllSpells() { /* in-memory only — spells.json is browser-cached by HTTP */ }
+function saveAllSpells() { /* no-op — removed localStorage caching to save quota */ }
 function loadCustomSpells() {
   if (customSpells) return;
   try { customSpells = JSON.parse(localStorage.getItem(CUSTOM_SPELLS_KEY)) || []; }
@@ -3698,8 +3700,7 @@ function getFilteredAllSpells(ch) {
       if (!classes.includes(f.cls.toLowerCase())) return false;
     }
     if (f.source !== 'all') {
-      const sourceMap = { "Player's Handbook (2024)": 'phb2024', "Xanathar's Guide to Everything": 'xge', "Tasha's Cauldron of Everything": 'tce', "Explorer's Guide to Wildemount": 'egw', "Free Basic Rules (2024)": 'basic2024', "Free Basic Rules (2014)": 'basic2014', "Player's Handbook": 'phb2014' };
-      if (sourceMap[sp.source] !== f.source) return false;
+      if (_SPELL_SRC_FILTER[sp.source] !== f.source) return false;
     }
     if (f.conc   && sp.concentration !== 'yes') return false;
     if (f.ritual && sp.ritual        !== 'yes') return false;
@@ -3724,7 +3725,7 @@ function renderFilterBar() {
     <div class="spell-search-wrap">
       <span class="spell-search-icon">✾</span>
       <input type="text" class="spell-filter-input" placeholder="Search spells…" value="${esc(spellFilters.q)}"
-        oninput="spellFilters.q=this.value;updateSpellResults()">
+        oninput="spellFilters.q=this.value;_debouncedSpellSearch()">
     </div>
     <select class="spell-filter-select" onchange="applySpellFilter('level',this.value)">
       <option value="all"${spellFilters.level==='all'?' selected':''}>All Levels</option>
@@ -3779,8 +3780,7 @@ function renderSpellResultsHtml(ch) {
           const lvlLabel = sp.level_int === 0 ? 'Cantrip' : sp.level || '';
           const inK = known.has(sp.name);
           const inP = prepared.has(sp.name);
-          const sourceMap = { "Player's Handbook (2024)": {abbr:'PHB24',color:'#c084fc'}, "Xanathar's Guide to Everything": {abbr:'XGE',color:'#3b82f6'}, "Tasha's Cauldron of Everything": {abbr:'TCE',color:'#14b8a6'}, "Explorer's Guide to Wildemount": {abbr:'EGW',color:'#f59e0b'}, "Free Basic Rules (2024)": {abbr:'BR24',color:'#9b6dff'}, "Free Basic Rules (2014)": {abbr:'BR14',color:'#9b6dff'}, "Player's Handbook": {abbr:'PHB14',color:'#6d7b9b'} };
-          const srcInfo = sourceMap[sp.source] || {abbr:'?',color:'#7b6d8d'};
+          const srcInfo = _SPELL_SRC_DISPLAY[sp.source] || {abbr:'?',color:'#7b6d8d'};
           const safeData = encodeURIComponent(JSON.stringify({name:sp.name,level_int:sp.level_int||0,school:sp.school||'',casting_time:sp.casting_time||'',range:sp.range||'',components:sp.components||'',concentration:sp.concentration||'no',ritual:sp.ritual||'no',dnd_class:sp.dnd_class||'',_custom:sp._custom||false}));
           return `<div class="spell-browser-row">
             <div class="spell-browser-left">
@@ -4880,6 +4880,15 @@ function getClassFeaturesUpToLevel(className, level) {
   return list.filter(([lvl]) => lvl <= level).map(([lvl, name, desc]) => ({ name, desc }));
 }
 
+function openFeatureModal(name, desc) {
+  openModal(`
+    <h3 style="margin:0 0 0.75rem;color:var(--gold)">${esc(name)}</h3>
+    <p style="white-space:pre-wrap;line-height:1.6;color:var(--text)">${esc(desc || 'No description.')}</p>
+    <div class="form-actions" style="margin-top:1rem;justify-content:flex-end">
+      <button class="btn" onclick="closeModal()">Close</button>
+    </div>`);
+}
+
 function renderFeaturesSection(ch) {
   const allFeatures = ch.featuresList || [];
   const speciesFeatures  = allFeatures.filter(f => f._species);
@@ -4894,7 +4903,10 @@ function renderFeaturesSection(ch) {
     }
   });
   const featFeatures     = allFeatures.filter(f => f._feat);
-  const customFeatures   = allFeatures.filter(f => !f._subclass && !f._species && !f._background && !f._feat);
+  // Class features: either explicitly flagged, or name matches a known class feature (handles old data without _class flag)
+  const knownClassNames  = new Set((CLASS_FEATURES[ch.class] || []).map(([, name]) => name));
+  const classFeatures    = allFeatures.filter(f => !f._subclass && !f._species && !f._background && !f._feat && (f._class || knownClassNames.has(f.name)));
+  const customFeatures   = allFeatures.filter(f => !f._subclass && !f._species && !f._background && !f._feat && !f._class && !knownClassNames.has(f.name));
 
   // Build a map from resource name → resource object for quick lookup
   const resourceMap = {};
@@ -5018,6 +5030,20 @@ function renderFeaturesSection(ch) {
       </div>`;
   }).join('');
 
+  // Class feature cards — click to open modal popup
+  const classCards = classFeatures.map(f => {
+    const safeDesc = esc(f.desc || 'No description.');
+    const safeName = esc(f.name);
+    return `
+      <div class="sf-card" onclick="openFeatureModal('${safeName.replace(/'/g,"&#39;")}','${safeDesc.replace(/'/g,"&#39;")}')">
+        <div class="sf-card-header" style="cursor:pointer">
+          <span class="sf-source-badge" ${badgeStyle('#6366f1')}>${esc(f._class || ch.class)}</span>
+          <span class="sf-name">${esc(f.name)}</span>
+          <span class="sf-toggle" style="font-size:0.7rem;opacity:0.6">↗</span>
+        </div>
+      </div>`;
+  }).join('');
+
   // Custom feature cards — editable
   const customRows = customFeatures.map(f => {
     const i = allFeatures.indexOf(f);
@@ -5056,8 +5082,12 @@ function renderFeaturesSection(ch) {
   const subclassModalBtn = hasSubclassModalData
     ? `<button class="btn btn-sm" onclick="openSubclassModal('${ch.id}')" style="font-size:0.7rem;padding:0.2rem 0.5rem;margin-left:0.5rem;vertical-align:middle;text-transform:none;letter-spacing:0">✦ Spells &amp; Tables</button>`
     : '';
+  const classSection = classFeatures.length ? `
+    ${sectionLabel(`${esc(ch.class || 'Class')} Features`)}
+    ${classCards}` : '';
+
   const subSection = (subFeatures.length || hasSubclassModalData) ? `
-    ${sectionLabel('✦ Class &amp; Subclass Features' + subclassModalBtn)}
+    ${sectionLabel('✦ Subclass Features' + subclassModalBtn)}
     ${subCards}` : '';
 
   const bgSection = bgFeatures.length ? `
@@ -5081,6 +5111,7 @@ function renderFeaturesSection(ch) {
   return `<div class="sheet-panel features-panel" style="margin-top:0.6rem">
     <div class="cs-section-label">Features &amp; Traits</div>
     ${speciesSection}
+    ${classSection}
     ${subSection}
     ${bgSection}
     ${featSection}
@@ -5765,7 +5796,7 @@ function populateClassFeatures(charIdOverride) {
   const existingNames = new Set((ch.featuresList || []).map(f => f.name));
   const newFeats = feats.filter(f => !existingNames.has(f.name));
   (ch.featuresList = ch.featuresList || []);
-  newFeats.forEach(f => ch.featuresList.push(f));
+  newFeats.forEach(f => ch.featuresList.push({ ...f, _class: cls }));
   if (!charIdOverride) { saveData(db); renderApp(); } // only save/render if called from current character
 }
 
@@ -8400,7 +8431,7 @@ async function _setupWizardFinish() {
   try { if (wizardData.subclass) syncSubclassFeatures(ch.id); } catch (e) { console.warn('[Setup] syncSubclassFeatures failed:', e); }
   try { populateClassFeatures(ch.id); } catch (e) { console.warn('[Setup] populateClassFeatures failed:', e); }
   try { applySpellSlots(ch); } catch (e) { console.warn('[Setup] applySpellSlots failed:', e); }
-  ch.shareToken = 'tok_' + Math.random().toString(36).slice(2, 14);
+  ch.shareToken = 'tok_' + uid();
 
   // Show saving spinner
   const appEl = document.getElementById('app');
@@ -8580,7 +8611,7 @@ function importData(event) {
 // ── Utility ────────────────────────────────────────────────────────────────────
 function esc(str) {
   if(str==null) return '';
-  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
