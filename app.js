@@ -77,7 +77,25 @@ async function signInWithGoogle() {
   }
   try {
     const provider = new firebase.auth.GoogleAuthProvider();
-    await _fireAuth.signInWithPopup(provider);
+    const cur = _fireAuth.currentUser;
+    if (cur && cur.isAnonymous) {
+      // Upgrade the anonymous session in place. linkWithPopup keeps the same uid,
+      // so anything already written under it stays reachable after signing in.
+      try {
+        await cur.linkWithPopup(provider);
+      } catch (err) {
+        // Already have a real account? Sign into it instead of failing outright.
+        // Anything created under the anonymous uid stays behind and needs migrating.
+        if (err && (err.code === 'auth/credential-already-in-use'
+                 || err.code === 'auth/email-already-in-use')) {
+          await _fireAuth.signInWithPopup(provider);
+        } else {
+          throw err;
+        }
+      }
+    } else {
+      await _fireAuth.signInWithPopup(provider);
+    }
     // onAuthStateChanged will handle the rest
   } catch (e) {
     console.warn('[Auth] Sign-in failed:', e.message);
@@ -110,7 +128,11 @@ function signOut() {
 }
 
 async function _onAuthStateChanged(user) {
-  if (!user) {
+  // Anonymous sessions are created by the player and setup views purely to satisfy
+  // the Firestore rules. They must never reach GM mode: an anonymous uid lives only
+  // in browser storage, so campaigns created under one are orphaned the moment that
+  // storage is cleared or the player switches browser or device.
+  if (!user || user.isAnonymous) {
     _showAuthGate();
     return;
   }
