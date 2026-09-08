@@ -1268,7 +1268,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Actor",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {
@@ -1280,7 +1280,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Adept of the Black Robes",
       "source": "Dragonlance",
       "source_key": "DSotDQ",
-      "category": "",
+      "category": "General",
       "prerequisite": "Level 4+",
       "repeatable": false,
       "ability_bonus": {},
@@ -1290,7 +1290,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Adept of the Red Robes",
       "source": "Dragonlance",
       "source_key": "DSotDQ",
-      "category": "",
+      "category": "General",
       "prerequisite": "Level 4+",
       "repeatable": false,
       "ability_bonus": {},
@@ -1300,7 +1300,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Adept of the White Robes",
       "source": "Dragonlance",
       "source_key": "DSotDQ",
-      "category": "",
+      "category": "General",
       "prerequisite": "Level 4+",
       "repeatable": false,
       "ability_bonus": {},
@@ -1310,7 +1310,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Alert",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {},
@@ -1320,7 +1320,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Artificer Initiate",
       "source": "Tasha's",
       "source_key": "TCE",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {},
@@ -1330,7 +1330,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Athlete",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {
@@ -1349,7 +1349,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Bountiful Luck",
       "source": "Xanathar's",
       "source_key": "XGE",
-      "category": "",
+      "category": "General",
       "prerequisite": "halfling",
       "repeatable": false,
       "ability_bonus": {},
@@ -1359,7 +1359,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Charger",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {},
@@ -1369,7 +1369,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Chef",
       "source": "Tasha's",
       "source_key": "TCE",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {
@@ -1388,7 +1388,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Crossbow Expert",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {},
@@ -1398,7 +1398,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Crusher",
       "source": "Tasha's",
       "source_key": "TCE",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {
@@ -1417,7 +1417,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Defensive Duelist",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "DEX 13+",
       "repeatable": false,
       "ability_bonus": {},
@@ -1427,7 +1427,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Divinely Favored",
       "source": "Dragonlance",
       "source_key": "DSotDQ",
-      "category": "",
+      "category": "General",
       "prerequisite": "Level 4+",
       "repeatable": false,
       "ability_bonus": {},
@@ -1437,7 +1437,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Dragon Fear",
       "source": "Xanathar's",
       "source_key": "XGE",
-      "category": "",
+      "category": "General",
       "prerequisite": "dragonborn",
       "repeatable": false,
       "ability_bonus": {
@@ -1457,7 +1457,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Dragon Hide",
       "source": "Xanathar's",
       "source_key": "XGE",
-      "category": "",
+      "category": "General",
       "prerequisite": "dragonborn",
       "repeatable": false,
       "ability_bonus": {
@@ -1477,7 +1477,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Drow High Magic",
       "source": "Xanathar's",
       "source_key": "XGE",
-      "category": "",
+      "category": "General",
       "prerequisite": "elf",
       "repeatable": false,
       "ability_bonus": {},
@@ -1487,7 +1487,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Dual Wielder",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {},
@@ -1497,7 +1497,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Dungeon Delver",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {},
@@ -1507,7 +1507,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Durable",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {
@@ -1519,7 +1519,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Dwarven Fortitude",
       "source": "Xanathar's",
       "source_key": "XGE",
-      "category": "",
+      "category": "General",
       "prerequisite": "dwarf",
       "repeatable": false,
       "ability_bonus": {
@@ -1531,7 +1531,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Eldritch Adept",
       "source": "Tasha's",
       "source_key": "TCE",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {},
@@ -1541,7 +1541,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Elemental Adept",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "Spellcasting",
       "repeatable": false,
       "ability_bonus": {},
@@ -1551,7 +1551,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Elven Accuracy",
       "source": "Xanathar's",
       "source_key": "XGE",
-      "category": "",
+      "category": "General",
       "prerequisite": "elf or half-elf",
       "repeatable": false,
       "ability_bonus": {
@@ -1572,7 +1572,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Ember of the Fire Giant",
       "source": "Bigby's",
       "source_key": "BGG",
-      "category": "",
+      "category": "General",
       "prerequisite": "Level 4+",
       "repeatable": false,
       "ability_bonus": {
@@ -1592,7 +1592,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Fade Away",
       "source": "Xanathar's",
       "source_key": "XGE",
-      "category": "",
+      "category": "General",
       "prerequisite": "gnome",
       "repeatable": false,
       "ability_bonus": {
@@ -1611,7 +1611,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Fey Teleportation",
       "source": "Xanathar's",
       "source_key": "XGE",
-      "category": "",
+      "category": "General",
       "prerequisite": "elf",
       "repeatable": false,
       "ability_bonus": {
@@ -1630,7 +1630,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Fey Touched",
       "source": "Tasha's",
       "source_key": "TCE",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {
@@ -1650,7 +1650,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Fighting Initiate",
       "source": "Tasha's",
       "source_key": "TCE",
-      "category": "",
+      "category": "General",
       "prerequisite": "Proficiency",
       "repeatable": false,
       "ability_bonus": {},
@@ -1660,7 +1660,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Flames of Phlegethos",
       "source": "Xanathar's",
       "source_key": "XGE",
-      "category": "",
+      "category": "General",
       "prerequisite": "tiefling",
       "repeatable": false,
       "ability_bonus": {
@@ -1679,7 +1679,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Fury of the Frost Giant",
       "source": "Bigby's",
       "source_key": "BGG",
-      "category": "",
+      "category": "General",
       "prerequisite": "Level 4+",
       "repeatable": false,
       "ability_bonus": {
@@ -1699,7 +1699,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Grappler",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "STR 13+",
       "repeatable": false,
       "ability_bonus": {},
@@ -1709,7 +1709,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Great Weapon Master",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {},
@@ -1719,7 +1719,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Guile of the Cloud Giant",
       "source": "Bigby's",
       "source_key": "BGG",
-      "category": "",
+      "category": "General",
       "prerequisite": "Level 4+",
       "repeatable": false,
       "ability_bonus": {
@@ -1739,7 +1739,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Gunner",
       "source": "Tasha's",
       "source_key": "TCE",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {
@@ -1751,7 +1751,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Healer",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {},
@@ -1761,7 +1761,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Heavily Armored",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "Proficiency",
       "repeatable": false,
       "ability_bonus": {
@@ -1773,7 +1773,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Heavy Armor Master",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "Proficiency",
       "repeatable": false,
       "ability_bonus": {
@@ -1785,7 +1785,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Infernal Constitution",
       "source": "Xanathar's",
       "source_key": "XGE",
-      "category": "",
+      "category": "General",
       "prerequisite": "tiefling",
       "repeatable": false,
       "ability_bonus": {
@@ -1797,7 +1797,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Initiate of High Sorcery",
       "source": "Dragonlance",
       "source_key": "DSotDQ",
-      "category": "",
+      "category": "General",
       "prerequisite": "Level {'level': 1, 'class': {'name': 'Sorcerer', 'visible': True}}+, Level {'level': 1, 'class': {'name': 'Wizard', 'visible': True}}+",
       "repeatable": false,
       "ability_bonus": {},
@@ -1807,7 +1807,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Inspiring Leader",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "CHA 13+",
       "repeatable": false,
       "ability_bonus": {},
@@ -1817,7 +1817,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Keen Mind",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {
@@ -1829,7 +1829,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Keenness of the Stone Giant",
       "source": "Bigby's",
       "source_key": "BGG",
-      "category": "",
+      "category": "General",
       "prerequisite": "Level 4+",
       "repeatable": false,
       "ability_bonus": {
@@ -1849,7 +1849,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Knight of the Crown",
       "source": "Dragonlance",
       "source_key": "DSotDQ",
-      "category": "",
+      "category": "General",
       "prerequisite": "Level 4+",
       "repeatable": false,
       "ability_bonus": {
@@ -1869,7 +1869,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Knight of the Rose",
       "source": "Dragonlance",
       "source_key": "DSotDQ",
-      "category": "",
+      "category": "General",
       "prerequisite": "Level 4+",
       "repeatable": false,
       "ability_bonus": {
@@ -1889,7 +1889,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Knight of the Sword",
       "source": "Dragonlance",
       "source_key": "DSotDQ",
-      "category": "",
+      "category": "General",
       "prerequisite": "Level 4+",
       "repeatable": false,
       "ability_bonus": {
@@ -1909,7 +1909,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Lightly Armored",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {
@@ -1928,7 +1928,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Linguist",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {
@@ -1940,7 +1940,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Lucky",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {},
@@ -1950,7 +1950,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Mage Slayer",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {},
@@ -1960,7 +1960,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Magic Initiate",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {},
@@ -1970,7 +1970,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Martial Adept",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {},
@@ -1980,7 +1980,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Medium Armor Master",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "Proficiency",
       "repeatable": false,
       "ability_bonus": {},
@@ -1990,7 +1990,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Metamagic Adept",
       "source": "Tasha's",
       "source_key": "TCE",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {},
@@ -2000,7 +2000,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Mobile",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {},
@@ -2010,7 +2010,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Moderately Armored",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "Proficiency",
       "repeatable": false,
       "ability_bonus": {
@@ -2029,7 +2029,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Mounted Combatant",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {},
@@ -2039,7 +2039,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Observant",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {
@@ -2058,7 +2058,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Orcish Fury",
       "source": "Xanathar's",
       "source_key": "XGE",
-      "category": "",
+      "category": "General",
       "prerequisite": "half-orc",
       "repeatable": false,
       "ability_bonus": {
@@ -2077,7 +2077,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Piercer",
       "source": "Tasha's",
       "source_key": "TCE",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {
@@ -2096,7 +2096,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Poisoner",
       "source": "Tasha's",
       "source_key": "TCE",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {},
@@ -2106,7 +2106,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Polearm Master",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {},
@@ -2116,7 +2116,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Prodigy",
       "source": "Xanathar's",
       "source_key": "XGE",
-      "category": "",
+      "category": "General",
       "prerequisite": "half-elf or half-orc or human",
       "repeatable": false,
       "ability_bonus": {},
@@ -2126,7 +2126,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Resilient",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {
@@ -2149,7 +2149,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Ritual Caster",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "INT 13+, WIS 13+",
       "repeatable": false,
       "ability_bonus": {},
@@ -2159,7 +2159,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Rune Shaper",
       "source": "Bigby's",
       "source_key": "BGG",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {},
@@ -2169,7 +2169,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Savage Attacker",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {},
@@ -2179,7 +2179,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Second Chance",
       "source": "Xanathar's",
       "source_key": "XGE",
-      "category": "",
+      "category": "General",
       "prerequisite": "halfling",
       "repeatable": false,
       "ability_bonus": {
@@ -2199,7 +2199,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Sentinel",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {},
@@ -2209,7 +2209,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Shadow Touched",
       "source": "Tasha's",
       "source_key": "TCE",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {
@@ -2229,7 +2229,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Sharpshooter",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {},
@@ -2239,7 +2239,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Shield Master",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {},
@@ -2249,7 +2249,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Skill Expert",
       "source": "Tasha's",
       "source_key": "TCE",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {
@@ -2272,7 +2272,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Skilled",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {},
@@ -2282,7 +2282,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Skulker",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "DEX 13+",
       "repeatable": false,
       "ability_bonus": {},
@@ -2292,7 +2292,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Slasher",
       "source": "Tasha's",
       "source_key": "TCE",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {
@@ -2311,7 +2311,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Soul of the Storm Giant",
       "source": "Bigby's",
       "source_key": "BGG",
-      "category": "",
+      "category": "General",
       "prerequisite": "Level 4+",
       "repeatable": false,
       "ability_bonus": {
@@ -2331,7 +2331,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Spell Sniper",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "Spellcasting",
       "repeatable": false,
       "ability_bonus": {},
@@ -2341,7 +2341,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Squat Nimbleness",
       "source": "Xanathar's",
       "source_key": "XGE",
-      "category": "",
+      "category": "General",
       "prerequisite": "dwarf or small race",
       "repeatable": false,
       "ability_bonus": {
@@ -2360,7 +2360,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Squire of Solamnia",
       "source": "Dragonlance",
       "source_key": "DSotDQ",
-      "category": "",
+      "category": "General",
       "prerequisite": "Level {'level': 1, 'class': {'name': 'Fighter', 'visible': True}}+, Level {'level': 1, 'class': {'name': 'Paladin', 'visible': True}}+",
       "repeatable": false,
       "ability_bonus": {},
@@ -2370,7 +2370,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Strike of the Giants",
       "source": "Bigby's",
       "source_key": "BGG",
-      "category": "",
+      "category": "General",
       "prerequisite": "Proficiency",
       "repeatable": false,
       "ability_bonus": {},
@@ -2380,7 +2380,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Tavern Brawler",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {
@@ -2399,7 +2399,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Telekinetic",
       "source": "Tasha's",
       "source_key": "TCE",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {
@@ -2419,7 +2419,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Telepathic",
       "source": "Tasha's",
       "source_key": "TCE",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {
@@ -2439,7 +2439,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Tough",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {},
@@ -2449,7 +2449,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Vigor of the Hill Giant",
       "source": "Bigby's",
       "source_key": "BGG",
-      "category": "",
+      "category": "General",
       "prerequisite": "Level 4+",
       "repeatable": false,
       "ability_bonus": {
@@ -2469,7 +2469,7 @@ const FEATS_ITEMS_DATA = {
       "name": "War Caster",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "Spellcasting",
       "repeatable": false,
       "ability_bonus": {},
@@ -2479,7 +2479,7 @@ const FEATS_ITEMS_DATA = {
       "name": "Weapon Master",
       "source": "PHB 2014",
       "source_key": "PHB",
-      "category": "",
+      "category": "General",
       "prerequisite": "",
       "repeatable": false,
       "ability_bonus": {
@@ -2498,11 +2498,201 @@ const FEATS_ITEMS_DATA = {
       "name": "Wood Elf Magic",
       "source": "Xanathar's",
       "source_key": "XGE",
-      "category": "",
+      "category": "General",
       "prerequisite": "elf",
       "repeatable": false,
       "ability_bonus": {},
       "desc": "You learn the magic of the primeval woods, which are revered and protected by your people. You learn one druid cantrip of your choice. You also learn the longstrider and pass without trace spells, each of which you can cast once without expending a spell slot. You regain the ability to cast these two spells in this way when you finish a long rest. Wisdom is your spellcasting ability for all three spells."
+    },
+    {
+      "name": "Aberrant Dragonmark",
+      "source": "Eberron",
+      "source_key": "ERLW",
+      "category": "General",
+      "prerequisite": "No other dragonmark",
+      "desc": "You have manifested an aberrant dragonmark. Determine its appearance and the flaw associated with it. You gain the following benefits: • You learn a cantrip of your choice from the sorcerer spell list. In addition, choose a 1st-level spell from the sorcerer spell list. You learn that spell and can cast it through your mark. Once you cast it, you must finish a short or long rest before you can cast it again through the mark. Constitution is your spellcasting ability for these spells. • When you cast the 1st-level spell through your mark, you can expend one of your Hit Dice and roll it. If you roll an even number, you gain a number of temporary hit points equal to the number rolled. If you roll an odd number, one random creature within 30 feet of you (not including you) takes force damage equal to the number rolled. If no other creatures are in range, you take the damage. You also develop a random flaw from the Aberrant Dragonmark Flaws table. [Table: Aberrant Dragonmark Flaws] Option: Greater Aberrant Powers: At the DM's option, a character who has the Aberrant Dragonmark feat has a chance of manifesting greater power. Upon reaching 10th level, such a character has a 10 chance of gaining an epic boon from among the options in chapter 7 of the Dungeon Master's Guide. If the character fails to gain a boon, they have a 10 chance the next time they gain a level. If the character gains a boon, the DM chooses it or determines it randomly. The character also permanently loses one of their Hit Dice, and their hit point maximum is reduced by an amount equal to a roll of that die plus their Constitution modifier (minimum reduction of 1). This reduction can't be reversed by any means.",
+      "ability_bonus": {
+        "con": 1
+      }
+    },
+    {
+      "name": "Agent of Order",
+      "source": "Sigil and the Outlands",
+      "source_key": "SatO",
+      "category": "General",
+      "prerequisite": "Level 4+",
+      "desc": "You can channel cosmic forces of order to gain these benefits: Stasis Strike: Once per turn, when you damage a creature you can see within 60 feet of yourself, you can deal an extra 1d8 force damage to the target, and it must make a Wisdom saving throw (DC equal to 8 + your proficiency bonus + the modifier of the spellcasting ability you chose for the Scion of the Outer Planes feat) as spectral bindings try to ensnare it. On a successful save, the target escapes. On a failed save, the target has the restrained condition until the start of your next turn. These bindings manifest as chains or some other symbol of stasis. You can use this benefit a number of times equal to your proficiency bonus, and you regain all expended uses when you finish a long rest.",
+      "ability_bonus": {
+        "choose": {
+          "from": [
+            "str",
+            "dex",
+            "con",
+            "int",
+            "wis",
+            "cha"
+          ],
+          "count": 1,
+          "amount": 1
+        }
+      }
+    },
+    {
+      "name": "Baleful Scion",
+      "source": "Sigil and the Outlands",
+      "source_key": "SatO",
+      "category": "General",
+      "prerequisite": "Level 4+",
+      "desc": "You can channel cosmic forces of evil to gain these benefits: Grasp of Avarice: Once per turn, when you damage a creature you can see within 60 feet of yourself, you can also deal necrotic damage to it. The necrotic damage equals 1d6 + your proficiency bonus, and you regain a number of hit points equal to this necrotic damage dealt. You can use this benefit a number of times equal to your proficiency bonus, and you regain all expended uses when you finish a long rest.",
+      "ability_bonus": {
+        "choose": {
+          "from": [
+            "str",
+            "dex",
+            "con",
+            "int",
+            "wis",
+            "cha"
+          ],
+          "count": 1,
+          "amount": 1
+        }
+      }
+    },
+    {
+      "name": "Cohort of Chaos",
+      "source": "Sigil and the Outlands",
+      "source_key": "SatO",
+      "category": "General",
+      "prerequisite": "Level 4+",
+      "desc": "You can channel cosmic forces of chaos to gain these benefits: Chaotic Flare: When you roll a 1 or a 20 on an attack roll or a saving throw, the magic of chaos flows through you. Roll a d4 and consult the Chaotic Flares table to determine what happens. A flare lasts until the end of your next turn, and a new flare can't occur until after the first flare ends. [Table: Chaotic Flares]",
+      "ability_bonus": {
+        "choose": {
+          "from": [
+            "str",
+            "dex",
+            "con",
+            "int",
+            "wis",
+            "cha"
+          ],
+          "count": 1,
+          "amount": 1
+        }
+      }
+    },
+    {
+      "name": "Gift of the Chromatic Dragon",
+      "source": "Fizban's",
+      "source_key": "FTD",
+      "category": "General",
+      "prerequisite": "",
+      "desc": "You've manifested some of the power of chromatic dragons, granting you the following benefits: Chromatic Infusion: As a bonus action, you can touch a simple or martial weapon and infuse it with one of the following damage types: acid, cold, fire, lightning, or poison. For the next minute, the weapon deals an extra 1d4 damage of the chosen type when it hits. After you use this bonus action, you can't do so again until you finish a long rest. Reactive Resistance: When you take acid, cold, fire, lightning, or poison damage, you can use your reaction to give yourself resistance to that instance of damage. You can use this reaction a number of times equal to your proficiency bonus, and you regain all expended uses when you finish a long rest."
+    },
+    {
+      "name": "Gift of the Gem Dragon",
+      "source": "Fizban's",
+      "source_key": "FTD",
+      "category": "General",
+      "prerequisite": "",
+      "desc": "You've manifested some of the power of gem dragons, granting you the following benefits: Telekinetic Reprisal: When you take damage from a creature that is within 10 feet of you, you can use your reaction to emanate telekinetic energy. The creature that dealt damage to you must make a Strength saving throw (DC equals 8 + your proficiency bonus + the ability modifier of the score increased by this feat). On a failed save, the creature takes 2d8 force damage and is pushed up to 10 feet away from you. On a successful save, the creature takes half as much damage and isn't pushed. You can use this reaction a number of times equal to your proficiency bonus, and you regain all expended uses when you finish a long rest.",
+      "ability_bonus": {
+        "choose": {
+          "from": [
+            "int",
+            "wis",
+            "cha"
+          ],
+          "count": 1,
+          "amount": 1
+        }
+      }
+    },
+    {
+      "name": "Gift of the Metallic Dragon",
+      "source": "Fizban's",
+      "source_key": "FTD",
+      "category": "General",
+      "prerequisite": "",
+      "desc": "You've manifested some of the power of metallic dragons, granting you the following benefits: Draconic Healing: You learn the cure wounds spell. You can cast this spell without expending a spell slot. Once you cast this spell in this way, you can't do so again until you finish a long rest. You can also cast this spell using spell slots you have. The spell's spellcasting ability is Intelligence, Wisdom, or Charisma when you cast it with this feat (choose when you gain the feat). Protective Wings: You can manifest protective wings that can shield you or others. When you or another creature you can see within 5 feet of you is hit by an attack roll, you can use your reaction to manifest spectral wings from your back for a moment. You grant a bonus to the target's AC equal to your proficiency bonus against that attack roll, potentially causing it to miss. You can use this reaction a number of times equal to your proficiency bonus, and you regain all expended uses when you finish a long rest."
+    },
+    {
+      "name": "Outlands Envoy",
+      "source": "Sigil and the Outlands",
+      "source_key": "SatO",
+      "category": "General",
+      "prerequisite": "Level 4+",
+      "desc": "You have spent significant time in Sigil or the Outlands, the crossroads of the multiverse. Being steeped in converging planar energies grants you these benefits: Crossroads Emissary: You learn the misty step and tongues spells. You can cast each spell once using this feat without a spell slot, and you must finish a long rest before you can cast that spell in this way again. When you cast tongues using this feat, you require no material components. You can also cast these spells using spell slots you have of the appropriate level. The spells' spellcasting ability is the one chosen when you gained the Scion of the Outer Planes feat.",
+      "ability_bonus": {
+        "choose": {
+          "from": [
+            "str",
+            "dex",
+            "con",
+            "int",
+            "wis",
+            "cha"
+          ],
+          "count": 1,
+          "amount": 1
+        }
+      }
+    },
+    {
+      "name": "Planar Wanderer",
+      "source": "Sigil and the Outlands",
+      "source_key": "SatO",
+      "category": "General",
+      "prerequisite": "Level 4+",
+      "desc": "You can draw on the forces of the multiverse to survive cosmic extremes and to traverse its infinite realms, granting you these benefits: Planar Adaptation: When you finish a long rest, you gain resistance to either acid, cold, or fire damage (your choice) until you finish your next long rest. Portal Cracker: Your experience with portals allows you to open them without a portal key. As an action, you can concentrate on a portal you're aware of that is within 5 feet of yourself and make a DC 20 Intelligence (Arcana) check. On a failed check, you take 3d8 psychic damage and can't use this benefit on that portal again until you finish a long rest. On a successful check, you can force the portal open or closed for 1 hour. For that duration, the portal doesn't respond to its portal key unless a creature employing the key succeeds on a DC 20 Intelligence (Arcana) check as an action. Portal Sense: You know the direction to the last planar portal you used while you and the portal are on the same plane of existence. Moreover, as an action, you can detect the location of any portals within 30 feet of you that aren't behind Cover. Once you detect a portal with this action, you can't use the action again until you finish a long rest."
+    },
+    {
+      "name": "Revenant Blade",
+      "source": "Eberron",
+      "source_key": "ERLW",
+      "category": "General",
+      "prerequisite": "elf",
+      "desc": "You are descended from a master of the double-bladed scimitar, and some of that mastery has passed on to you. You gain the following benefits: • While you are holding a double-bladed scimitar with two hands, you gain a +1 bonus to Armor Class. • A double-bladed scimitar has the F property when you wield it.",
+      "ability_bonus": {
+        "choose": {
+          "from": [
+            "str",
+            "dex"
+          ],
+          "count": 1,
+          "amount": 1
+        }
+      }
+    },
+    {
+      "name": "Righteous Heritor",
+      "source": "Sigil and the Outlands",
+      "source_key": "SatO",
+      "category": "General",
+      "prerequisite": "Level 4+",
+      "desc": "You can channel cosmic forces of good to gain these benefits: Soothe Pain: When you or a creature within 30 feet of you takes damage, you can use your reaction to reduce that damage by 1d10 + your proficiency bonus. You can use this benefit a number of times equal to your proficiency bonus, and you regain all expended uses when you finish a long rest.",
+      "ability_bonus": {
+        "choose": {
+          "from": [
+            "str",
+            "dex",
+            "con",
+            "int",
+            "wis",
+            "cha"
+          ],
+          "count": 1,
+          "amount": 1
+        }
+      }
+    },
+    {
+      "name": "Scion of the Outer Planes",
+      "source": "Sigil and the Outlands",
+      "source_key": "SatO",
+      "category": "General",
+      "prerequisite": "",
+      "desc": "Your connection to an Outer Plane infuses you with the energy there. Choose a type of plane listed in the Planar Infusion table. Your choice gives you resistance to a damage type and the ability to cast a cantrip, as specified in the table. You can cast this cantrip without material components, and your spellcasting ability for it is Intelligence, Wisdom, or Charisma (choose when you select this feat)."
     }
   ],
   "magic_items": [

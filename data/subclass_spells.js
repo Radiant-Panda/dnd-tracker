@@ -27,7 +27,7 @@ const SUBCLASS_SPELL_LISTS = {
   "Light Domain": {
     class: "Cleric", prepareType: "always_prepared",
     note: "Always prepared — don't count toward limit",
-    spells: { 1: ["Burning Hands","Faerie Fire"], 3: ["Flaming Sphere","Scorching Ray"], 5: ["Daylight","Fireball"], 7: ["Guardian Of Faith","Wall Of Fire"], 9: ["Flame Strike","Scrying"] }
+    spells: { 1: ["Light","Burning Hands","Faerie Fire"], 3: ["Flaming Sphere","Scorching Ray"], 5: ["Daylight","Fireball"], 7: ["Guardian Of Faith","Wall Of Fire"], 9: ["Flame Strike","Scrying"] }
   },
 
   "Nature Domain": {
@@ -75,7 +75,7 @@ const SUBCLASS_SPELL_LISTS = {
   "Grave Domain": {
     class: "Cleric", prepareType: "always_prepared",
     note: "Always prepared — don't count toward limit",
-    spells: { 1: ["Bane","False Life"], 3: ["Gentle Repose","Ray Of Enfeeblement"], 5: ["Revivify","Vampiric Touch"], 7: ["Blight","Death Ward"], 9: ["Antilife Shell","Raise Dead"] }
+    spells: { 1: ["Spare the Dying","Bane","False Life"], 3: ["Gentle Repose","Ray Of Enfeeblement"], 5: ["Revivify","Vampiric Touch"], 7: ["Blight","Death Ward"], 9: ["Antilife Shell","Raise Dead"] }
   },
 
   "Order Domain": {
@@ -239,13 +239,13 @@ const SUBCLASS_SPELL_LISTS = {
   "Circle of Stars": {
     class: "Druid", prepareType: "always_prepared",
     note: "Always prepared — don't count toward limit",
-    spells: { 2: ["Guiding Bolt"] }
+    spells: { 2: ["Guidance","Guiding Bolt"] }
   },
 
   "Circle of Spores": {
     class: "Druid", prepareType: "always_prepared",
     note: "Always prepared — don't count toward limit",
-    spells: { 3: ["Blindness/Deafness","Gentle Repose"], 5: ["Animate Dead","Gaseous Form"], 7: ["Blight","Confusion"], 9: ["Cloudkill","Contagion"] }
+    spells: { 2: ["Chill Touch"], 3: ["Blindness/Deafness","Gentle Repose"], 5: ["Animate Dead","Gaseous Form"], 7: ["Blight","Confusion"], 9: ["Cloudkill","Contagion"] }
   },
 
   "Circle of Wildfire": {
@@ -283,7 +283,7 @@ const SUBCLASS_SPELL_LISTS = {
   "Swarmkeeper": {
     class: "Ranger", prepareType: "always_prepared",
     note: "Always prepared — don't count toward limit",
-    spells: { 3: ["Mage Hand"], 5: ["Web"], 9: ["Gaseous Form"], 13: ["Arcane Eye"], 17: ["Insect Plague"] }
+    spells: { 3: ["Faerie Fire","Mage Hand"], 5: ["Web"], 9: ["Gaseous Form"], 13: ["Arcane Eye"], 17: ["Insect Plague"] }
   },
 
   "Winter Walker": {
@@ -315,13 +315,13 @@ const SUBCLASS_SPELL_LISTS = {
   "The Celestial": {
     class: "Warlock", prepareType: "expanded_list",
     note: "Expanded spell list — added to spells you can know",
-    spells: { 1: ["Cure Wounds","Guiding Bolt"], 3: ["Flaming Sphere","Lesser Restoration"], 5: ["Daylight","Revivify"], 7: ["Guardian Of Faith","Wall Of Fire"], 9: ["Flame Strike","Mass Cure Wounds"] }
+    spells: { 1: ["Light","Sacred Flame","Cure Wounds","Guiding Bolt"], 3: ["Flaming Sphere","Lesser Restoration"], 5: ["Daylight","Revivify"], 7: ["Guardian Of Faith","Wall Of Fire"], 9: ["Flame Strike","Greater Restoration"] }
   },
 
   "The Fathomless": {
     class: "Warlock", prepareType: "expanded_list",
     note: "Expanded spell list — added to spells you can know",
-    spells: { 1: ["Create Or Destroy Water","Thunderwave"], 3: ["Gust Of Wind","Silence"], 5: ["Lightning Bolt","Sleet Storm"], 7: ["Control Water","Summon Elemental"], 9: ["Bigby's Hand","Cone Of Cold"] }
+    spells: { 1: ["Create Or Destroy Water","Thunderwave"], 3: ["Gust Of Wind","Silence"], 5: ["Lightning Bolt","Sleet Storm"], 7: ["Control Water","Summon Elemental"], 9: ["Bigby's Hand","Cone Of Cold"], 10: ["Evard's Black Tentacles"] }
   },
 
   "The Hexblade": {
@@ -333,7 +333,7 @@ const SUBCLASS_SPELL_LISTS = {
   "The Undying": {
     class: "Warlock", prepareType: "expanded_list",
     note: "Expanded spell list — added to spells you can know",
-    spells: { 1: ["False Life","Ray Of Sickness"], 3: ["Blindness/Deafness","Silence"], 5: ["Feign Death","Speak With Dead"], 7: ["Aura Of Life","Death Ward"], 9: ["Contagion","Legend Lore"] }
+    spells: { 1: ["Spare the Dying","False Life","Ray Of Sickness"], 3: ["Blindness/Deafness","Silence"], 5: ["Feign Death","Speak With Dead"], 7: ["Aura Of Life","Death Ward"], 9: ["Contagion","Legend Lore"] }
   },
 
   "The Undead": {
@@ -352,7 +352,7 @@ const SUBCLASS_SPELL_LISTS = {
   "Celestial Patron": {
     class: "Warlock", prepareType: "always_prepared",
     note: "Always prepared — PHB 2024",
-    spells: { 3: ["Aid","Cure Wounds","Guiding Bolt","Lesser Restoration"], 5: ["Daylight","Revivify"], 7: ["Guardian Of Faith","Wall Of Fire"], 9: ["Greater Restoration","Summon Celestial"] }
+    spells: { 3: ["Light","Sacred Flame","Aid","Cure Wounds","Guiding Bolt","Lesser Restoration"], 5: ["Daylight","Revivify"], 7: ["Guardian Of Faith","Wall Of Fire"], 9: ["Greater Restoration","Summon Celestial"] }
   },
 
   "Fiend Patron": {
@@ -364,7 +364,7 @@ const SUBCLASS_SPELL_LISTS = {
   "Great Old One Patron": {
     class: "Warlock", prepareType: "always_prepared",
     note: "Always prepared — PHB 2024",
-    spells: { 3: ["Detect Thoughts","Dissonant Whispers","Phantasmal Force","Tasha's Hideous Laughter"], 5: ["Clairvoyance","Hunger Of Hadar"], 7: ["Confusion","Summon Aberration"], 9: ["Modify Memory","Telekinesis"] }
+    spells: { 3: ["Detect Thoughts","Dissonant Whispers","Phantasmal Force","Tasha's Hideous Laughter"], 5: ["Clairvoyance","Hunger Of Hadar"], 7: ["Confusion","Summon Aberration"], 9: ["Modify Memory","Telekinesis"], 10: ["Hex"] }
   },
 
   // ── SORCERER SUBCLASSES ───────────────────────────────────────────────────
@@ -372,7 +372,7 @@ const SUBCLASS_SPELL_LISTS = {
   "Aberrant Mind": {
     class: "Sorcerer", prepareType: "always_known",
     note: "Always known — can replace with divination/enchantment spells when leveling",
-    spells: { 1: ["Arms Of Hadar","Dissonant Whispers"], 3: ["Calm Emotions","Detect Thoughts"], 5: ["Hunger Of Hadar","Sending"], 7: ["Evard's Black Tentacles","Summon Aberration"], 9: ["Telekinesis","Telepathy"] }
+    spells: { 1: ["Mind Sliver","Arms Of Hadar","Dissonant Whispers"], 3: ["Calm Emotions","Detect Thoughts"], 5: ["Hunger Of Hadar","Sending"], 7: ["Evard's Black Tentacles","Summon Aberration"], 9: ["Rary's Telepathic Bond","Telekinesis"] }
   },
 
   "Clockwork Soul": {
@@ -431,6 +431,68 @@ const SUBCLASS_SPELL_LISTS = {
     class: "Bard", prepareType: "always_known",
     note: "Always known — PHB 2024",
     spells: { 3: ["Charm Person","Mirror Image"], 6: ["Command"] }
+  },
+
+  // ── PHB 2024 SUBCLASS SPELL GRANTS ──────────────────────────────────────────
+
+  "Fey Wanderer (2024)": {
+    class: "Ranger", prepareType: "always_prepared",
+    note: "Always prepared — PHB 2024",
+    spells: { 3: ["Charm Person"], 5: ["Misty Step"], 9: ["Summon Fey"], 13: ["Dimension Door"], 17: ["Mislead"] }
+  },
+
+  "Circle of the Stars": {
+    class: "Druid", prepareType: "always_prepared",
+    note: "Always prepared — PHB 2024 (Star Map grants Guidance and Guiding Bolt)",
+    spells: { 3: ["Guidance","Guiding Bolt"] }
+  },
+
+  "Path of the Wild Heart": {
+    class: "Barbarian", prepareType: "always_known",
+    note: "Animal Speaker — castable as rituals (Wisdom)",
+    spells: { 3: ["Beast Sense","Speak with Animals"], 10: ["Commune with Nature"] }
+  },
+
+  "Warrior of Shadow": {
+    class: "Monk", prepareType: "always_known",
+    note: "Shadow Arts — Minor Illusion known; cast Darkness by spending 1 Focus Point (no components)",
+    spells: { 3: ["Minor Illusion","Darkness"] }
+  },
+
+  "Warrior of the Elements": {
+    class: "Monk", prepareType: "always_known",
+    note: "Elemental Attunement — Elementalism known",
+    spells: { 3: ["Elementalism"] }
+  },
+
+  "Arcane Trickster": {
+    class: "Rogue", prepareType: "always_known",
+    note: "Mage Hand known (Mage Hand Legerdemain)",
+    spells: { 3: ["Mage Hand"] }
+  },
+
+  "Psi Warrior": {
+    class: "Fighter", prepareType: "always_known",
+    note: "Telekinetic Master — cast Telekinesis once per Long Rest without a spell slot",
+    spells: { 18: ["Telekinesis"] }
+  },
+
+  "Abjurer": {
+    class: "Wizard", prepareType: "always_prepared",
+    note: "Spell Breaker — always prepared (PHB 2024)",
+    spells: { 10: ["Counterspell","Dispel Magic"] }
+  },
+
+  "Diviner": {
+    class: "Wizard", prepareType: "always_known",
+    note: "The Third Eye — cast See Invisibility without a spell slot (regains on Short/Long Rest)",
+    spells: { 10: ["See Invisibility"] }
+  },
+
+  "Illusionist": {
+    class: "Wizard", prepareType: "always_prepared",
+    note: "PHB 2024 — Minor Illusion known (Improved Illusions); Phantasmal Creatures always prepared",
+    spells: { 3: ["Minor Illusion"], 6: ["Summon Beast","Summon Fey"] }
   }
 
 };
