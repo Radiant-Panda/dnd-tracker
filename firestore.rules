@@ -34,13 +34,11 @@ service cloud.firestore {
       allow create: if request.auth != null
                     && request.resource.data.shareToken != null;
 
-      // Player view: update only the fields the player sheet actually writes.
-      // The shareToken must already exist and must not change.
+      // Player view: full character update. shareToken and id must not change.
       allow update: if request.auth != null
                     && resource.data.shareToken != null
                     && request.resource.data.shareToken == resource.data.shareToken
-                    && request.resource.data.diff(resource.data).affectedKeys()
-                       .hasOnly(['combat', 'spells', 'resources', 'exhaustionLevel']);
+                    && request.resource.data.id == resource.data.id;
     }
 
   }

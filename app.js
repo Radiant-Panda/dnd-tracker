@@ -421,7 +421,6 @@ function _syncPlayerLinkedChars() {
         ['combat', 'spells'].forEach(f => {
           if (fresh[f] !== undefined) merged[f] = fresh[f];
         });
-        if (fresh.featuresList) merged.featuresList = fresh.featuresList;
         db.characters[id] = merged;
         // Update snapshot so next GM save doesn't re-overwrite these fields
         if (window._dbSnap) {
@@ -589,11 +588,7 @@ async function _initPlayerView() {
     _pvListeners.push(
       _fireDb.doc(`${base}/campaigns/${_PV_CAMPAIGN}`).onSnapshot(snap => {
         if (!snap.exists) return;
-        const updated = snap.data();
-        if (!updated.npcs) updated.npcs = [];
-        if (!updated.initiative) updated.initiative = null;
-        if (!updated.campaignTab) updated.campaignTab = 'characters';
-        if (!updated.journal) updated.journal = [];
+        const updated = migrateCampaign(snap.data());
         db.campaigns = [updated];
         // Re-render if viewing the campaign/initiative
         if (currentView === 'campaign') renderApp();
@@ -639,21 +634,13 @@ function _pvUpdateHeader(charName) {
   }
 }
 
-// Player view saves — write directly to GM's Firestore (no debounce for HP)
+// Player view saves — write the full character back to GM's Firestore
 function _pvSaveCharacter() {
   if (!IS_PLAYER_VIEW || !_firestoreReady || !_pvGmUid) return;
   const ch = db.characters[_PV_PLAYER];
   if (!ch) return;
   const base = `users/${_pvGmUid}`;
-  _fireDb.doc(`${base}/characters/${_PV_PLAYER}`).update({
-    'combat.currentHP':   ch.combat.currentHP,
-    'combat.tempHP':      ch.combat.tempHP,
-    'combat.conditions':  ch.combat.conditions || [],
-    'spells.slots':       ch.spells.slots,
-    'spells.pactSlots':   ch.spells.pactSlots,
-    'resources':          ch.resources,
-    'exhaustionLevel':    ch.exhaustionLevel,
-  }).catch(e => {
+  _fireDb.doc(`${base}/characters/${_PV_PLAYER}`).update(ch).catch(e => {
     console.warn('[PlayerView] Save failed:', e.message);
   });
 }
@@ -702,12 +689,30 @@ function migrateCampaign(c) {
   return c;
 }
 
+// Infer which rules edition an existing character was built with (subclass era first,
+// then species era); new characters default to 2024
+function _inferEdition(ch) {
+  try {
+    if (ch.subclass && ch.class && typeof SUBCLASS_DATA !== 'undefined') {
+      const sd = SUBCLASS_DATA[ch.class] && SUBCLASS_DATA[ch.class][ch.subclass];
+      if (sd && sd.source) return sd.source === 'PHB 2024' ? '2024' : '2014';
+    }
+    if (ch.race && typeof SPECIES_DATA !== 'undefined') {
+      if ((SPECIES_DATA.species_2024 || []).some(s => s.name === ch.race)) return '2024';
+      if ([...(SPECIES_DATA.races_2014 || []), ...(SPECIES_DATA.races_mpmm || [])].some(s => s.name === ch.race)) return '2014';
+    }
+  } catch (e) {}
+  return '2024';
+}
+
 function migrateCharacter(ch) {
+  if (!ch.edition) ch.edition = _inferEdition(ch);
   if (ch.inspiration === undefined) ch.inspiration = false;
   if (!ch.languages)      ch.languages = '';
   if (!ch.proficiencies)  ch.proficiencies = '';
   if (ch.attunedItems === undefined) ch.attunedItems = [];
   if (ch.activeConcentration === undefined) ch.activeConcentration = null;
+  if (typeof ch.activeConcentration === 'string') ch.activeConcentration = { spellName: ch.activeConcentration, castLevel: 0 };
   if (ch.exhaustionLevel === undefined) ch.exhaustionLevel = 0;
   if (ch.portraitZoom === undefined) ch.portraitZoom = 100;
   if (ch.portraitX    === undefined) ch.portraitX    = 50;
@@ -746,6 +751,12 @@ function migrateCharacter(ch) {
   }
   if (typeof ch.combat.hitDiceUsed !== 'object' || ch.combat.hitDiceUsed === null) ch.combat.hitDiceUsed = {};
   if (!ch.featuresList)    ch.featuresList = [];
+  ch.featuresList.forEach(f => {
+    if (!f._feat && !f._subclass && !f._species && !f._background &&
+        (f._fromBackground || (typeof f._featSource === 'string' && f._featSource.startsWith('Background')))) {
+      f._feat = true;
+    }
+  });
   if (ch.carryWeight === undefined) ch.carryWeight = 0;
   if (ch.resistances        === undefined) ch.resistances        = '';
   if (ch.vulnerabilities    === undefined) ch.vulnerabilities    = '';
@@ -765,6 +776,29 @@ function migrateCharacter(ch) {
   // v3: multiclass support
   if (!ch.classes) {
     ch.classes = [{ class: ch.class || 'Fighter', subclass: ch.subclass || '', level: ch.level || 1 }];
+  }
+  // v5: proficiency source tracking — one-time migration
+  if (!ch._profMigrationApplied) {
+    const _migClass = ch.classes[0]?.class || 'Fighter';
+    const _migBgPool = [...(SPECIES_DATA?.backgrounds_2024||[]), ...(SPECIES_DATA?.backgrounds_2014||[])];
+    const _migBgData = ch.background ? _migBgPool.find(b => b.name === ch.background) : null;
+    if (!ch.backgroundTools) ch.backgroundTools = _migBgData ? [...(_migBgData.tools||[])] : [];
+    if (_migBgData && (_migBgData.skills||[]).length) {
+      const bgSkillSet = new Set(_migBgData.skills);
+      ch.skillProficiencies = ch.skillProficiencies.reduce((acc, e) => {
+        if (typeof e === 'string' && bgSkillSet.has(e)) {
+          const hasTagged = acc.some(x => typeof x === 'object' && skillProfName(x) === e);
+          if (!hasTagged) acc.push({ name: e, _source: 'background' });
+          // else: class entry already present — drop the plain-string duplicate
+        } else {
+          acc.push(e);
+        }
+        return acc;
+      }, []);
+    }
+    const _migClassTools = CLASS_STARTING_PROFICIENCIES[_migClass]?.tools || [];
+    if (_migClassTools.length) ch.proficiencies = mergeProfString(ch.proficiencies, _migClassTools);
+    ch._profMigrationApplied = true;
   }
   // v4: auto-calculate spell slots on first migration
   if (!ch.spells._autoCalcApplied && typeof calculateSpellSlots === 'function') {
@@ -1745,6 +1779,9 @@ function nextTurn() {
       return true;
     });
     expired.forEach(name => showToast(`${esc(prev.name)}: <strong>${name}</strong> has expired.`));
+    if (prev.charId && db.characters[prev.charId]) {
+      db.characters[prev.charId].combat.conditions = [...prev.conditions];
+    }
   }
   init.currentIndex=(init.currentIndex||0)+1;
   if(init.currentIndex>=init.combatants.length){init.currentIndex=0;init.round++;}
@@ -2054,6 +2091,9 @@ function _conditionRowHtml(i, conditions) {
 function removeCondition(i,cond) {
   const init=getInitiative(); const cb=init.combatants[i];
   cb.conditions=(cb.conditions||[]).filter(c=>condName(c)!==cond);
+  if (cb.charId && db.characters[cb.charId]) {
+    db.characters[cb.charId].combat.conditions = [...cb.conditions];
+  }
   combatLog(`${cb.name}: ${cond} removed`);
   saveData(db); renderApp();
 }
@@ -2120,7 +2160,7 @@ async function openMonsterSearchModal() {
 async function loadMonsterList() {
   if (monsterCache) { populateBookFilter(); searchMonsters(); return; }
   try {
-    const res = await fetch('./data/monsters-index.json?v=2');
+    const res = await fetch('./data/monsters-index.json?v=3');
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     monsterCache = await res.json();
     populateBookFilter();
@@ -2168,7 +2208,7 @@ function searchMonsters(resetCount) {
       return `<div class="monster-row" onclick="loadMonsterStat(${m.i})">
         <span>${esc(m.name)}${limitedBadge}</span>
         <span class="monster-row-meta">
-          <span class="monster-cr-badge">CR ${m.cr}</span>
+          <span class="monster-cr-badge">CR ${m.cr === '?' ? '—' : m.cr}</span>
           <span class="monster-book-badge" style="background:${color}">${esc(fullName)}</span>
           <span class="text-dim" style="font-size:0.78rem">&#9656;</span>
         </span>
@@ -2196,7 +2236,7 @@ async function loadMonsterStat(idx) {
   if (el) el.innerHTML = `<p class="text-dim" style="text-align:center">Loading...</p>`;
   try {
     if (!monsterFullData) {
-      const res = await fetch('./data/monsters.json?v=2');
+      const res = await fetch('./data/monsters.json?v=3');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       monsterFullData = await res.json();
       _applyLimitedFlags();
@@ -2256,7 +2296,7 @@ function renderMonsterStatBlock(m) {
     if (m.vulnerabilities) body += `<div class="sb-prop"><strong>Vulnerabilities</strong> ${esc(m.vulnerabilities)}</div>`;
     if (m.senses) body += `<div class="sb-prop"><strong>Senses</strong> ${esc(m.senses)}</div>`;
     if (m.languages) body += `<div class="sb-prop"><strong>Languages</strong> ${esc(m.languages)}</div>`;
-    body += `<div class="sb-prop"><strong>Challenge</strong> ${esc(m.cr)} (${(m.xp||0).toLocaleString()} XP)</div>`;
+    body += `<div class="sb-prop"><strong>Challenge</strong> ${m.cr === '?' ? '— (scales with spell level)' : esc(m.cr) + ` (${(m.xp||0).toLocaleString()} XP)`}</div>`;
 
     const _section = (title, arr) => {
       if (!arr?.length) return '';
@@ -2268,7 +2308,7 @@ function renderMonsterStatBlock(m) {
     body += _section('Reactions', m.reactions);
     body += _section('Legendary Actions', m.legendary_actions);
   } else {
-    body += `<div class="sb-prop"><strong>Challenge</strong> ${esc(m.cr)}</div>`;
+    body += `<div class="sb-prop"><strong>Challenge</strong> ${m.cr === '?' ? '— (scales with spell level)' : esc(m.cr)}</div>`;
     body += `<p class="monster-limited-msg">Full stat block not available for this monster — check the source book for complete stats.</p>`;
   }
 
@@ -2276,7 +2316,7 @@ function renderMonsterStatBlock(m) {
     <div class="stat-block">
       <div class="sb-header">
         <div class="stat-block-name">${esc(m.name)}</div>
-        <div class="sb-summary">${esc(m.size)} ${esc(m.type)}, ${esc(m.alignment)} &mdash; CR ${esc(m.cr)}
+        <div class="sb-summary">${esc(m.size)} ${esc(m.type)}, ${esc(m.alignment)} &mdash; CR ${m.cr === '?' ? '—' : esc(m.cr)}
           <span class="monster-book-badge" style="background:${bookColor};margin-left:0.4rem">${esc(m.source_label)}</span>
         </div>
       </div>
@@ -2580,6 +2620,13 @@ const CharacterStore = {
     if (cur > 0) { ch.spells.slots[level] = cur - 1; saveData(db); }
   },
 
+  /** Decrement a pact magic slot, floor 0 */
+  usePactSlot(charId) {
+    const ch = db.characters[charId];
+    if (!ch) return;
+    if ((ch.spells.pactSlots || 0) > 0) { ch.spells.pactSlots--; saveData(db); }
+  },
+
   /** Increment a spell slot (current), ceiling = slotsMax */
   restoreSpellSlot(charId, level) {
     const ch = db.characters[charId];
@@ -2646,20 +2693,20 @@ const CLASS_SAVE_PROFS = {
 };
 // Starting skill proficiency choices per class (2024 PHB)
 const CLASS_STARTING_PROFICIENCIES = {
-  Barbarian:    { saves:['str','con'], choose:2, skills:['Animal Handling','Athletics','Intimidation','Nature','Perception','Survival'] },
-  Bard:         { saves:['dex','cha'], choose:3, skills:['Acrobatics','Animal Handling','Arcana','Athletics','Deception','History','Insight','Intimidation','Investigation','Medicine','Nature','Perception','Performance','Persuasion','Religion','Sleight of Hand','Stealth','Survival'] },
-  Cleric:       { saves:['wis','cha'], choose:2, skills:['History','Insight','Medicine','Persuasion','Religion'] },
-  Druid:        { saves:['int','wis'], choose:2, skills:['Arcana','Animal Handling','Insight','Medicine','Nature','Perception','Religion','Survival'] },
-  Fighter:      { saves:['str','con'], choose:2, skills:['Acrobatics','Animal Handling','Athletics','History','Insight','Intimidation','Perception','Survival'] },
-  Monk:         { saves:['str','dex'], choose:2, skills:['Acrobatics','Athletics','History','Insight','Religion','Stealth'] },
-  Paladin:      { saves:['wis','cha'], choose:2, skills:['Athletics','Insight','Intimidation','Medicine','Persuasion','Religion'] },
-  Ranger:       { saves:['str','dex'], choose:3, skills:['Animal Handling','Athletics','Insight','Investigation','Nature','Perception','Stealth','Survival'] },
-  Rogue:        { saves:['dex','int'], choose:4, skills:['Acrobatics','Athletics','Deception','Insight','Intimidation','Investigation','Perception','Performance','Persuasion','Sleight of Hand','Stealth'] },
-  Sorcerer:     { saves:['con','cha'], choose:2, skills:['Arcana','Deception','Insight','Intimidation','Persuasion','Religion'] },
-  Warlock:      { saves:['wis','cha'], choose:2, skills:['Arcana','Deception','History','Intimidation','Investigation','Nature','Religion'] },
-  Wizard:       { saves:['int','wis'], choose:2, skills:['Arcana','History','Insight','Investigation','Medicine','Religion'] },
-  Artificer:    { saves:['con','int'], choose:2, skills:['Arcana','History','Investigation','Medicine','Nature','Perception','Sleight of Hand'] },
-  'Blood Hunter':{ saves:['dex','int'], choose:2, skills:['Acrobatics','Arcana','Athletics','History','Insight','Investigation','Perception','Survival'] },
+  Barbarian:    { saves:['str','con'], choose:2, skills:['Animal Handling','Athletics','Intimidation','Nature','Perception','Survival'], armor:['Light armor','Medium armor','Shields'], weapons:['Simple weapons','Martial weapons'], tools:[] },
+  Bard:         { saves:['dex','cha'], choose:3, skills:['Acrobatics','Animal Handling','Arcana','Athletics','Deception','History','Insight','Intimidation','Investigation','Medicine','Nature','Perception','Performance','Persuasion','Religion','Sleight of Hand','Stealth','Survival'], armor:['Light armor'], weapons:['Simple weapons'], tools:['Three musical instruments of your choice'] },
+  Cleric:       { saves:['wis','cha'], choose:2, skills:['History','Insight','Medicine','Persuasion','Religion'], armor:['Light armor','Medium armor','Shields'], weapons:['Simple weapons'], tools:[] },
+  Druid:        { saves:['int','wis'], choose:2, skills:['Arcana','Animal Handling','Insight','Medicine','Nature','Perception','Religion','Survival'], armor:['Light armor','Medium armor','Shields'], weapons:['Simple weapons'], tools:['Herbalism kit'] },
+  Fighter:      { saves:['str','con'], choose:2, skills:['Acrobatics','Animal Handling','Athletics','History','Insight','Intimidation','Perception','Survival'], armor:['Light armor','Medium armor','Heavy armor','Shields'], weapons:['Simple weapons','Martial weapons'], tools:[] },
+  Monk:         { saves:['str','dex'], choose:2, skills:['Acrobatics','Athletics','History','Insight','Religion','Stealth'], armor:[], weapons:['Simple weapons'], tools:['One artisan tool or musical instrument of your choice'] },
+  Paladin:      { saves:['wis','cha'], choose:2, skills:['Athletics','Insight','Intimidation','Medicine','Persuasion','Religion'], armor:['Light armor','Medium armor','Heavy armor','Shields'], weapons:['Simple weapons','Martial weapons'], tools:[] },
+  Ranger:       { saves:['str','dex'], choose:3, skills:['Animal Handling','Athletics','Insight','Investigation','Nature','Perception','Stealth','Survival'], armor:['Light armor','Medium armor','Shields'], weapons:['Simple weapons','Martial weapons'], tools:[] },
+  Rogue:        { saves:['dex','int'], choose:4, skills:['Acrobatics','Athletics','Deception','Insight','Intimidation','Investigation','Perception','Performance','Persuasion','Sleight of Hand','Stealth'], armor:['Light armor'], weapons:['Simple weapons','Martial weapons with the finesse or light property'], tools:["Thieves' tools"] },
+  Sorcerer:     { saves:['con','cha'], choose:2, skills:['Arcana','Deception','Insight','Intimidation','Persuasion','Religion'], armor:[], weapons:['Simple weapons'], tools:[] },
+  Warlock:      { saves:['wis','cha'], choose:2, skills:['Arcana','Deception','History','Intimidation','Investigation','Nature','Religion'], armor:['Light armor'], weapons:['Simple weapons'], tools:[] },
+  Wizard:       { saves:['int','wis'], choose:2, skills:['Arcana','History','Insight','Investigation','Medicine','Religion'], armor:[], weapons:['Simple weapons'], tools:[] },
+  Artificer:    { saves:['con','int'], choose:2, skills:['Arcana','History','Investigation','Medicine','Nature','Perception','Sleight of Hand'], armor:['Light armor','Medium armor','Shields'], weapons:['Simple weapons'], tools:["Thieves' tools","Tinker's tools",'One type of artisan tools of your choice'] },
+  'Blood Hunter':{ saves:['dex','int'], choose:2, skills:['Acrobatics','Arcana','Athletics','History','Insight','Investigation','Perception','Survival'], armor:['Light armor','Medium armor'], weapons:['Simple weapons','Martial weapons'], tools:[] },
 };
 
 // Proficiencies gained when multiclassing INTO a class (5e rules)
@@ -2691,6 +2738,25 @@ const CLASS_BADGE_COLORS = {
 function skillProfName(entry) { return typeof entry === 'object' ? entry.name : entry; }
 // Returns the source class from an entry, or null
 function skillProfClass(entry) { return typeof entry === 'object' ? (entry._class || null) : null; }
+// Returns 'background', the class name, or null for a skillProficiencies entry
+function skillProfSource(entry) {
+  if (typeof entry !== 'object' || !entry) return null;
+  if (entry._class) return entry._class;
+  if (entry._source === 'background') return 'background';
+  return null;
+}
+// Merges an array of prof strings into a comma-separated string with case-insensitive dedup
+function mergeProfString(existing, additions) {
+  const parts = (existing || '').split(',').map(s => s.trim()).filter(Boolean);
+  const lower = new Set(parts.map(s => s.toLowerCase()));
+  (additions || []).forEach(p => { if (p && !lower.has(p.toLowerCase())) { parts.push(p); lower.add(p.toLowerCase()); } });
+  return parts.join(', ');
+}
+// Pushes {name, _source:'background'} only if no entry already has that skill name
+function addBackgroundSkill(ch, skill) {
+  if (!(ch.skillProficiencies || []).some(e => skillProfName(e) === skill))
+    ch.skillProficiencies.push({ name: skill, _source: 'background' });
+}
 
 function mod(score) { return Math.floor((score-10)/2); }
 function modStr(score) { const m=mod(score); return (m>=0?'+':'')+m; }
@@ -3072,9 +3138,11 @@ function renderSkillList(ch, pb) {
         const exp  = (ch.skillExpertise||[]).includes(s.name);
         const dotClass = exp?'expert':prof?'proficient':'';
         const total = skillBonus(ch,s.name,s.ability,pb);
-        const srcClass = prof ? skillProfClass(entry) : null;
-        const badge = srcClass
-          ? `<span class="class-skill-badge" style="background:${CLASS_BADGE_COLORS[srcClass]||'#9b6dff'}" title="Granted by ${srcClass}">${CLASS_ICONS[srcClass]||srcClass.slice(0,2)}</span>`
+        const skillSrc = prof ? skillProfSource(entry) : null;
+        const badge = skillSrc
+          ? (skillSrc === 'background'
+              ? `<span class="class-skill-badge" style="background:#6b7280" title="Granted by background">BG</span>`
+              : `<span class="class-skill-badge" style="background:${CLASS_BADGE_COLORS[skillSrc]||'#9b6dff'}" title="Granted by ${skillSrc}">${CLASS_ICONS[skillSrc]||skillSrc.slice(0,2)}</span>`)
           : '';
         return `<li>
           <span class="prof-dot ${dotClass}" onclick="toggleSkillProf('${s.name}')" title="${exp?'Expert':prof?'Proficient':'Not proficient'} — click to cycle"></span>
@@ -3331,7 +3399,7 @@ function renderAttacksSection(ch) {
       <tbody>
         ${rows.length === 0 ? `<tr><td colspan="5" style="text-align:center;color:var(--text-dim);font-style:italic;padding:0.8rem">No attacks added yet.</td></tr>` : ''}
         ${rows.map((atk,i)=>`<tr>
-          <td><input class="attack-input" value="${esc(atk.name)}" placeholder="Longsword" oninput="updateAttack(${i},'name',this.value)"></td>
+          <td><input class="attack-input" value="${esc(atk.name)}" placeholder="Longsword" oninput="updateAttack(${i},'name',this.value)">${atk.mastery ? `<div title="${esc((typeof WEAPON_MASTERY_DESC !== 'undefined' && WEAPON_MASTERY_DESC[atk.mastery]) || '')}" style="font-size:0.58rem;color:#f59e0b;margin-top:1px;cursor:help">✦ ${esc(atk.mastery)}</div>` : ''}</td>
           <td><select class="attack-type-select" onchange="autoCalcAttackBonus(${i},this.value)">
             <option value="" ${!atk.weaponType?'selected':''}>—</option>
             <option value="melee-str" ${atk.weaponType==='melee-str'?'selected':''}>Melee (STR)</option>
@@ -3598,13 +3666,15 @@ async function fetchAllSpells() {
   spellFetching = true;
   setSpellStatus('✾ Loading spells…');
   try {
-    const res = await fetch('./data/spells.json');
+    const res = await fetch('./data/spells.json?v=2');
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const all = await res.json();
     allSpellsDb = Array.isArray(all) ? all : [];
     saveAllSpells();
     setSpellStatus('');
     renderSpellTabContent();
+    if (_miState && _miState.step > 1) _renderMiModal();
+    if (_sfState && _sfState.step > 0) _renderSfModal();
   } catch(e) {
     setSpellStatus('Could not load spells — data/spells.json missing or invalid.', true);
   } finally { spellFetching = false; }
@@ -3670,7 +3740,8 @@ function renderSpellTabContent() {
     if (!badge) return;
     if (tab === 'known')    badge.textContent = (ch.spells.known    || []).length;
     if (tab === 'prepared') {
-      const prepared = (ch.spells.prepared || []).length;
+      const apNames = _getAlwaysPreparedNames(ch);
+      const prepared = (ch.spells.prepared || []).filter(sp => !apNames.has(String(typeof sp === 'object' ? sp.name : sp).toLowerCase())).length;
       // Calculate prepared spell limit if applicable
       const classesWithLimit = (ch.classes||[]).filter(c => PREPARED_SPELL_LIMIT[c.class]);
       if (classesWithLimit.length > 0) {
@@ -3699,9 +3770,7 @@ function getFilteredAllSpells(ch) {
       const classes = (sp.dnd_class || sp.page || '').toLowerCase();
       if (!classes.includes(f.cls.toLowerCase())) return false;
     }
-    if (f.source !== 'all') {
-      if (_SPELL_SRC_FILTER[sp.source] !== f.source) return false;
-    }
+    if (f.source !== 'all' && sp.src !== f.source) return false;
     if (f.conc   && sp.concentration !== 'yes') return false;
     if (f.ritual && sp.ritual        !== 'yes') return false;
     return true;
@@ -3712,14 +3781,11 @@ function renderFilterBar() {
   const schools = ['Abjuration','Conjuration','Divination','Enchantment','Evocation','Illusion','Necromancy','Transmutation'];
   const classes = ['Barbarian','Bard','Cleric','Druid','Fighter','Monk','Paladin','Ranger','Rogue','Sorcerer','Warlock','Wizard','Artificer','Blood Hunter'];
   const sources = [
-    {val:'all',label:'All Sources'},
     {val:'phb2024',label:'PHB 2024'},
     {val:'phb2014',label:'PHB 2014'},
     {val:'xge',label:"Xanathar's (XGE)"},
     {val:'tce',label:"Tasha's (TCE)"},
     {val:'egw',label:"Explorer's Guide (EGW)"},
-    {val:'basic2024',label:'Basic Rules 2024'},
-    {val:'basic2014',label:'Basic Rules 2014'},
   ];
   return `<div class="spell-filter-bar">
     <div class="spell-search-wrap">
@@ -3792,7 +3858,7 @@ function renderSpellResultsHtml(ch) {
               ${sp.ritual==='yes'?`<span class="spell-tag ritual">R</span>`:''}
             </div>
             <div class="flex gap-1" style="flex-shrink:0">
-              <button class="btn btn-sm" onclick="toggleSpellDesc('sd-all-${esc(sp.name).replace(/\s/g,'-')}')">▾</button>
+              <button class="btn btn-sm" onclick="toggleSpellDesc('sd-all-${jsStr(sp.name).replace(/\s/g,'-')}')">▾</button>
               ${sp.level_int === 0
                 ? (inK
                     ? `<button class="btn btn-sm btn-primary" disabled style="opacity:0.6;cursor:default">✓ Known</button>`
@@ -3864,10 +3930,15 @@ function renderKnownView(ch) {
               ${lvlLabel||isObj&&sp.school?`<span class="spell-badge" style="border-color:${sc};color:${sc}">${lvlLabel}${lvlLabel&&isObj&&sp.school?' · ':''}${esc(isObj?sp.school||'':'')}</span>`:''}
               ${isObj&&sp.concentration==='yes'?`<span class="spell-tag conc">C</span>`:''}
               ${isObj&&sp.ritual==='yes'?`<span class="spell-tag ritual">R</span>`:''}
+              ${isObj&&sp._fromFeat?`<span style="font-size:0.58rem;color:#9b6dff;border:1px solid rgba(155,109,255,0.35);border-radius:3px;padding:0 3px;flex-shrink:0" title="${esc(sp._fromFeat)}">${_featBadgeAbbr(sp._fromFeat)}</span>`:''}
             </div>
             <div class="spell-card-right">
               ${isObj && sp.level_int === 0
                 ? `<span style="font-size:0.7rem;color:var(--text-dim);align-self:center;padding:0 0.3rem">✓ Always Prepared</span>`
+                : isObj && sp._miFreeCast
+                ? `<span style="font-size:0.7rem;color:#9b6dff;align-self:center;padding:0 0.3rem" title="Always available — cast free 1/LR or use a spell slot">✓ MI Spell</span>`
+                : isObj && sp._sfFreeCast
+                ? `<span style="font-size:0.7rem;color:#9b6dff;align-self:center;padding:0 0.3rem" title="Free cast 1/Long Rest — from ${esc(sp._fromFeat||'')}">✓ Feat Spell</span>`
                 : `<button class="btn btn-sm${inPrep?' btn-primary':''}" onclick="togglePrepareFromKnown(${i})" title="${inPrep?'Remove from Prepared':'Add to Prepared'}">${inPrep?'✓ Prep':'Prepare'}</button>`}
               <button class="btn btn-sm" onclick="toggleSpellCard('${id}',this)" title="Toggle description">▾</button>
               <button class="btn btn-icon btn-danger" onclick="removeSpellEntry('known',${i})">&times;</button>
@@ -4053,8 +4124,45 @@ function _isTerrainSubclass(sub) {
   return _SUBCLASS_TERRAIN_VARIANTS.has(sub);
 }
 
+// Look up the spell list for a subclass, preferring the "(2024)" variant for
+// 2024-edition characters (SUBCLASS_DATA stores 2024 subclasses under plain names)
+function _sslDataFor(ch, sub) {
+  const lists = _getSubclassSpellLists();
+  if (((ch && ch.edition) || '2024') !== '2014' && lists[sub + ' (2024)']) return lists[sub + ' (2024)'];
+  return lists[sub] || null;
+}
+
+function _getAlwaysPreparedNames(ch) {
+  const names = new Set();
+  const lists = _getSubclassSpellLists();
+  _charSubclasses(ch).forEach(sub => {
+    const data = _sslDataFor(ch, sub); if (!data) return;
+    if ((data.prepareType || 'always_prepared') !== 'always_prepared') return;
+    let spellsByLevel = data.spells || data.levels || {};
+    if (_isTerrainSubclass(sub)) {
+      // Terrain subclasses nest lists one level deeper: { Terrain: { lvl: [...] } }
+      const picked = (ch.terrainPicks || {})[sub] || _subclassTerrainPick[sub];
+      spellsByLevel = (picked && spellsByLevel[picked]) || {};
+    }
+    Object.entries(spellsByLevel).forEach(([lvlKey, spells]) => {
+      const lvl = parseInt(lvlKey, 10);
+      if (!isFinite(lvl) || ch.level < lvl) return;
+      const list = Array.isArray(spells) ? spells : (Array.isArray(spells.spells) ? spells.spells : null);
+      if (!list) return;
+      list.forEach(name => names.add(String(name).toLowerCase()));
+    });
+  });
+  return names;
+}
+
 function pickSubclassTerrain(subclass, terrain, charId) {
   _subclassTerrainPick[subclass] = terrain;
+  const ch = charId && db.characters[charId];
+  if (ch) {
+    ch.terrainPicks = ch.terrainPicks || {};
+    ch.terrainPicks[subclass] = terrain;
+    saveData(db);
+  }
   if (charId) openSubclassModal(charId);
 }
 
@@ -4083,7 +4191,7 @@ function applySubclassSpells(charId) {
   ch.spells.prepared = ch.spells.prepared || [];
   _charSubclasses(ch).forEach(sub => {
     if (_isTerrainSubclass(sub)) return; // user picks manually
-    const data = lists[sub]; if (!data) return;
+    const data = _sslDataFor(ch, sub); if (!data) return;
     const prepareType = data.prepareType || 'always_prepared';
     const spellsByLevel = data.spells || data.levels || {};
     Object.entries(spellsByLevel).forEach(([lvlKey, spells]) => {
@@ -4109,7 +4217,7 @@ function applySubclassSpells(charId) {
 function _hasSubclassData(ch) {
   const lists = _getSubclassSpellLists();
   const tables = _getSubclassTables();
-  return _charSubclasses(ch).some(sub => lists[sub] || tables[sub]);
+  return _charSubclasses(ch).some(sub => _sslDataFor(ch, sub) || tables[sub]);
 }
 
 function _renderSubclassSpellRow(charId, ch, spellName, prepareType) {
@@ -4135,7 +4243,7 @@ function _renderSubclassSpellsSection(charId, ch, sub, data) {
   if (isTerrain) {
     const terrainNames = Object.keys(spellsByLevel);
     if (!terrainNames.length) return '';
-    const picked = _subclassTerrainPick[sub] || terrainNames[0];
+    const picked = (ch.terrainPicks || {})[sub] || _subclassTerrainPick[sub] || terrainNames[0];
     const opts = terrainNames.map(t => `<option value="${esc(t)}"${t === picked ? ' selected' : ''}>${esc(t)}</option>`).join('');
     const terrainData = spellsByLevel[picked] || {};
     const levelEntries = Object.entries(terrainData)
@@ -4231,8 +4339,8 @@ function openSubclassModal(charId) {
   const tables = _getSubclassTables();
   const subs = _charSubclasses(ch);
 
-  const spellsBlocks = subs.filter(sub => lists[sub])
-    .map(sub => _renderSubclassSpellsSection(charId, ch, sub, lists[sub]))
+  const spellsBlocks = subs.filter(sub => _sslDataFor(ch, sub))
+    .map(sub => _renderSubclassSpellsSection(charId, ch, sub, _sslDataFor(ch, sub)))
     .filter(Boolean).join('');
 
   const tablesBlocks = subs.filter(sub => tables[sub])
@@ -4276,12 +4384,17 @@ function openCastModal(spellName, minLevel) {
   // Cantrips don't use slots — cast directly
   if (minLevel === 0) { castCantrip(spellName); return; }
   const slots = ch.spells.slots || {};
-  const maxSlots = ch.spells.slotsMax || {};
   const availableLevels = [];
   for (let lvl = Math.max(1, minLevel); lvl <= 9; lvl++) {
     if ((slots[lvl] || 0) > 0) availableLevels.push(lvl);
   }
+  const pactCur = ch.spells.pactSlots || 0;
+  const pactMax = ch.spells.pactSlotsMax || 0;
+  const pactLvl = ch.spells.pactSlotLevel || 0;
+  const pactAvail = pactCur > 0 && pactLvl >= minLevel;
   const ordinals = ['','1st','2nd','3rd','4th','5th','6th','7th','8th','9th'];
+  const pactOrd = ordinals[pactLvl] || `${pactLvl}th`;
+  const noSlots = availableLevels.length === 0 && !pactAvail;
   openModal(`<h2>Cast ${esc(spellName)}</h2>
     <p style="font-size:0.8rem;color:var(--text-dim);margin-bottom:0.9rem">Choose a slot level:</p>
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:0.5rem;margin-bottom:1rem">
@@ -4289,14 +4402,51 @@ function openCastModal(spellName, minLevel) {
         const cur = slots[lvl] || 0;
         const available = cur > 0 && lvl >= minLevel;
         return `<button class="btn${available?' btn-primary':''}" ${!available?'disabled style="opacity:0.35"':''}
-          onclick="confirmCast('${esc(spellName)}',${lvl})">
+          onclick="confirmCast('${jsStr(spellName)}',${lvl})">
           <div style="font-size:0.75rem">${ordinals[lvl]}</div>
           <div style="font-size:0.62rem;opacity:0.7">${cur} slot${cur!==1?'s':''}</div>
         </button>`;
       }).join('')}
     </div>
-    ${availableLevels.length===0?`<p style="color:var(--red-lt);font-size:0.82rem">No spell slots available!</p>`:''}
+    ${pactMax > 0 ? `
+      <div style="border-top:1px solid var(--border);padding-top:0.6rem;margin-top:0.2rem">
+        <div style="font-size:0.7rem;color:var(--text-dim);margin-bottom:0.4rem;text-transform:uppercase;letter-spacing:0.05em">Pact Magic · short rest</div>
+        <button class="btn${pactAvail?' btn-primary':''}" ${!pactAvail?'disabled style="opacity:0.35"':''}
+          onclick="confirmCastPact('${jsStr(spellName)}')">
+          <div style="font-size:0.75rem">Pact Slot (${pactOrd})</div>
+          <div style="font-size:0.62rem;opacity:0.7">${pactCur}/${pactMax} remaining</div>
+        </button>
+        ${!pactAvail && pactCur === 0 ? `<p style="font-size:0.7rem;color:var(--text-dim);margin-top:0.25rem">No pact slots remaining</p>` : ''}
+        ${!pactAvail && pactCur > 0 ? `<p style="font-size:0.7rem;color:var(--text-dim);margin-top:0.25rem">Spell level too high for pact slot (${pactOrd})</p>` : ''}
+      </div>` : ''}
+    ${noSlots?`<p style="color:var(--red-lt);font-size:0.82rem;margin-top:0.4rem">No spell slots available!</p>`:''}
     <div class="form-actions"><button class="btn" onclick="closeModal()">Cancel</button></div>`);
+}
+
+function confirmCastPact(spellName) {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  if ((ch.spells.pactSlots || 0) <= 0) { showAlert('No pact slots remaining!'); return; }
+  const allSpells = [...(ch.spells.known||[]), ...(ch.spells.prepared||[])];
+  const sp = allSpells.find(s => (typeof s==='object' ? s.name : s) === spellName && typeof s === 'object');
+  const isConc = sp?.concentration === 'yes';
+  const pactLvl = ch.spells.pactSlotLevel || 1;
+  const ordinals = ['','1st','2nd','3rd','4th','5th','6th','7th','8th','9th'];
+  const docast = () => {
+    CharacterStore.usePactSlot(currentCharId);
+    const entry = `${spellName} cast at ${ordinals[pactLvl]} level (pact)`;
+    ch.sessionLog = ch.sessionLog || [];
+    ch.sessionLog.unshift({ text: entry, ts: Date.now() });
+    if (ch.sessionLog.length > 100) ch.sessionLog = ch.sessionLog.slice(0, 100);
+    if (isConc) ch.activeConcentration = { spellName, castLevel: pactLvl };
+    saveData(db);
+    closeModal();
+    _preserveScroll(() => renderApp());
+  };
+  if (isConc && ch.activeConcentration && ch.activeConcentration.spellName !== spellName) {
+    showConfirm(`This will end your concentration on ${esc(ch.activeConcentration.spellName)}. Continue?`, docast);
+  } else {
+    docast();
+  }
 }
 
 function castCantrip(spellName) {
@@ -4424,7 +4574,7 @@ function deleteCustomSpell(idx) {
 }
 
 function _cantripCount(ch) {
-  return (ch.spells.known || []).filter(s => typeof s === 'object' && s.level_int === 0).length;
+  return (ch.spells.known || []).filter(s => typeof s === 'object' && s.level_int === 0 && !s._fromFeat).length;
 }
 
 function _cantripMax(ch) {
@@ -4439,7 +4589,8 @@ function _cantripMax(ch) {
 function renderSpellsSection(ch) {
   const pb = profBonus(ch.level);
   const known    = (ch.spells.known    || []).length;
-  const prepared = (ch.spells.prepared || []).length;
+  const apNames  = _getAlwaysPreparedNames(ch);
+  const prepared = (ch.spells.prepared || []).filter(sp => !apNames.has(String(typeof sp === 'object' ? sp.name : sp).toLowerCase())).length;
 
   // Determine if any class is a spellcaster
   const isSpellcaster = (ch.classes||[]).some(c => {
@@ -4685,208 +4836,674 @@ function renderPersonalitySection(ch) {
 
 // ── Class Features Lookup ────────────────────────────────────────────────────
 const CLASS_FEATURES = {
+  Artificer: [
+    [1, 'Magical Tinkering', '1st-level artificer feature You\'ve learned how to invest a spark of magic into mundane objects. To use this ability, you must have thieves\' tools or artisan\'s tools in hand. You then touch a Tiny nonmagical object as an action and give it one of the following magical properties of your choice: • The object sheds bright light in a 5-foot radius and dim light for an additional 5 feet. • Whenever tapped by a creature, the object emits a recorded message that can be heard up to 10 feet away. You utter the message when you bestow this property on the object, and the recording can be no more than 6 seconds long. • The object continuously emits your choice of an odor or a nonverbal sound (wind, waves, chirping, or the like). The chosen phenomenon is perceivable up to 10 feet away. • A static visual effect appears on one of the object\'s surfaces. This effect can be a picture, up to 25 words of text, lines and shapes, or a mixture of these elements, as you like. The chosen property lasts indefinitely. As an action, you can touch the object and end the property early. You can bestow magic on multiple objects, touching one object each time you use this feature, though a single object can only bear one property at a time. The maximum number of objects you can affect with this feature at one time is equal to your Intelligence modifier (minimum of one object). If you try to exceed your maximum, the oldest property immediately ends, and then the new property applies.'],
+    [1, 'Optional Rule: Firearm Proficiency', 'The secrets of creating and operating gunpowder weapons have been discovered in various corners of the D&D multiverse. If your Dungeon Master uses the rules on firearms in chapter 9 of the Dungeon Master\'s Guide and your artificer has been exposed to the operation of such weapons, your artificer is proficient with them.'],
+    [1, 'Spellcasting', '1st-level artificer feature You\'ve studied the workings of magic and how to cast spells, channeling the magic through objects. To observers, you don\'t appear to be casting spells in a conventional way; you appear to produce wonders from mundane items and outlandish inventions. Tools Required: You produce your artificer spell effects through your tools. You must have a spellcasting focus—specifically thieves\' tools or some kind of artisan\'s tools—in hand when you cast any spell with this Spellcasting feature (meaning the spell has an \'M\' component when you cast it). You must be proficient with the tool to use it in this way. See chapter 5, "Equipment," in the Player\'s Handbook for descriptions of these tools. After you gain the Infuse Item feature at 2nd level, you can also use any item bearing one of your infusions as a spellcasting focus. As an artificer, you use tools when you cast your spells. When describing your spellcasting, think about how you\'re using a tool to perform the spell effect. If you cast cure wounds using alchemist\'s supplies, you could be quickly producing a salve. If you cast it using tinker\'s tools, you might have a miniature mechanical spider that binds wounds. When you cast poison spray, you could fling foul chemicals or use a wand that spits venom. The effect of the spell is the same as for a spellcaster of any other class, but your method of spellcasting is special. The same principle applies when you prepare your spells. As an artificer, you don\'t study a spellbook or pray to prepare your spells. Instead, you work with your tools and create the specialized items you\'ll use to produce your effects. If you replace cure wounds with heat metal, you might be altering the device you use to heal—perhaps modifying a tool so that it channels heat instead of healing energy. Such details don\'t limit you in any way or provide you with any benefit beyond the spell\'s effects. You don\'t have to justify how you\'re using tools to cast a spell. But describing your spellcasting creatively is a fun way to distinguish yourself from other spellcasters. Cantrips (0-Level Spells): At 1st level, you know two cantrips of your choice from the artificer spell list. At higher levels, you learn additional artificer cantrips of your choice, as shown in the Cantrips Known column of the Artificer table. When you gain a level in this class, you can replace one of the artificer cantrips you know with another cantrip from the artificer spell list. Preparing and Casting Spells: The Artificer table shows how many spell slots you have to cast your artificer spells. To cast one of your artificer spells of 1st level or higher, you must expend a slot of the spell\'s level or higher. You regain all expended spell slots when you finish a long rest. You prepare the list of artificer spells that are available for you to cast, choosing from the artificer spell list. When you do so, choose a number of artificer spells equal to your Intelligence modifier + half your artificer level, rounded down (minimum of one spell). The spells must be of a level for which you have spell slots. For example, if you are a 5th-level artificer, you have four 1st-level and two 2nd-level spell slots. With an Intelligence of 14, your list of prepared spells can include four spells of 1st or 2nd level, in any combination. If you prepare the 1st-level spell cure wounds, you can cast it using a 1st-level or a 2nd-level slot. Casting the spell doesn\'t remove it from your list of prepared spells. You can change your list of prepared spells when you finish a long rest. Preparing a new list of artificer spells requires time spent tinkering with your spellcasting focuses: at least 1 minute per spell level for each spell on your list. Spellcasting Ability: Intelligence is your spellcasting ability for your artificer spells; your understanding of the theory behind magic allows you to wield these spells with superior skill. You use your Intelligence whenever an artificer spell refers to your spellcasting ability. In addition, you use your Intelligence modifier when setting the saving throw DC for an artificer spell you cast and when making an attack roll with one. Ritual Casting: You can cast an artificer spell as a ritual if that spell has the ritual tag and you have the spell prepared.'],
+    [2, 'Infuse Item', '2nd-level artificer feature You\'ve gained the ability to imbue mundane items with certain magical infusions, turning those objects into magic items. Artificers have invented numerous magical infusions, extraordinary processes that rapidly create magic items. To many, artificers seem like wonderworkers, accomplishing in hours what others need weeks to complete. The description of each of the following infusions details the type of item that can receive it, along with whether the resulting magic item requires attunement. Some infusions specify a minimum artificer level. You can\'t learn such an infusion until you are at least that level. Unless an infusion\'s description says otherwise, you can\'t learn an infusion more than once. Infusing an Item: Whenever you finish a long rest, you can touch a nonmagical object and imbue it with one of your artificer infusions, turning it into a magic item. An infusion works on only certain kinds of objects, as specified in the infusion\'s description. If the item requires attunement, you can attune yourself to it the instant you infuse the item. If you decide to attune to the item later, you must do so using the normal process for attunement (see "Attunement" in chapter 7 of the Dungeon Master\'s Guide). Your infusion remains in an item indefinitely, but when you die, the infusion vanishes after a number of days have passed equal to your Intelligence modifier (minimum of 1 day). The infusion also vanishes if you give up your knowledge of the infusion for another one. You can infuse more than one nonmagical object at the end of a long rest; the maximum number of objects appears in the Infused Items column of the Artificer table. You must touch each of the objects, and each of your infusions can be in only one object at a time. Moreover, no object can bear more than one of your infusions at a time. If you try to exceed your maximum number of infusions, the oldest infusion immediately ends, and then the new infusion applies. If an infusion ends on an item that contains other things, like a bag of holding, its contents harmlessly appear in and around its space.'],
+    [2, 'Infusions Known', 'When you gain this feature, pick four artificer infusions to learn, choosing from the "Artificer Infusions" section at the end of the class\'s description. You learn additional infusions of your choice when you reach certain levels in this class, as shown in the Infusions Known column of the Artificer table. Whenever you gain a level in this class, you can replace one of the artificer infusions you learned with a new one.'],
+    [3, 'Artificer Specialist', '3rd-level artificer feature Choose the type of specialist you are, each of which is detailed at the end of the class\'s description. Your choice grants you features at 5th level and again at 9th and 15th level.'],
+    [3, 'The Right Tool for the Job', '3rd-level artificer feature You\'ve learned how to produce exactly the tool you need: with thieves\' tools or artisan\'s tools in hand, you can magically create one set of artisan\'s tools in an unoccupied space within 5 feet of you. This creation requires 1 hour of uninterrupted work, which can coincide with a short or long rest. Though the product of magic, the tools are nonmagical, and they vanish when you use this feature again.'],
+    [4, 'Ability Score Improvement', '4th-level artificer feature When you reach 4th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [5, 'Artificer Specialist Feature', '5th-level artificer feature You gain a feature granted by your Artificer Specialist choice.'],
+    [6, 'Tool Expertise', '6th-level artificer feature Your proficiency bonus is now doubled for any ability check you make that uses your proficiency with a tool.'],
+    [7, 'Flash of Genius', '7th-level artificer feature You\'ve gained the ability to come up with solutions under pressure. When you or another creature you can see within 30 feet of you makes an ability check or a saving throw, you can use your reaction to add your Intelligence modifier to the roll. You can use this feature a number of times equal to your Intelligence modifier (minimum of once). You regain all expended uses when you finish a long rest.'],
+    [8, 'Ability Score Improvement', '8th-level artificer feature When you reach 8th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [9, 'Artificer Specialist Feature', '9th-level artificer feature You gain a feature granted by your Artificer Specialist choice.'],
+    [10, 'Magic Item Adept', '10th-level artificer feature You\'ve achieved a profound understanding of how to use and make magic items: • You can attune to up to four magic items at once. • If you craft a magic item with a rarity of common or uncommon, it takes you a quarter of the normal time, and it costs you half as much of the usual gold.'],
+    [11, 'Spell-Storing Item', '11th-level artificer feature You can now store a spell in an object. Whenever you finish a long rest, you can touch one simple or martial weapon or one item that you can use as a spellcasting focus, and you store a spell in it, choosing a 1st- or 2nd-level spell from the artificer spell list that requires 1 action to cast (you needn\'t have it prepared). While holding the object, a creature can take an action to produce the spell\'s effect from it, using your spellcasting ability modifier. If the spell requires concentration, the creature must concentrate. The spell stays in the object until it\'s been used a number of times equal to twice your Intelligence modifier (minimum of twice) or until you use this feature again to store a spell in an object.'],
+    [12, 'Ability Score Improvement', '12th-level artificer feature When you reach 12th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [14, 'Magic Item Savant', '14th-level artificer feature Your skill with magic items deepens: • You can attune to up to five magic items at once. • You ignore all class, race, spell, and level requirements on attuning to or using a magic item.'],
+    [15, 'Artificer Specialist Feature', '15th-level artificer feature You gain a feature granted by your Artificer Specialist choice.'],
+    [16, 'Ability Score Improvement', '16th-level artificer feature When you reach 16th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [18, 'Magic Item Master', '18th-level artificer feature You can now attune to up to six magic items at once.'],
+    [19, 'Ability Score Improvement', '19th-level artificer feature When you reach 19th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [20, 'Soul of Artifice', '20th-level artificer feature You have developed a mystical connection to your magic items, which you can draw on for protection: • You gain a +1 bonus to all saving throws per magic item you are currently attuned to. • If you\'re reduced to 0 hit points but not killed outright, you can use your reaction to end one of your artificer infusions, causing you to drop to 1 hit point instead of 0.'],
+  ],
   Barbarian: [
-    [1, 'Rage', 'Enter a rage as a bonus action. Advantage on STR checks and saving throws, bonus to melee damage, resistance to bludgeoning/piercing/slashing damage.'],
-    [1, 'Unarmored Defense', 'While not wearing armor, AC equals 10 + DEX modifier + CON modifier.'],
-    [2, 'Reckless Attack', 'When you make your first attack on your turn, you can decide to attack recklessly, gaining advantage but giving enemies advantage against you until your next turn.'],
-    [2, 'Danger Sense', 'Advantage on DEX saving throws against effects you can see, such as traps and spells, while not blinded, deafened, or incapacitated.'],
-    [3, 'Primal Path', 'Choose a subclass that shapes your rage.'],
-    [4, 'ASI', 'Ability Score Improvement or feat.'],
-    [5, 'Extra Attack', 'You can attack twice, instead of once, whenever you take the Attack action on your turn.'],
-    [5, 'Fast Movement', 'Your speed increases by 10 ft while not wearing heavy armor.'],
-    [6, 'Path Feature', 'Additional feature from your Primal Path.'],
-    [7, 'Feral Instinct', 'Advantage on initiative rolls. If surprised, you can still act normally on your first turn if you enter your rage before doing anything else.'],
-    [8, 'ASI', 'Ability Score Improvement or feat.'],
-    [9, 'Brutal Critical', 'Roll one additional weapon damage die when scoring a critical hit.'],
-    [10, 'Path Feature', 'Additional feature from your Primal Path.'],
-    [11, 'Relentless Rage', 'When you drop to 0 HP while raging, make a DC 10 CON save to drop to 1 HP instead. DC increases by 5 each time you use this feature until you finish a short or long rest.'],
-    [12, 'ASI', 'Ability Score Improvement or feat.'],
+    [1, 'Rage', 'In battle, you fight with primal ferocity. On your turn, you can enter a rage as a bonus action. While raging, you gain the following benefits if you aren\'t wearing heavy armor: • You have advantage on Strength checks and Strength saving throws. • When you make a melee weapon attack using Strength, you gain a +2 bonus to the damage roll. This bonus increases as you level. • You have resistance to bludgeoning, piercing, and slashing damage. If you are able to cast spells, you can\'t cast them or concentrate on them while raging. Your rage lasts for 1 minute. It ends early if you are knocked unconscious or if your turn ends and you haven\'t attacked a hostile creature since your last turn or taken damage since then. You can also end your rage on your turn as a bonus action. Once you have raged the maximum number of times for your barbarian level, you must finish a long rest before you can rage again. You may rage 2 times at 1st level, 3 at 3rd, 4 at 6th, 5 at 12th, and 6 at 17th.'],
+    [1, 'Unarmored Defense', 'While you are not wearing any armor, your Armor Class equals 10 + your Dexterity modifier + your Constitution modifier. You can use a shield and still gain this benefit.'],
+    [2, 'Danger Sense', 'At 2nd level, you gain an uncanny sense of when things nearby aren\'t as they should be, giving you an edge when you dodge away from danger. You have advantage on Dexterity saving throws against effects that you can see, such as traps and spells. To gain this benefit, you can\'t be blinded, deafened, or incapacitated.'],
+    [2, 'Reckless Attack', 'Starting at 2nd level, you can throw aside all concern for defense to attack with fierce desperation. When you make your first attack on your turn, you can decide to attack recklessly. Doing so gives you advantage on melee weapon attack rolls using Strength during this turn, but attack rolls against you have advantage until your next turn.'],
+    [3, 'Primal Path', 'At 3rd level, you choose a path that shapes the nature of your rage from the list of available paths. Your choice grants you features at 3rd level and again at 6th, 10th, and 14th levels.'],
+    [4, 'Ability Score Improvement', 'When you reach 4th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [5, 'Extra Attack', 'Beginning at 5th level, you can attack twice, instead of once, whenever you take the Attack action on your turn.'],
+    [5, 'Fast Movement', 'Starting at 5th level, your speed increases by 10 feet while you aren\'t wearing heavy armor.'],
+    [6, 'Path Feature', 'At 6th level, you gain a feature from your Primal Path.'],
+    [7, 'Feral Instinct', 'By 7th level, your instincts are so honed that you have advantage on initiative rolls. Additionally, if you are surprised at the beginning of combat and aren\'t incapacitated, you can act normally on your first turn, but only if you enter your rage before doing anything else on that turn.'],
+    [8, 'Ability Score Improvement', 'When you reach 8th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [9, 'Brutal Critical (1 die)', 'Beginning at 9th level, you can roll one additional weapon damage die when determining the extra damage for a critical hit with a melee attack. This increases to two additional dice at 13th level and three additional dice at 17th level.'],
+    [10, 'Path feature', 'At 10th level, you gain a feature from your Primal Path.'],
+    [11, 'Relentless Rage', 'Starting at 11th level, your rage can keep you fighting despite grievous wounds. If you drop to 0 hit points while you\'re raging and don\'t die outright, you can make a 10 Constitution saving throw. If you succeed, you drop to 1 hit point instead. Each time you use this feature after the first, the DC increases by 5. When you finish a short or long rest, the DC resets to 10.'],
+    [12, 'Ability Score Improvement', 'When you reach 12th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [13, 'Brutal Critical (2 dice)', 'At 13th level, you can roll two additional weapon damage dice when determining the extra damage for a critical hit with a melee attack. This increases to three additional dice at 17th level.'],
+    [14, 'Path feature', 'At 14th level, you gain a feature from your Primal Path.'],
+    [15, 'Persistent Rage', 'Beginning at 15th level, your rage is so fierce that it ends early only if you fall unconscious or if you choose to end it.'],
+    [16, 'Ability Score Improvement', 'When you reach 16th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [17, 'Brutal Critical (3 dice)', 'At 17th level, you can roll three additional weapon damage dice when determining the extra damage for a critical hit with a melee attack.'],
+    [18, 'Indomitable Might', 'Beginning at 18th level, if your total for a Strength check is less than your Strength score, you can use that score in place of the total.'],
+    [19, 'Ability Score Improvement', 'When you reach 19th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [20, 'Primal Champion', 'At 20th level, you embody the power of the wilds. Your Strength and Constitution scores increase by 4. Your maximum for those scores is now 24.'],
   ],
   Bard: [
-    [1, 'Bardic Inspiration', 'As a bonus action, grant a creature within 60 ft a Bardic Inspiration die (d6) to add to one ability check, attack roll, or saving throw within 10 minutes.'],
-    [1, 'Spellcasting', 'You can cast bard spells using CHA as your spellcasting ability.'],
-    [2, 'Jack of All Trades', 'Add half your proficiency bonus (rounded down) to ability checks you aren\'t proficient in.'],
-    [2, 'Song of Rest', 'If you perform during a short rest, friendly creatures regain extra HP when they spend Hit Dice (d6 extra).'],
-    [3, 'Bard College', 'Choose a Bard College subclass.'],
-    [3, 'Expertise', 'Choose two skill proficiencies to double your proficiency bonus with.'],
-    [4, 'ASI', 'Ability Score Improvement or feat.'],
-    [5, 'Bardic Inspiration (d8)', 'Your Bardic Inspiration die increases to d8.'],
-    [5, 'Font of Inspiration', 'You regain all uses of Bardic Inspiration when you finish a short or long rest.'],
-    [6, 'Countercharm', 'Use an action to perform music; friendly creatures within 30 ft have advantage on saving throws against being frightened or charmed until you stop.'],
-    [6, 'College Feature', 'Additional feature from your Bard College.'],
-    [8, 'ASI', 'Ability Score Improvement or feat.'],
-    [10, 'Bardic Inspiration (d10)', 'Your Bardic Inspiration die increases to d10.'],
-    [10, 'Expertise', 'Choose two more skill proficiencies to double your proficiency bonus with.'],
-    [10, 'Magical Secrets', 'Choose two spells from any class. They count as bard spells for you.'],
-    [12, 'ASI', 'Ability Score Improvement or feat.'],
+    [1, 'Bardic Inspiration', 'You can inspire others through stirring words or music. To do so, you use a bonus action on your turn to choose one creature other than yourself within 60 feet of you who can hear you. That creature gains one Bardic Inspiration die, a d6. Once within the next 10 minutes, the creature can roll the die and add the number rolled to one ability check, attack roll, or saving throw it makes. The creature can wait until after it rolls the d20 before deciding to use the Bardic Inspiration die, but must decide before the DM says whether the roll succeeds or fails. Once the Bardic Inspiration die is rolled, it is lost. A creature can have only one Bardic Inspiration die at a time. You can use this feature a number of times equal to your Charisma modifier (a minimum of once). You regain any expended uses when you finish a long rest. Your Bardic Inspiration die changes when you reach certain levels in this class. The die becomes a d8 at 5th level, a d10 at 10th level, and a d12 at 15th level.'],
+    [1, 'Spellcasting', 'You have learned to untangle and reshape the fabric of reality in harmony with your wishes and music. Your spells are part of your vast repertoire, magic that you can tune to different situations. See chapter 10 for the general rules of spellcasting and chapter 11 for the bard spell list. Cantrips: You know two cantrips of your choice from the bard spell list. You learn additional bard cantrips of your choice at higher levels, learning a 3rd cantrip at 4th level and a 4th at 10th level. Spell Slots: The Bard table shows how many spell slots you have to cast your bard spells of 1st level and higher. To cast one of these spells, you must expend a slot of the spell\'s level or higher. You regain all expended spell slots when you finish a long rest. For example, if you know the 1st-level spell cure wounds and have a 1st-level and a 2nd-level spell slot available, you can cast cure wounds using either slot. Spells Known of 1st Level and Higher: You know four 1st-level spells of your choice from the bard spell list. You learn an additional bard spell of your choice at each level except 12th, 16th, 19th, and 20th. Each of these spells must be of a level for which you have spell slots. For instance, when you reach 3rd level in this class, you can learn one new spell of 1st or 2nd level. Additionally, when you gain a level in this class, you can choose one of the bard spells you know and replace it with another spell from the bard spell list, which also must be of a level for which you have spell slots. Spellcasting Ability: Charisma is your spellcasting ability for your bard spells. Your magic comes from the heart and soul you pour into the performance of your music or oration. You use your Charisma whenever a spell refers to your spellcasting ability. In addition, you use your Charisma modifier when setting the saving throw DC for a bard spell you cast and when making an attack roll with one. Ritual Casting: You can cast any bard spell you know as a ritual if that spell has the ritual tag. Spellcasting Focus: You can use a musical instrument as a spellcasting focus for your bard spells.'],
+    [2, 'Jack of All Trades', 'Starting at 2nd level, you can add half your proficiency bonus, rounded down, to any ability check you make that doesn\'t already include your proficiency bonus.'],
+    [2, 'Song of Rest (d6)', 'Beginning at 2nd level, you can use soothing music or oration to help revitalize your wounded allies during a short rest. If you or any friendly creatures who can hear your performance regain hit points by spending Hit Dice at the end of the short rest, each of those creatures regains an extra 1d6 hit points. The extra hit points increase when you reach certain levels in this class: to 1d8 at 9th level, to 1d10 at 13th level, and to 1d12 at 17th level.'],
+    [3, 'Bard College', 'At 3rd level, you delve into the advanced techniques of a bard college of your choice from the list of available colleges. Your choice grants you features at 3rd level and again at 6th and 14th level.'],
+    [3, 'Expertise', 'At 3rd level, choose two of your skill proficiencies. Your proficiency bonus is doubled for any ability check you make that uses either of the chosen proficiencies. At 10th level, you can choose another two skill proficiencies to gain this benefit.'],
+    [4, 'Ability Score Improvement', 'When you reach 4th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [5, 'Bardic Inspiration (d8)', 'At 5th level, your Bardic Inspiration die changes to a d8.'],
+    [5, 'Font of Inspiration', 'Beginning when you reach 5th level, you regain all of your expended uses of Bardic Inspiration when you finish a short or long rest.'],
+    [6, 'Bard College feature', 'At 6th level, you gain a feature from your Bard College.'],
+    [6, 'Countercharm', 'At 6th level, you gain the ability to use musical notes or words of power to disrupt mind-influencing effects. As an action, you can start a performance that lasts until the end of your next turn. During that time, you and any friendly creatures within 30 feet of you have advantage on saving throws against being frightened or charmed. A creature must be able to hear you to gain this benefit. The performance ends early if you are incapacitated or silenced or if you voluntarily end it (no action required).'],
+    [8, 'Ability Score Improvement', 'When you reach 8th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [9, 'Song of Rest (d8)', 'At 9th level, the extra hit points gained from Song of Rest increases to 1d8.'],
+    [10, 'Bardic Inspiration (d10)', 'At 10th level, your Bardic Inspiration die changes to a d10.'],
+    [10, 'Expertise', 'At 10th level, you can choose another two skill proficiencies. Your proficiency bonus is doubled for any ability check you make that uses either of the chosen proficiencies.'],
+    [10, 'Magical Secrets', 'By 10th level, you have plundered magical knowledge from a wide spectrum of disciplines. Choose two spells from any classes, including this one. A spell you choose must be of a level you can cast, as shown on the Bard table, or a cantrip. The chosen spells count as bard spells for you and are included in the number in the Spells Known column of the Bard table. You learn two additional spells from any classes at 14th level and again at 18th level.'],
+    [12, 'Ability Score Improvement', 'When you reach 12th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [13, 'Song of Rest (d10)', 'At 13th level, the extra hit points gained from Song of Rest increases to 1d10.'],
+    [14, 'Bard College feature', 'At 14th level, you gain a feature from your Bard College.'],
+    [14, 'Magical Secrets', 'At 14th level, choose two additional spells from any classes, including this one. A spell you choose must be of a level you can cast, as shown on the Bard table, or a cantrip. The chosen spells count as bard spells for you and are included in the number in the Spells Known column of the Bard table.'],
+    [15, 'Bardic Inspiration (d12)', 'At 15th level, your Bardic Inspiration die changes to a d12.'],
+    [16, 'Ability Score Improvement', 'When you reach 16th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [17, 'Song of Rest (d12)', 'At 17th level, the extra hit points gained from Song of Rest increases to 1d12.'],
+    [18, 'Magical Secrets', 'At 18th level, choose two additional spells from any class, including this one. A spell you choose must be of a level you can cast, as shown on the Bard table, or a cantrip. The chosen spells count as bard spells for you and are included in the number in the Spells Known column of the Bard table.'],
+    [19, 'Ability Score Improvement', 'When you reach 19th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [20, 'Superior Inspiration', 'At 20th level, when you roll initiative and have no uses of Bardic Inspiration left, you regain one use.'],
   ],
   Cleric: [
-    [1, 'Spellcasting', 'You can cast cleric spells using WIS as your spellcasting ability.'],
-    [1, 'Divine Domain', 'Choose a divine domain subclass that grants you domain spells and features.'],
-    [2, 'Channel Divinity', 'Channel divine energy to fuel magical effects. You have one use, regained on short or long rest.'],
-    [2, 'Channel Divinity: Turn Undead', 'As an action, present your holy symbol; undead within 30 ft that can see or hear you must make a WIS save or be turned for 1 minute.'],
-    [4, 'ASI', 'Ability Score Improvement or feat.'],
-    [5, 'Destroy Undead (CR 1/2)', 'When undead fails its saving throw against your Turn Undead, it is instantly destroyed if its CR is at or below 1/2.'],
-    [6, 'Channel Divinity (2/rest)', 'You can use Channel Divinity twice between rests.'],
-    [6, 'Divine Domain Feature', 'Additional feature from your Divine Domain.'],
-    [8, 'ASI', 'Ability Score Improvement or feat.'],
-    [8, 'Destroy Undead (CR 1)', 'Your Destroy Undead now affects CR 1 or lower creatures.'],
-    [10, 'Divine Intervention', 'Implore your deity for aid. Roll d100; if you roll equal to or lower than your cleric level, your deity intervenes.'],
-    [11, 'Destroy Undead (CR 2)', 'Your Destroy Undead now affects CR 2 or lower creatures.'],
-    [12, 'ASI', 'Ability Score Improvement or feat.'],
+    [1, 'Divine Domain', 'Choose one domain related to your deity from the list of available domains. Each domain is detailed in their own feature, and each one provides examples of gods associated with it. Your choice grants you domain spells and other features when you choose it at 1st level. It also grants you additional ways to use Channel Divinity when you gain that feature at 2nd level, and additional benefits at 6th, 8th, and 17th levels. Domain Spells: Each domain has a list of spells—its domain spells—that you gain at the cleric levels noted in the domain description. Once you gain a domain spell, you always have it prepared, and it doesn\'t count against the number of spells you can prepare each day. If you have a domain spell that doesn\'t appear on the cleric spell list, the spell is nonetheless a cleric spell for you.'],
+    [1, 'Spellcasting', 'As a conduit for divine power, you can cast cleric spells. See chapter 10 for the general rules of spellcasting and chapter 11 for a selection of cleric spells. Cantrips: At 1st level, you know three cantrips of your choice from the cleric spell list. You learn additional cleric cantrips of your choice at higher levels, as shown in the Cantrips Known column of the Cleric table. Preparing and Casting Spells: The Cleric table shows how many spell slots you have to cast your cleric spells of 1st level and higher. To cast one of these spells, you must expend a slot of the spell\'s level or higher. You regain all expended spell slots when you finish a long rest. You prepare the list of cleric spells that are available for you to cast, choosing from the cleric spell list. When you do so, choose a number of cleric spells equal to your Wisdom modifier + your cleric level (minimum of one spell). The spells must be of a level for which you have spell slots. For example, if you are a 3rd-level cleric, you have four 1st-level and two 2nd-level spell slots. With a Wisdom of 16, your list of prepared spells can include six spells of 1st or 2nd level, in any combination. If you prepare the 1st-level spell cure wounds, you can cast it using a 1st-level or 2nd-level slot. Casting the spell doesn\'t remove it from your list of prepared spells. You can change your list of prepared spells when you finish a long rest. Preparing a new list of cleric spells requires time spent in prayer and meditation: at least 1 minute per spell level for each spell on your list. Spellcasting Ability: Wisdom is your spellcasting ability for your cleric spells. The power of your spells comes from your devotion to your deity. You use your Wisdom whenever a cleric spell refers to your spellcasting ability. In addition, you use your Wisdom modifier when setting the saving throw DC for a cleric spell you cast and when making an attack roll with one. Ritual Casting: You can cast a cleric spell as a ritual if that spell has the ritual tag and you have the spell prepared. Spellcasting Focus: You can use a holy symbol as a spellcasting focus for your cleric spells.'],
+    [2, 'Channel Divinity', 'At 2nd level, you gain the ability to channel divine energy directly from your deity, using that energy to fuel magical effects. You start with two such effects: Turn Undead and an effect determined by your domain. Some domains grant you additional effects as you advance in levels, as noted in the domain description. When you use your Channel Divinity, you choose which effect to create. You must then finish a short or long rest to use your Channel Divinity again. Some Channel Divinity effects require saving throws. When you use such an effect from this class, the DC equals your cleric spell save DC. Beginning at 6th level, you can use your Channel Divinity twice between rests, and beginning at 18th level, you can use it three times between rests. When you finish a short or long rest, you regain your expended uses.'],
+    [2, 'Channel Divinity: Turn Undead', 'As an action, you present your holy symbol and speak a prayer censuring the undead. Each undead that can see or hear you within 30 feet of you must make a Wisdom saving throw. If the creature fails its saving throw, it is turned for 1 minute or until it takes any damage. A turned creature must spend its turns trying to move as far away from you as it can, and it can\'t willingly move to a space within 30 feet of you. It also can\'t take reactions. For its action, it can use only the Dash action or try to escape from an effect that prevents it from moving. If there\'s nowhere to move, the creature can use the Dodge action.'],
+    [2, 'Divine Domain feature', 'At 2nd level, you gain a feature from your Divine Domain.'],
+    [4, 'Ability Score Improvement', 'When you reach 4th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [5, 'Destroy Undead (CR 1/2)', 'Starting at 5th level, when an undead of CR 1/2 or lower fails its saving throw against your Turn Undead feature, the creature is instantly destroyed.'],
+    [6, 'Channel Divinity', 'Beginning at 6th level, you can use your Channel Divinity twice between rests.'],
+    [6, 'Divine Domain feature', 'At 6th level, you gain a feature from your Divine Domain.'],
+    [8, 'Ability Score Improvement', 'When you reach 8th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [8, 'Destroy Undead (CR 1)', 'Starting at 8th level, when an undead of CR 1 or lower fails its saving throw against your Turn Undead feature, the creature is instantly destroyed.'],
+    [8, 'Divine Domain feature', 'At 8th level, you gain a feature from your Divine Domain.'],
+    [10, 'Divine Intervention', 'Beginning at 10th level, you can call on your deity to intervene on your behalf when your need is great. Imploring your deity\'s aid requires you to use your action. Describe the assistance you seek, and roll percentile dice. If you roll a number equal to or lower than your cleric level, your deity intervenes. The DM chooses the nature of the intervention; the effect of any cleric spell or cleric domain spell would be appropriate. If your deity intervenes, you can\'t use this feature again for 7 days. Otherwise, you can use it again after you finish a long rest. At 20th level, your call for intervention succeeds automatically, no roll required.'],
+    [11, 'Destroy Undead (CR 2)', 'Starting at 11th level, when an undead of CR 2 or lower fails its saving throw against your Turn Undead feature, the creature is instantly destroyed.'],
+    [12, 'Ability Score Improvement', 'When you reach 12th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [14, 'Destroy Undead (CR 3)', 'Starting at 14th level, when an undead of CR 3 or lower fails its saving throw against your Turn Undead feature, the creature is instantly destroyed.'],
+    [16, 'Ability Score Improvement', 'When you reach 16th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [17, 'Destroy Undead (CR 4)', 'Starting at 17th level, when an undead of CR 4 or lower fails its saving throw against your Turn Undead feature, the creature is instantly destroyed.'],
+    [17, 'Divine Domain feature', 'At 17th level, you gain a feature from your Divine Domain.'],
+    [18, 'Channel Divinity', 'Beginning at 18th level, you can use your Channel Divinity three times between rests.'],
+    [19, 'Ability Score Improvement', 'When you reach 19th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [20, 'Divine Intervention Improvement', 'At 20th level, your call for intervention succeeds automatically, no roll required.'],
   ],
   Druid: [
-    [1, 'Druidic', 'You know Druidic, the secret language of druids. You can speak and leave hidden messages in it.'],
-    [1, 'Spellcasting', 'You can cast druid spells using WIS as your spellcasting ability.'],
-    [2, 'Wild Shape', 'Use your action to magically assume the shape of a beast you have seen before (up to CR 1/4, no fly or swim speed at level 2).'],
-    [2, 'Druid Circle', 'Choose a Druid Circle subclass.'],
-    [4, 'Wild Shape Improvement', 'Can now assume the shape of beasts up to CR 1/2 with a swimming speed.'],
-    [4, 'ASI', 'Ability Score Improvement or feat.'],
-    [6, 'Druid Circle Feature', 'Additional feature from your Druid Circle.'],
-    [8, 'Wild Shape Improvement', 'Can now assume the shape of beasts up to CR 1 with a flying speed.'],
-    [8, 'ASI', 'Ability Score Improvement or feat.'],
-    [10, 'Druid Circle Feature', 'Additional feature from your Druid Circle.'],
-    [12, 'ASI', 'Ability Score Improvement or feat.'],
+    [1, 'Druidic', 'You know Druidic, the secret language of druids. You can speak the language and use it to leave hidden messages. You and others who know this language automatically spot such a message. Others spot the message\'s presence with a successful 15 Wisdom (Perception) check but can\'t decipher it without magic.'],
+    [1, 'Spellcasting', 'Drawing on the divine essence of nature itself, you can cast spells to shape that essence to your will. See chapter 10 for the general rules of spellcasting and chapter 11 for the druid spell list. Cantrips: At 1st level, you know two cantrips of your choice from the druid spell list. You learn additional druid cantrips of your choice at higher levels, as shown in the Cantrips Known column of the Druid table. Preparing and Casting Spells: The Druid table shows how many spell slots you have to cast your druid spells of 1st level and higher. To cast one of these druid spells, you must expend a slot of the spell\'s level or higher. You regain all expended spell slots when you finish a long rest. You prepare the list of druid spells that are available for you to cast, choosing from the druid spell list. When you do so, choose a number of druid spells equal to your Wisdom modifier + your druid level (minimum of one spell). The spells must be of a level for which you have spell slots. For example, if you are a 3rd-level druid, you have four 1st-level and two 2nd-level spell slots. With a Wisdom of 16, your list of prepared spells can include six spells of 1st or 2nd level, in any combination. If you prepare the 1st-level spell cure wounds, you can cast it using a 1st-level or 2nd-level slot. Casting the spell doesn\'t remove it from your list of prepared spells. You can also change your list of prepared spells when you finish a long rest. Preparing a new list of druid spells requires time spent in prayer and meditation: at least 1 minute per spell level for each spell on your list. Spellcasting Ability: Wisdom is your spellcasting ability for your druid spells, since your magic draws upon your devotion and attunement to nature. You use your Wisdom whenever a spell refers to your spellcasting ability. In addition, you use your Wisdom modifier when setting the saving throw DC for a druid spell you cast and when making an attack roll with one. Ritual Casting: You can cast a druid spell as a ritual if that spell has the ritual tag and you have the spell prepared. Spellcasting Focus: You can use a druidic focus as a spellcasting focus for your druid spells.'],
+    [2, 'Druid Circle', 'At 2nd level, you choose to identify with a circle of druids from the list of available circles. Your choice grants you features at 2nd level and again at 6th, 10th, and 14th level.'],
+    [2, 'Wild Shape', 'Starting at 2nd level, you can use your action to magically assume the shape of a beast that you have seen before. You can use this feature twice. You regain expended uses when you finish a short or long rest. Your druid level determines the beasts you can transform into, as shown in the Beast Shapes table. At 2nd level, for example, you can transform into any beast that has a challenge rating of 1/4 or lower that doesn\'t have a flying or swimming speed. [Table: Beast Shapes] You can stay in a beast shape for a number of hours equal to half your druid level (rounded down). You then revert to your normal form unless you expend another use of this feature. You can revert to your normal form earlier by using a bonus action on your turn. You automatically revert if you fall unconscious, drop to 0 hit points, or die. While you are transformed, the following rules apply: • Your game statistics are replaced by the statistics of the beast, but you retain your alignment, personality, and Intelligence, Wisdom, and Charisma scores. You also retain all of your skill and saving throw proficiencies, in addition to gaining those of the creature. If the creature has the same proficiency as you and the bonus in its stat block is higher than yours, use the creature\'s bonus instead of yours. If the creature has any legendary or lair actions, you can\'t use them. • When you transform, you assume the beast\'s hit points and Hit Dice. When you revert to your normal form, you return to the number of hit points you had before you transformed. However, if you revert as a result of dropping to 0 hit points, any excess damage carries over to your normal form. For example, if you take 10 damage in animal form and have only 1 hit point left, you revert and take 9 damage. As long as the excess damage doesn\'t reduce your normal form to 0 hit points, you aren\'t knocked unconscious. • You can\'t cast spells, and your ability to speak or take any action that requires hands is limited to the capabilities of your beast form. Transforming doesn\'t break your concentration on a spell you\'ve already cast, however, or prevent you from taking actions that are part of a spell, such as call lightning, that you\'ve already cast. • You retain the benefit of any features from your class, race, or other source and can use them if the new form is physically capable of doing so. However, you can\'t use any of your special senses, such as darkvision, unless your new form also has that sense. • You choose whether your equipment falls to the ground in your space, merges into your new form, or is worn by it. Worn equipment functions as normal, but the DM decides whether it is practical for the new form to wear a piece of equipment, based on the creature\'s shape and size. Your equipment doesn\'t change size or shape to match the new form, and any equipment that the new form can\'t wear must either fall to the ground or merge with it. Equipment that merges with the form has no effect until you leave the form.'],
+    [4, 'Ability Score Improvement', 'When you reach 4th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [4, 'Wild Shape Improvement', 'At 4th level, your Wild Shape improves as shown on the Beast Shapes table.'],
+    [6, 'Druid Circle feature', 'At 6th level, you gain a feature granted by your Druid Circle.'],
+    [8, 'Ability Score Improvement', 'When you reach 8th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [8, 'Wild Shape Improvement', 'At 8th level, your Wild Shape improves as shown on the Beast Shapes table.'],
+    [10, 'Druid Circle feature', 'At 10th level, you gain a feature granted by your Druid Circle feature.'],
+    [12, 'Ability Score Improvement', 'When you reach 12th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [14, 'Druid Circle feature', 'At 14th level, you gain a feature granted by your Druid Circle feature.'],
+    [16, 'Ability Score Improvement', 'When you reach 16th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [18, 'Beast Spells', 'Beginning at 18th level, you can cast many of your druid spells in any shape you assume using Wild Shape. You can perform the somatic and verbal components of a druid spell while in a beast shape, but you aren\'t able to provide material components.'],
+    [18, 'Timeless Body', 'Starting at 18th level, the primal magic that you wield causes you to age more slowly. For every 10 years that pass, your body ages only 1 year.'],
+    [19, 'Ability Score Improvement', 'When you reach 19th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [20, 'Archdruid', 'At 20th level, you can use your Wild Shape an unlimited number of times. Additionally, you can ignore the verbal and somatic components of your druid spells, as well as any material components that lack a cost and aren\'t consumed by a spell. You gain this benefit in both your normal shape and your beast shape from Wild Shape.'],
   ],
   Fighter: [
-    [1, 'Fighting Style', 'Adopt a particular style of fighting as your specialty.'],
-    [1, 'Second Wind', 'Use a bonus action to regain HP equal to 1d10 + your fighter level once per short or long rest.'],
-    [2, 'Action Surge', 'On your turn, take one additional action. Usable once per short or long rest (twice at level 17).'],
-    [3, 'Martial Archetype', 'Choose a Martial Archetype subclass.'],
-    [4, 'ASI', 'Ability Score Improvement or feat.'],
-    [5, 'Extra Attack', 'You can attack twice whenever you take the Attack action on your turn.'],
-    [6, 'ASI', 'Ability Score Improvement or feat.'],
-    [7, 'Martial Archetype Feature', 'Additional feature from your Martial Archetype.'],
-    [8, 'ASI', 'Ability Score Improvement or feat.'],
-    [9, 'Indomitable', 'Reroll a saving throw that you fail (once per long rest).'],
-    [10, 'Martial Archetype Feature', 'Additional feature from your Martial Archetype.'],
-    [11, 'Extra Attack (3)', 'You can attack three times whenever you take the Attack action.'],
-    [12, 'ASI', 'Ability Score Improvement or feat.'],
+    [1, 'Fighting Style', 'You adopt a particular style of fighting as your specialty. Choose one of the following options. You can\'t take the same Fighting Style option more than once, even if you get to choose again. '],
+    [1, 'Second Wind', 'You have a limited well of stamina that you can draw on to protect yourself from harm. On your turn, you can use a bonus action to regain hit points equal to 1d10 + your fighter level. Once you use this feature, you must finish a short or long rest before you can use it again.'],
+    [2, 'Action Surge', 'Starting at 2nd level, you can push yourself beyond your normal limits for a moment. On your turn, you can take one additional action. Once you use this feature, you must finish a short or long rest before you can use it again. Starting at 17th level, you can use it twice before a rest, but only once on the same turn.'],
+    [3, 'Martial Archetype', 'At 3rd level, you choose an archetype from the list available that you strive to emulate in your combat styles and techniques. The archetype you choose grants you features at 3rd level and again at 7th, 10th, 15th, and 18th level.'],
+    [4, 'Ability Score Improvement', 'When you reach 4th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [5, 'Extra Attack', 'Beginning at 5th level, you can attack twice, instead of once, whenever you take the Attack action on your turn. The number of attacks increases to three when you reach 11th level in this class and to four when you reach 20th level in this class.'],
+    [6, 'Ability Score Improvement', 'When you reach 6th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [7, 'Martial Archetype feature', 'At 7th level, you gain a feature granted by your Martial Archetype.'],
+    [8, 'Ability Score Improvement', 'When you reach 8th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [9, 'Indomitable', 'Beginning at 9th level, you can reroll a saving throw that you fail. If you do so, you must use the new roll, and you can\'t use this feature again until you finish a long rest. You can use this feature twice between long rests starting at 13th level and three times between long rests starting at 17th level.'],
+    [10, 'Martial Archetype feature', 'At 10th level, you gain a feature granted by your Martial Archetype.'],
+    [11, 'Extra Attack (2)', 'At 11th level, you can attack three times whenever you take the Attack action on your turn.'],
+    [12, 'Ability Score Improvement', 'When you reach 12th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [13, 'Indomitable (two uses)', 'At 13th level, you can use Indomitable twice between long rests.'],
+    [14, 'Ability Score Improvement', 'When you reach 14th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [15, 'Martial Archetype feature', 'At 15th level, you gain a feature granted by your Martial Archetype.'],
+    [16, 'Ability Score Improvement', 'When you reach 16th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [17, 'Action Surge (two uses)', 'At 17th level, you can use Action Surge twice before a rest, but only once on the same turn.'],
+    [17, 'Indomitable (three uses)', 'At 17th level, you can use Indomitable three times between long rests.'],
+    [18, 'Martial Archetype feature', 'At 18th level, you gain a feature granted by your Martial Archetype.'],
+    [19, 'Ability Score Improvement', 'When you reach 19th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [20, 'Extra Attack (3)', 'At 20th level, you can attack four times whenever you take the Attack action on your turn.'],
   ],
   Monk: [
-    [1, 'Unarmored Defense', 'While not wearing armor or wielding a shield, AC equals 10 + DEX modifier + WIS modifier.'],
-    [1, 'Martial Arts', 'Use DEX instead of STR for monk weapons and unarmed strikes. Roll a d4 for unarmed strike damage. Make one unarmed strike as a bonus action.'],
-    [2, 'Ki', 'You have ki points equal to your monk level. Regained on short or long rest.'],
-    [2, 'Flurry of Blows', 'Spend 1 ki point to make two unarmed strikes as a bonus action after taking the Attack action.'],
-    [2, 'Patient Defense', 'Spend 1 ki point to take the Dodge action as a bonus action.'],
-    [2, 'Step of the Wind', 'Spend 1 ki point to Dash or Disengage as a bonus action. Your jump distance is doubled.'],
-    [2, 'Unarmored Movement', 'Speed increases by 10 ft while not wearing armor or wielding a shield.'],
-    [3, 'Monastic Tradition', 'Choose a Monastic Tradition subclass.'],
-    [3, 'Deflect Missiles', 'Use your reaction to deflect or catch a ranged weapon attack, reducing damage by 1d10 + DEX + monk level.'],
-    [4, 'ASI', 'Ability Score Improvement or feat.'],
-    [4, 'Slow Fall', 'Reduce falling damage by 5 × monk level using your reaction.'],
-    [5, 'Extra Attack', 'You can attack twice whenever you take the Attack action.'],
-    [5, 'Stunning Strike', 'Spend 1 ki point when you hit with a melee attack; the target must succeed on a CON save or be stunned until end of your next turn.'],
-    [6, 'Ki-Empowered Strikes', 'Your unarmed strikes count as magical for overcoming resistance and immunity.'],
-    [6, 'Monastic Tradition Feature', 'Additional feature from your Monastic Tradition.'],
-    [7, 'Evasion', 'When subjected to a DEX save for half damage, you take no damage on a success and half on a failure.'],
-    [7, 'Stillness of Mind', 'Use an action to end the charmed or frightened condition on yourself.'],
-    [8, 'ASI', 'Ability Score Improvement or feat.'],
+    [1, 'Martial Arts', 'Your practice of martial arts gives you mastery of combat styles that use unarmed strikes and monk weapons, which are shortsword and any simple melee weapons that don\'t have the two-handed or heavy property. You gain the following benefits while you are unarmed or wielding only monk weapons and you aren\'t wearing armor or wielding a shield. • You can use Dexterity instead of Strength for the attack and damage rolls of your unarmed strikes and monk weapons. • You can roll a d4 in place of the normal damage of your unarmed strike or monk weapon. This die changes as you gain monk levels, as shown in the Martial Arts column of the Monk table. • When you use the Attack action with an unarmed strike or a monk weapon on your turn, you can make one unarmed strike as a bonus action. For example, if you take the Attack action and attack with a quarterstaff, you can also make an unarmed strike as a bonus action, assuming you haven\'t already taken a bonus action this turn. Certain monasteries use specialized forms of the monk weapons. For example, you might use a club that is two lengths of wood connected by a short chain (called a nunchaku) or a sickle with a shorter, straighter blade (called a kama).'],
+    [1, 'Unarmored Defense', 'Beginning at 1st level, while you are wearing no armor and not wielding a shield, your AC equals 10 + your Dexterity modifier + your Wisdom modifier.'],
+    [2, 'Flurry of Blows', 'Immediately after you take the Attack action on your turn, you can spend 1 ki point to make two unarmed strikes as a bonus action.'],
+    [2, 'Ki', 'Starting at 2nd level, your training allows you to harness the mystic energy of ki. Your access to this energy is represented by a number of ki points. Your monk level determines the number of points you have, as shown in the Ki Points column of the Monk table. You can spend these points to fuel various ki features. You start knowing three such features: Flurry of Blows, Patient Defense, and Step of the Wind. You learn more ki features as you gain levels in this class. When you spend a ki point, it is unavailable until you finish a short or long rest, at the end of which you draw all of your expended ki back into yourself. You must spend at least 30 minutes of the rest meditating to regain your ki points. Some of your ki features require your target to make a saving throw to resist the feature\'s effects. The saving throw DC is calculated as follows:'],
+    [2, 'Patient Defense', 'You can spend 1 ki point to take the Dodge action as a bonus action on your turn.'],
+    [2, 'Step of the Wind', 'You can spend 1 ki point to take the Disengage or Dash action as a bonus action on your turn, and your jump distance is doubled for the turn.'],
+    [2, 'Unarmored Movement', 'Starting at 2nd level, your speed increases by 10 feet while you are not wearing armor or wielding a shield. This bonus increases when you reach certain monk levels, as shown in the Monk table. At 9th level, you gain the ability to move along vertical surfaces and across liquids on your turn without falling during the move.'],
+    [3, 'Deflect Missiles', 'Starting at 3rd level, you can use your reaction to deflect or catch the missile when you are hit by a ranged weapon attack. When you do so, the damage you take from the attack is reduced by 1d10 + your Dexterity modifier + your monk level. If you reduce the damage to 0, you can catch the missile if it is small enough for you to hold in one hand and you have at least one hand free. If you catch a missile in this way, you can spend 1 ki point to make a ranged attack (range 20/60 feet) with the weapon or piece of ammunition you just caught, as part of the same reaction. You make this attack with proficiency, regardless of your weapon proficiencies, and the missile counts as a monk weapon for the attack.'],
+    [3, 'Monastic Tradition', 'When you reach 3rd level, you commit yourself to a monastic tradition, chosen from the list of available traditions. Your tradition grants you features at 3rd level and again at 6th, 11th, and 17th level.'],
+    [4, 'Ability Score Improvement', 'When you reach 4th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [4, 'Slow Fall', 'Beginning at 4th level, you can use your reaction when you fall to reduce any falling damage you take by an amount equal to five times your monk level.'],
+    [5, 'Extra Attack', 'Beginning at 5th level, you can attack twice, instead of once, whenever you take the Attack action on your turn.'],
+    [5, 'Stunning Strike', 'Starting at 5th level, you can interfere with the flow of ki in an opponent\'s body. When you hit another creature with a melee weapon attack, you can spend 1 ki point to attempt a stunning strike. The target must succeed on a Constitution saving throw or be stunned until the end of your next turn.'],
+    [6, 'Ki-Empowered Strikes', 'Starting at 6th level, your unarmed strikes count as magical for the purpose of overcoming resistance and immunity to nonmagical attacks and damage.'],
+    [6, 'Monastic Tradition feature', 'At 6th level, you gain one feature granted by your Monastic Tradition.'],
+    [7, 'Evasion', 'At 7th level, your instinctive agility lets you dodge out of the way of certain area effects, such as a blue dragon\'s lightning breath or a fireball spell. When you are subjected to an effect that allows you to make a Dexterity saving throw to take only half damage, you instead take no damage if you succeed on the saving throw, and only half damage if you fail.'],
+    [7, 'Stillness of Mind', 'Starting at 7th level, you can use your action to end one effect on yourself that is causing you to be charmed or frightened.'],
+    [8, 'Ability Score Improvement', 'When you reach 8th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [9, 'Unarmored Movement improvement', 'At 9th level, you gain the ability to move along vertical surfaces and across liquids on your turn without falling during the move.'],
+    [10, 'Purity of Body', 'At 10th level, your mastery of the ki flowing through you makes you immune to disease and poison.'],
+    [11, 'Monastic Tradition feature', 'At 11th level, you gain one feature granted by your Monastic Tradition.'],
+    [12, 'Ability Score Improvement', 'When you reach 12th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [13, 'Tongue of the Sun and Moon', 'Starting at 13th level, you learn to touch the ki of other minds so that you understand all spoken languages. Moreover, any creature that can understand a language can understand what you say.'],
+    [14, 'Diamond Soul', 'Beginning at 14th level, your mastery of ki grants you proficiency in all saving throws. Additionally, whenever you make a saving throw and fail, you can spend 1 ki point to reroll it and take the second result.'],
+    [15, 'Timeless Body', 'At 15th level, your ki sustains you so that you suffer none of the frailty of old age, and you can\'t be aged magically. You can still die of old age, however. In addition, you no longer need food or water.'],
+    [16, 'Ability Score Improvement', 'When you reach 16th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [17, 'Monastic Tradition feature', 'At 17th level, you gain one feature granted by your Monastic Tradition.'],
+    [18, 'Empty Body', 'Beginning at 18th level, you can use your action to spend 4 ki points to become invisible for 1 minute. During that time, you also have resistance to all damage but force damage. Additionally, you can spend 8 ki points to cast the astral projection spell, without needing material components. When you do so, you can\'t take any other creatures with you.'],
+    [19, 'Ability Score Improvement', 'When you reach 19th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [20, 'Perfect Self', 'At 20th level, when you roll for initiative and have no ki points remaining, you regain 4 ki points.'],
   ],
   Paladin: [
-    [1, 'Divine Sense', 'As an action, detect the presence of celestials, fiends, and undead within 60 ft until end of next turn. Uses equal to 1 + CHA modifier per long rest.'],
-    [1, 'Lay on Hands', 'Pool of healing equal to 5 × paladin level. Use an action to restore HP from the pool or expend 5 points to cure a disease or poison.'],
-    [2, 'Fighting Style', 'Adopt a particular style of fighting as your specialty.'],
-    [2, 'Spellcasting', 'You can cast paladin spells using CHA as your spellcasting ability.'],
-    [2, 'Divine Smite', 'When you hit with a melee weapon attack, expend a spell slot to deal extra radiant damage (2d8 + 1d8 per spell level above 1st).'],
-    [3, 'Divine Health', 'The divine magic flowing through you makes you immune to disease.'],
-    [3, 'Sacred Oath', 'Choose a Sacred Oath subclass.'],
-    [4, 'ASI', 'Ability Score Improvement or feat.'],
-    [5, 'Extra Attack', 'You can attack twice whenever you take the Attack action.'],
-    [6, 'Aura of Protection', 'Add your CHA modifier (min +1) to saving throws for you and friendly creatures within 10 ft while you are conscious.'],
-    [7, 'Sacred Oath Feature', 'Additional feature from your Sacred Oath.'],
-    [8, 'ASI', 'Ability Score Improvement or feat.'],
-    [10, 'Aura of Courage', 'Friendly creatures within 10 ft can\'t be frightened while you are conscious.'],
-    [11, 'Improved Divine Smite', 'Whenever you hit with a melee weapon, deal an extra 1d8 radiant damage.'],
-    [12, 'ASI', 'Ability Score Improvement or feat.'],
+    [1, 'Divine Sense', 'The presence of strong evil registers on your senses like a noxious odor, and powerful good rings like heavenly music in your ears. As an action, you can open your awareness to detect such forces. Until the end of your next turn, you know the location of any celestial, fiend, or undead within 60 feet of you that is not behind Cover. You know the type (celestial, fiend, or undead) of any being whose presence you sense, but not its identity (the vampire Count Strahd von Zarovich, for instance). Within the same radius, you also detect the presence of any place or object that has been consecrated or desecrated, as with the hallow spell. You can use this feature a number of times equal to 1 + your Charisma modifier. When you finish a long rest, you regain all expended uses.'],
+    [1, 'Lay on Hands', 'Your blessed touch can heal wounds. You have a pool of healing power that replenishes when you take a long rest. With that pool, you can restore a total number of hit points equal to your paladin level × 5. As an action, you can touch a creature and draw power from the pool to restore a number of hit points to that creature, up to the maximum amount remaining in your pool. Alternatively, you can expend 5 hit points from your pool of healing to cure the target of one disease or neutralize one poison affecting it. You can cure multiple diseases and neutralize multiple poisons with a single use of Lay on Hands, expending hit points separately for each one. This feature has no effect on undead and constructs.'],
+    [2, 'Divine Smite', 'Starting at 2nd level, when you hit a creature with a melee weapon attack, you can expend one spell slot to deal radiant damage to the target, in addition to the weapon\'s damage. The extra damage is 2d8 for a 1st-level spell slot, plus 1d8 for each spell level higher than 1st, to a maximum of 5d8. The damage increases by 1d8 if the target is an undead or a fiend, to a maximum of 6d8.'],
+    [2, 'Fighting Style', 'At 2nd level, you adopt a particular style of fighting as your specialty. Choose one of the following options. You can\'t take the same Fighting Style option more than once, even if you get to choose again. '],
+    [2, 'Spellcasting', 'By 2nd level, you have learned to draw on divine magic through meditation and prayer to cast spells as a cleric does. See chapter 10 for the general rules of spellcasting and chapter 11 for the paladin spell list. Preparing and Casting Spells: The Paladin table shows how many spell slots you have to cast your paladin spells. To cast one of your paladin spells of 1st level or higher, you must expend a slot of the spell\'s level or higher. You regain all expended spell slots when you finish a long rest. You prepare the list of paladin spells that are available for you to cast, choosing from the paladin spell list. When you do so, choose a number of paladin spells equal to your Charisma modifier + half your paladin level, rounded down (minimum of one spell). The spells must be of a level for which you have spell slots. For example, if you are a 5th-level paladin, you have four 1st-level and two 2nd-level spell slots. With a Charisma of 14, your list of prepared spells can include four spells of 1st or 2nd-level, in any combination. If you prepare the 1st-level spell cure wounds, you can cast it using a 1st-level or a 2nd-level slot. Casting the spell doesn\'t remove it from your list of prepared spells. You can change your list of prepared spells when you finish a long rest. Preparing a new list of paladin spells requires time spent in prayer and meditation: at least 1 minute per spell level for each spell on your list. Spellcasting Ability: Charisma is your spellcasting ability for your paladin spells, since their power derives from the strength of your convictions. You use your Charisma whenever a spell refers to your spellcasting ability. In addition, you use your Charisma modifier when setting the saving throw DC for a paladin spell you cast and when making an attack roll with one. Spellcasting Focus: You can use a holy symbol as a spellcasting focus for your paladin spells.'],
+    [3, 'Channel Divinity', 'Your oath allows you to channel divine energy to fuel magical effects. Each Channel Divinity option provided by your oath explains how to use it. When you use your Channel Divinity, you choose which option to use. You must then finish a short or long rest to use your Channel Divinity again. Some Channel Divinity effects require saving throws. When you use such an effect from this class, the DC equals your paladin spell save DC.'],
+    [3, 'Divine Health', 'By 3rd level, the divine magic flowing through you makes you immune to disease.'],
+    [3, 'Sacred Oath', 'When you reach 3rd level, you swear the oath that binds you as a paladin forever. Up to this time you have been in a preparatory stage, committed to the path but not yet sworn to it. Now you choose from the list of available oaths. Your choice grants you features at 3rd level and again at 7th, 15th, and 20th level. Those features include oath spells and the Channel Divinity feature. Oath Spells: Each oath has a list of associated spells. You gain access to these spells at the levels specified in the oath description. Once you gain access to an oath spell, you always have it prepared. Oath spells don\'t count against the number of spells you can prepare each day. If you gain an oath spell that doesn\'t appear on the paladin spell list, the spell is nonetheless a paladin spell for you. A paladin tries to hold to the highest standards of conduct, but even the most virtuous paladin is fallible. Sometimes the right path proves too demanding, sometimes a situation calls for the lesser of two evils, and sometimes the heat of emotion causes a paladin to transgress his or her oath. A paladin who has broken a vow typically seeks absolution from a cleric who shares his or her faith or from another paladin of the same order. The paladin might spend an all-night vigil in prayer as a sign of penitence, or undertake a fast or similar act of self-denial. After a rite of confession and forgiveness, the paladin starts fresh. If a paladin willfully violates his or her oath and shows no sign of repentance, the consequences can be more serious. At the DM\'s discretion, an impenitent paladin might be forced to abandon this class and adopt another, or perhaps to take the Oathbreaker paladin option that appears in the Dungeon Master\'s Guide.'],
+    [4, 'Ability Score Improvement', 'When you reach 4th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [5, 'Extra Attack', 'Beginning at 5th level, you can attack twice, instead of once, whenever you take the Attack action on your turn.'],
+    [6, 'Aura of Protection', 'Starting at 6th level, whenever you or a friendly creature within 10 feet of you must make a saving throw, the creature gains a bonus to the saving throw equal to your Charisma modifier (with a minimum bonus of +1). You must be conscious to grant this bonus. At 18th level, the range of this aura increases to 30 feet.'],
+    [7, 'Sacred Oath feature', 'At 7th level, you gain a feature granted to you by your Sacred Oath.'],
+    [8, 'Ability Score Improvement', 'When you reach 8th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [10, 'Aura of Courage', 'Starting at 10th level, you and friendly creatures within 10 feet of you can\'t be frightened while you are conscious. At 18th level, the range of this aura increases to 30 feet.'],
+    [11, 'Improved Divine Smite', 'By 11th level, you are so suffused with righteous might that all your melee weapon strikes carry divine power with them. Whenever you hit a creature with a melee weapon, the creature takes an extra 1d8 radiant damage.'],
+    [12, 'Ability Score Improvement', 'When you reach 12th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [14, 'Cleansing Touch', 'Beginning at 14th level, you can use your action to end one spell on yourself or on one willing creature that you touch. You can use this feature a number of times equal to your Charisma modifier (a minimum of once). You regain expended uses when you finish a long rest.'],
+    [15, 'Sacred Oath feature', 'At 15th level, you gain a feature granted to you by your Sacred Oath.'],
+    [16, 'Ability Score Improvement', 'When you reach 16th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [18, 'Aura improvements', 'At 18th level, the range of your Aura of Protection increases to 30 feet.'],
+    [19, 'Ability Score Improvement', 'When you reach 19th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [20, 'Sacred Oath feature', 'At 20th level, you gain a feature granted to you by your Sacred Oath.'],
   ],
   Ranger: [
-    [1, 'Favored Enemy', 'Choose a type of favored enemy. Advantage on survival checks to track them, INT checks to recall info, learn one language of your favored enemies.'],
-    [1, 'Natural Explorer', 'Choose a favored terrain. Gain several exploration benefits in that terrain.'],
-    [2, 'Fighting Style', 'Adopt a particular style of fighting as your specialty.'],
-    [2, 'Spellcasting', 'You can cast ranger spells using WIS as your spellcasting ability.'],
-    [3, 'Ranger Archetype', 'Choose a Ranger Archetype subclass.'],
-    [3, 'Primeval Awareness', 'Expend a spell slot to sense the presence of certain creature types within 1 mile (6 miles in favored terrain) for 1 minute.'],
-    [4, 'ASI', 'Ability Score Improvement or feat.'],
-    [5, 'Extra Attack', 'You can attack twice whenever you take the Attack action.'],
-    [6, 'Favored Enemy Improvement', 'Choose one more favored enemy and one more language.'],
-    [6, 'Natural Explorer Improvement', 'Choose one more favored terrain.'],
-    [7, 'Ranger Archetype Feature', 'Additional feature from your Ranger Archetype.'],
-    [8, 'ASI', 'Ability Score Improvement or feat.'],
-    [8, 'Land\'s Stride', 'Moving through nonmagical difficult terrain costs no extra movement. Advantage on saves against plants that impede movement.'],
-    [10, 'Natural Explorer Improvement', 'Choose one more favored terrain.'],
-    [10, 'Hide in Plain Sight', 'Spend 1 minute camouflaging yourself, gaining +10 bonus to DEX (Stealth) while motionless.'],
-    [12, 'ASI', 'Ability Score Improvement or feat.'],
+    [1, 'Favored Enemy', 'Beginning at 1st level, you have significant experience studying, tracking, hunting, and even talking to a certain type of enemy. Choose a type of favored enemy: aberrations, beasts, celestials, constructs, dragons, elementals, fey, fiends, giants, monstrosities, oozes, plants, or undead. Alternatively, you can select two races of humanoid (such as gnolls and orcs) as favored enemies. You have advantage on Wisdom (Survival) checks to track your favored enemies, as well as on Intelligence checks to recall information about them. When you gain this feature, you also learn one language of your choice that is spoken by your favored enemies, if they speak one at all. You choose one additional favored enemy, as well as an associated language, at 6th and 14th level. As you gain levels, your choices should reflect the types of monsters you have encountered on your adventures.'],
+    [1, 'Natural Explorer', 'You are particularly familiar with one type of natural environment and are adept at traveling and surviving in such regions. Choose one type of favored terrain: arctic, coast, desert, forest, grassland, mountain, swamp, or the Underdark. When you make an Intelligence or Wisdom check related to your favored terrain, your proficiency bonus is doubled if you are using a skill that you\'re proficient in. While traveling for an hour or more in your favored terrain, you gain the following benefits: • Difficult terrain doesn\'t slow your group\'s travel. • Your group can\'t become lost except by magical means. • Even when you are engaged in another activity while traveling (such as foraging, navigating, or tracking), you remain alert to danger. • If you are traveling alone, you can move stealthily at a normal pace. • When you forage, you find twice as much food as you normally would. • While tracking other creatures, you also learn their exact number, their sizes, and how long ago they passed through the area. You choose additional favored terrain types at 6th and 10th level.'],
+    [2, 'Fighting Style', 'At 2nd level, you adopt a particular style of fighting as your specialty. Choose one of the following options. You can\'t take a Fighting Style option more than once, even if you later get to choose again. '],
+    [2, 'Spellcasting', 'By the time you reach 2nd level, you have learned to use the magical essence of nature to cast spells, much as a druid does. See chapter 10 for the general rules of spellcasting and chapter 11 for the ranger spell list. Spell Slots: The Ranger table shows how many spell slots you have to cast your ranger spells of 1st level and higher. To cast one of these spells, you must expend a slot of the spell\'s level or higher. You regain all expended spell slots when you finish a long rest. For example, if you know the 1st-level spell animal friendship and have a 1st-level and a 2nd-level spell slot available, you can cast animal friendship using either slot. Spells Known of 1st Level and Higher: You know two 1st-level spells of your choice from the ranger spell list. The Spells Known column of the Ranger table shows when you learn more ranger spells of your choice. Each of these spells must be of a level for which you have spell slots. For instance, when you reach 5th level in this class, you can learn one new spell of 1st or 2nd level. Additionally, when you gain a level in this class, you can choose one of the ranger spells you know and replace it with another spell from the ranger spell list, which also must be of a level for which you have spell slots. Spellcasting Ability: Wisdom is your spellcasting ability for your ranger spells, since your magic draws on your attunement to nature. You use your Wisdom whenever a spell refers to your spellcasting ability. In addition, you use your Wisdom modifier when setting the saving throw DC for a ranger spell you cast and when making an attack roll with one.'],
+    [3, 'Primeval Awareness', 'Beginning at 3rd level, you can use your action and expend one ranger spell slot to focus your awareness on the region around you. For 1 minute per level of the spell slot you expend, you can sense whether the following types of creatures are present within 1 mile of you (or within up to 6 miles if you are in your favored terrain): aberrations, celestials, dragons, elementals, fey, fiends, and undead. This feature doesn\'t reveal the creatures\' location or number.'],
+    [3, 'Ranger Archetype', 'At 3rd level, you choose an archetype that you strive to emulate from the list of available archetypes. Your choice grants features at 3rd level, and again at 7th, 11th, and 15th level.'],
+    [4, 'Ability Score Improvement', 'When you reach 4th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [5, 'Extra Attack', 'Beginning at 5th level, you can attack twice, instead of once, whenever you take the Attack action on your turn.'],
+    [6, 'Favored Enemy and Natural Explorer improvements', 'At 6th level, you gain an additional favored terrain. At 6th level, you choose one additional favored enemy, as well as an associated language. Your choice should reflect the types of monsters you have encountered on your adventures.'],
+    [7, 'Ranger Archetype feature', 'At 7th level, you gain a feature granted to you by your Ranger Archetype.'],
+    [8, 'Ability Score Improvement', 'When you reach 8th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [8, 'Land\'s Stride', 'Starting at 8th level, moving through nonmagical difficult terrain costs you no extra movement. You can also pass through nonmagical plants without being slowed by them and without taking damage from them if they have thorns, spines, or a similar hazard. In addition, you have advantage on saving throws against plants that are magically created or manipulated to impede movement, such as those created by the entangle spell.'],
+    [10, 'Hide in Plain Sight', 'Starting at 10th level, you can spend 1 minute creating camouflage for yourself. You must have access to fresh mud, dirt, plants, soot, and other naturally occurring materials with which to create your camouflage. Once you are camouflaged in this way, you can try to hide by pressing yourself up against a solid surface, such as a tree or wall, that is at least as tall and wide as you are. You gain a +10 bonus to Dexterity (Stealth) checks as long as you remain there without moving or taking actions. Once you move or take an action or a reaction, you must camouflage yourself again to gain this benefit.'],
+    [10, 'Natural Explorer improvement', 'You gain an additional favored terrain.'],
+    [11, 'Ranger Archetype feature', 'At 11th level, you gain a feature granted to you by your Ranger Archetype.'],
+    [12, 'Ability Score Improvement', 'When you reach 12th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [14, 'Favored Enemy improvement', 'At 14th level, you choose one additional favored enemy, as well as an associated language. Your choice should reflect the types of monsters you have encountered on your adventures.'],
+    [14, 'Vanish', 'Starting at 14th level, you can use the Hide action as a bonus action on your turn. Also, you can\'t be tracked by nonmagical means, unless you choose to leave a trail.'],
+    [15, 'Ranger Archetype feature', 'At 15th level, you gain a feature granted to you by your Ranger Archetype.'],
+    [16, 'Ability Score Improvement', 'When you reach 16th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [18, 'Feral Senses', 'At 18th level, you gain preternatural senses that help you fight creatures you can\'t see. When you attack a creature you can\'t see, your inability to see it doesn\'t impose disadvantage on your attack rolls against it. You are also aware of the location of any invisible creature within 30 feet of you, provided that the creature isn\'t hidden from you and you aren\'t blinded or deafened.'],
+    [19, 'Ability Score Improvement', 'When you reach 19th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [20, 'Foe Slayer', 'At 20th level, you become an unparalleled hunter of your enemies. Once on each of your turns, you can add your Wisdom modifier to the attack roll or the damage roll of an attack you make against one of your favored enemies. You can choose to use this feature before or after the roll, but before any effects of the roll are applied.'],
   ],
   Rogue: [
-    [1, 'Expertise', 'Double your proficiency bonus for two skill proficiencies of your choice.'],
-    [1, 'Sneak Attack', 'Deal extra 1d6 damage once per turn when you have advantage or an ally is adjacent to the target (increases by 1d6 every odd level).'],
-    [1, 'Thieves\' Cant', 'A secret mix of dialect, jargon, and code that allows you to hide messages in normal conversation.'],
-    [2, 'Cunning Action', 'Use a bonus action to Dash, Disengage, or Hide on each of your turns.'],
-    [3, 'Roguish Archetype', 'Choose a Roguish Archetype subclass.'],
-    [4, 'ASI', 'Ability Score Improvement or feat.'],
-    [5, 'Uncanny Dodge', 'When an attacker you can see hits you, use your reaction to halve the attack\'s damage.'],
-    [6, 'Expertise', 'Double your proficiency bonus for two more skill proficiencies.'],
-    [7, 'Evasion', 'When subjected to a DEX save for half damage, you take no damage on success and half on failure.'],
-    [8, 'ASI', 'Ability Score Improvement or feat.'],
-    [9, 'Roguish Archetype Feature', 'Additional feature from your Roguish Archetype.'],
-    [10, 'ASI', 'Ability Score Improvement or feat.'],
-    [11, 'Reliable Talent', 'Treat any d20 roll of 9 or lower as a 10 for ability checks you are proficient in.'],
-    [12, 'ASI', 'Ability Score Improvement or feat.'],
+    [1, 'Expertise', 'At 1st level, choose two of your skill proficiencies, or one of your skill proficiencies and your proficiency with thieves\' tools. Your proficiency bonus is doubled for any ability check you make that uses either of the chosen proficiencies. At 6th level, you can choose two more of your proficiencies (in skills or with thieves\' tools) to gain this benefit.'],
+    [1, 'Sneak Attack', 'Beginning at 1st level, you know how to strike subtly and exploit a foe\'s distraction. Once per turn, you can deal an extra 1d6 damage to one creature you hit with an attack if you have advantage on the attack roll. The attack must use a finesse or a ranged weapon. You don\'t need advantage on the attack roll if another enemy of the target is within 5 feet of it, that enemy isn\'t incapacitated, and you don\'t have disadvantage on the attack roll. The amount of the extra damage increases as you gain levels in this class, as shown in the Sneak Attack column of the Rogue table.'],
+    [1, 'Thieves\' Cant', 'During your rogue training you learned thieves\' cant, a secret mix of dialect, jargon, and code that allows you to hide messages in seemingly normal conversation. Only another creature that knows thieves\' cant understands such messages. It takes four times longer to convey such a message than it does to speak the same idea plainly. In addition, you understand a set of secret signs and symbols used to convey short, simple messages, such as whether an area is dangerous or the territory of a thieves\' guild, whether loot is nearby, or whether the people in an area are easy marks or will provide a safe house for thieves on the run.'],
+    [2, 'Cunning Action', 'Starting at 2nd level, your quick thinking and agility allow you to move and act quickly. You can take a bonus action on each of your turns in combat. This action can be used only to take the Dash, Disengage, or Hide action.'],
+    [3, 'Roguish Archetype', 'At 3rd level, you choose an archetype that you emulate in the exercise of your rogue abilities from the list of available archetypes. Your archetype choice grants you features at 3rd level and then again at 9th, 13th, and 17th level.'],
+    [4, 'Ability Score Improvement', 'When you reach 4th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [5, 'Uncanny Dodge', 'Starting at 5th level, when an attacker that you can see hits you with an attack, you can use your reaction to halve the attack\'s damage against you.'],
+    [6, 'Expertise', 'At 6th level, you can choose two more of your proficiencies (in skills or with thieves\' tools) to gain the benefit of Expertise.'],
+    [7, 'Evasion', 'Beginning at 7th level, you can nimbly dodge out of the way of certain area effects, such as a red dragon\'s fiery breath or an ice storm spell. When you are subjected to an effect that allows you to make a Dexterity saving throw to take only half damage, you instead take no damage if you succeed on the saving throw, and only half damage if you fail.'],
+    [8, 'Ability Score Improvement', 'When you reach 8th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [9, 'Roguish Archetype feature', 'At 9th level, you gain a feature granted by your Roguish Archetype.'],
+    [10, 'Ability Score Improvement', 'When you reach 10th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [11, 'Reliable Talent', 'By 11th level, you have refined your chosen skills until they approach perfection. Whenever you make an ability check that lets you add your proficiency bonus, you can treat a d20 roll of 9 or lower as a 10.'],
+    [12, 'Ability Score Improvement', 'When you reach 12th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [13, 'Roguish Archetype feature', 'At 13th level, you gain a feature granted by your Roguish Archetype.'],
+    [14, 'Blindsense', 'Starting at 14th level, if you are able to hear, you are aware of the location of any hidden or invisible creature within 10 feet of you.'],
+    [15, 'Slippery Mind', 'By 15th level, you have acquired greater mental strength. You gain proficiency in Wisdom saving throws.'],
+    [16, 'Ability Score Improvement', 'When you reach 16th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [17, 'Roguish Archetype feature', 'At 17th level, you gain a feature granted by your Roguish Archetype.'],
+    [18, 'Elusive', 'Beginning at 18th level, you are so evasive that attackers rarely gain the upper hand against you. No attack roll has advantage against you while you aren\'t incapacitated.'],
+    [19, 'Ability Score Improvement', 'When you reach 19th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [20, 'Stroke of Luck', 'At 20th level, you have an uncanny knack for succeeding when you need to. If your attack misses a target within range, you can turn the miss into a hit. Alternatively, if you fail an ability check, you can treat the d20 roll as a 20. Once you use this feature, you can\'t use it again until you finish a short or long rest.'],
   ],
   Sorcerer: [
-    [1, 'Spellcasting', 'You can cast sorcerer spells using CHA as your spellcasting ability.'],
-    [1, 'Sorcerous Origin', 'Choose a Sorcerous Origin subclass that grants you features at levels 1, 6, 14, and 18.'],
-    [2, 'Font of Magic', 'You have sorcery points equal to your sorcerer level. Regained on long rest.'],
-    [2, 'Flexible Casting', 'Convert sorcery points to spell slots or convert spell slots to sorcery points.'],
-    [3, 'Metamagic', 'Choose two Metamagic options to twist your spells.'],
-    [4, 'ASI', 'Ability Score Improvement or feat.'],
-    [5, 'Sorcerous Origin Feature', 'Additional feature from your Sorcerous Origin.'],
-    [6, 'Sorcerous Origin Feature', 'Additional feature from your Sorcerous Origin.'],
-    [8, 'ASI', 'Ability Score Improvement or feat.'],
-    [10, 'Metamagic', 'Choose one more Metamagic option.'],
-    [12, 'ASI', 'Ability Score Improvement or feat.'],
+    [1, 'Sorcerous Origin', 'Choose a sorcerous origin, which describes the source of your innate magical power, from the list of available origins. Your choice grants you features when you choose it at 1st level and again at 6th, 14th, and 18th level.'],
+    [1, 'Spellcasting', 'An event in your past, or in the life of a parent or ancestor, left an indelible mark on you, infusing you with arcane magic. This font of magic, whatever its origin, fuels your spells. See chapter 10 for the general rules of spellcasting and chapter 11 for the sorcerer spell list. Cantrips: At 1st level, you know four cantrips of your choice from the sorcerer spell list. You learn an additional sorcerer cantrip of your choice at 4th level and another at 10th level. Spell Slots: The Sorcerer table shows how many spell slots you have to cast your sorcerer spells of 1st level and higher. To cast one of these sorcerer spells, you must expend a slot of the spell\'s level or higher. You regain all expended spell slots when you finish a long rest. For example, if you know the 1st-level spell burning hands and have a 1st-level and a 2nd-level spell slot available, you can cast burning hands using either slot. Spells Known of 1st Level and Higher: You know two 1st-level spells of your choice from the sorcerer spell list. You learn an additional sorcerer spell of your choice at each level except 12th, 14th, 16th, 18th, 19th, and 20th. Each of these spells must be of a level for which you have spell slots. For instance, when you reach 3rd level in this class, you can learn one new spell of 1st or 2nd level. Additionally, when you gain a level in this class, you can choose one of the sorcerer spells you know and replace it with another spell from the sorcerer spell list, which also must be of a level for which you have spell slots. Spellcasting Ability: Charisma is your spellcasting ability for your sorcerer spells, since the power of your magic relies on your ability to project your will into the world. You use your Charisma whenever a spell refers to your spellcasting ability. In addition, you use your Charisma modifier when setting the saving throw DC for a sorcerer spell you cast and when making an attack roll with one. Spellcasting Focus: You can use an arcane focus as a spellcasting focus for your sorcerer spells.'],
+    [2, 'Flexible Casting', 'You can use your sorcery points to gain additional spell slots, or sacrifice spell slots to gain additional sorcery points. You learn other ways to use your sorcery points as you reach higher levels. Creating Spell Slots: You can transform unexpended sorcery points into one spell slot as a bonus action on your turn. The created spell slots vanish at the end of a long rest. The Creating Spell Slots table shows the cost of creating a spell slot of a given level. You can create spell slots no higher in level than 5th. [Table: Creating Spell Slots] Converting a Spell Slot to Sorcery Points: As a bonus action on your turn, you can expend one spell slot and gain a number of sorcery points equal to the slot\'s level.'],
+    [2, 'Font of Magic', 'At 2nd level, you tap into a deep wellspring of magic within yourself. This wellspring is represented by sorcery points, which allow you to create a variety of magical effects.'],
+    [2, 'Sorcery Points', 'You have 2 sorcery points, and you gain one additional point every time you level up, to a maximum of 20 at level 20. You can never have more sorcery points than shown on the table for your level. You regain all spent sorcery points when you finish a long rest.'],
+    [3, 'Metamagic', 'At 3rd level, you gain the ability to twist your spells to suit your needs. You gain two of the following Metamagic options of your choice. You gain another one at 10th and 17th level. You can use only one Metamagic option on a spell when you cast it, unless otherwise noted. '],
+    [4, 'Ability Score Improvement', 'When you reach 4th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [6, 'Sorcerous Origin feature', 'At 6th level, you gain a feature granted by your Sorcerous Origin.'],
+    [8, 'Ability Score Improvement', 'When you reach 8th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [10, 'Metamagic', 'At 10th level, you learn an additional metamagic option.'],
+    [12, 'Ability Score Improvement', 'When you reach 12th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [14, 'Sorcerous Origin feature', 'At 14th level, you gain a feature granted by your Sorcerous Origin.'],
+    [16, 'Ability Score Improvement', 'When you reach 16th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [17, 'Metamagic', 'At 17th level, you learn an additional metamagic option.'],
+    [18, 'Sorcerous Origin feature', 'At 18th level, you gain a feature granted by your Sorcerous Origin.'],
+    [19, 'Ability Score Improvement', 'When you reach 19th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [20, 'Sorcerous Restoration', 'At 20th level, you regain 4 expended sorcery points whenever you finish a short rest.'],
   ],
   Warlock: [
-    [1, 'Otherworldly Patron', 'Choose an Otherworldly Patron subclass that grants you spells and features.'],
-    [1, 'Pact Magic', 'Your spells are cast at your highest available slot and all slots are regained on short or long rest. Use CHA as your spellcasting ability.'],
-    [2, 'Eldritch Invocations', 'Choose two Eldritch Invocations that grant you permanent magical abilities.'],
-    [3, 'Pact Boon', 'Choose a Pact Boon: Pact of the Chain, Blade, or Tome.'],
-    [3, 'Otherworldly Patron Feature', 'Additional feature from your Otherworldly Patron.'],
-    [4, 'ASI', 'Ability Score Improvement or feat.'],
-    [5, 'Eldritch Invocations', 'Choose one more Eldritch Invocation.'],
-    [6, 'Otherworldly Patron Feature', 'Additional feature from your Otherworldly Patron.'],
-    [7, 'Eldritch Invocations', 'Choose one more Eldritch Invocation.'],
-    [8, 'ASI', 'Ability Score Improvement or feat.'],
-    [9, 'Eldritch Invocations', 'Choose one more Eldritch Invocation.'],
-    [10, 'Otherworldly Patron Feature', 'Additional feature from your Otherworldly Patron.'],
-    [11, 'Mystic Arcanum (6th level)', 'Choose a 6th-level spell as your mystic arcanum. Cast it once per long rest without using a spell slot.'],
-    [12, 'ASI', 'Ability Score Improvement or feat.'],
+    [1, 'Otherworldly Patron', 'At 1st level, you have struck a bargain with an otherworldly being chosen from the list of available patrons. Your choice grants you features at 1st level and again at 6th, 10th, and 14th level.'],
+    [1, 'Pact Magic', 'Your arcane research and the magic bestowed on you by your patron have given you facility with spells. See chapter 10 for the general rules of spellcasting and chapter 11 for the warlock spell list. Cantrips: You know two cantrips of your choice from the warlock spell list. You learn additional warlock cantrips of your choice at higher levels, as shown in the Cantrips Known column of the Warlock table. Spell Slots: The Warlock table shows how many spell slots you have to cast your warlock spells of 1st through 5th level. The table also shows what the level of those slots is; all of your spell slots are the same level. To cast one of your warlock spells of 1st level or higher, you must expend a spell slot. You regain all expended spell slots when you finish a short or long rest. For example, when you are 5th level, you have two 3rd-level spell slots. To cast the 1st-level spell witch bolt, you must spend one of those slots, and you cast it as a 3rd-level spell. Spells Known of 1st Level and Higher: At 1st level, you know two 1st-level spells of your choice from the warlock spell list. The Spells Known column of the Warlock table shows when you learn more warlock spells of your choice of 1st level and higher. A spell you choose must be of a level no higher than what\'s shown in the table\'s Slot Level column for your level. When you reach 6th level, for example, you learn a new warlock spell, which can be 1st, 2nd, or 3rd level. Additionally, when you gain a level in this class, you can choose one of the warlock spells you know and replace it with another spell from the warlock spell list, which also must be of a level for which you have spell slots. Spellcasting Ability: Charisma is your spellcasting ability for your warlock spells, so you use your Charisma whenever a spell refers to your spellcasting ability. In addition, you use your Charisma modifier when setting the saving throw DC for a warlock spell you cast and when making an attack roll with one. Spellcasting Focus: You can use an arcane focus as a spellcasting focus for your warlock spells.'],
+    [2, 'Eldritch Invocations', 'In your study of occult lore, you have unearthed eldritch invocations, fragments of forbidden knowledge that imbue you with an abiding magical ability. At 2nd level, you gain two eldritch invocations of your choice. A list of the available options can be found on the Optional Features page. When you gain certain warlock levels, you gain additional invocations of your choice, as shown in the Invocations Known column of the Warlock table. Additionally, when you gain a level in this class, you can choose one of the invocations you know and replace it with another invocation that you could learn at that level. If an eldritch invocation has prerequisites, you must meet them to learn it. You can learn the invocation at the same time that you meet its prerequisites. A level prerequisite refers to your level in this class.'],
+    [3, 'Pact Boon', 'At 3rd level, your otherworldly patron bestows a gift upon you for your loyal service. You gain one of the following features of your choice. '],
+    [4, 'Ability Score Improvement', 'When you reach 4th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [6, 'Otherworldly Patron feature', 'At 6th level, you gain a feature granted by your Otherworldly Patron.'],
+    [8, 'Ability Score Improvement', 'When you reach 8th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [10, 'Otherworldly Patron feature', 'At 10th level, you gain a feature granted by your Otherworldly Patron.'],
+    [11, 'Mystic Arcanum (6th level)', 'At 11th level, your patron bestows upon you a magical secret called an arcanum. Choose one 6th-level spell from the warlock spell list as this arcanum. You can cast your arcanum spell once without expending a spell slot. You must finish a long rest before you can do so again. At higher levels, you gain more warlock spells of your choice that can be cast in this way: one 7th-level spell at 13th level, one 8th-level spell at 15th level, and one 9th-level spell at 17th level. You regain all uses of your Mystic Arcanum when you finish a long rest.'],
+    [12, 'Ability Score Improvement', 'When you reach 12th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [13, 'Mystic Arcanum (7th level)', 'At 13th level, your patron bestows upon you a magical secret called an arcanum. Choose one 7th-level spell from the warlock spell list as this arcanum. You can cast your arcanum spell once without expending a spell slot. You must finish a long rest before you can do so again.'],
+    [14, 'Otherworldly Patron feature', 'At 14th level, you gain a feature granted by your Otherworldly Patron.'],
+    [15, 'Mystic Arcanum (8th level)', 'At 15th level, your patron bestows upon you a magical secret called an arcanum. Choose one 8th-level spell from the warlock spell list as this arcanum. You can cast your arcanum spell once without expending a spell slot. You must finish a long rest before you can do so again.'],
+    [16, 'Ability Score Improvement', 'When you reach 16th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [17, 'Mystic Arcanum (9th level)', 'At 17th level, your patron bestows upon you a magical secret called an arcanum. Choose one 9th-level spell from the warlock spell list as this arcanum. You can cast your arcanum spell once without expending a spell slot. You must finish a long rest before you can do so again.'],
+    [19, 'Ability Score Improvement', 'When you reach 19th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [20, 'Eldritch Master', 'At 20th level, you can draw on your inner reserve of mystical power while entreating your patron to regain expended spell slots. You can spend 1 minute entreating your patron for aid to regain all your expended spell slots from your Pact Magic feature. Once you regain spell slots with this feature, you must finish a long rest before you can do so again.'],
   ],
   Wizard: [
-    [1, 'Spellcasting', 'You can cast wizard spells using INT as your spellcasting ability.'],
-    [1, 'Arcane Recovery', 'Once per day during a short rest, recover spell slots with combined level up to half your wizard level (rounded up).'],
-    [2, 'Arcane Tradition', 'Choose an Arcane Tradition subclass.'],
-    [4, 'ASI', 'Ability Score Improvement or feat.'],
-    [6, 'Arcane Tradition Feature', 'Additional feature from your Arcane Tradition.'],
-    [8, 'ASI', 'Ability Score Improvement or feat.'],
-    [10, 'Arcane Tradition Feature', 'Additional feature from your Arcane Tradition.'],
-    [12, 'ASI', 'Ability Score Improvement or feat.'],
+    [1, 'Arcane Recovery', 'You have learned to regain some of your magical energy by studying your spellbook. Once per day when you finish a short rest, you can choose expended spell slots to recover. The spell slots can have a combined level that is equal to or less than half your wizard level (rounded up), and none of the slots can be 6th level or higher. For example, if you\'re a 4th-level wizard, you can recover up to two levels worth of spell slots. You can recover either a 2nd-level spell slot or two 1st-level spell slots.'],
+    [1, 'Spellcasting', 'As a student of arcane magic, you have a spellbook containing spells that show the first glimmerings of your true power. See chapter 10 for the general rules of spellcasting and chapter 11 for the wizard spell list. Cantrips: At 1st level, you know three cantrips of your choice from the wizard spell list. You learn additional wizard cantrips of your choice at higher levels, as shown in the Cantrips Known column of the Wizard table. Spellbook: At 1st level, you have a spellbook containing six 1st-level wizard spells of your choice. Your spellbook is the repository of the wizard spells you know, except your cantrips, which are fixed in your mind. Preparing and Casting Spells: The Wizard table shows how many spell slots you have to cast your wizard spells of 1st level and higher. To cast one of these spells, you must expend a slot of the spell\'s level or higher. You regain all expended spell slots when you finish a long rest. You prepare the list of wizard spells that are available for you to cast. To do so, choose a number of wizard spells from your spellbook equal to your Intelligence modifier + your wizard level (minimum of one spell). The spells must be of a level for which you have spell slots. For example, if you\'re a 3rd-level wizard, you have four 1st-level and two 2nd-level spell slots. With an Intelligence of 16, your list of prepared spells can include six spells of 1st or 2nd level, in any combination, chosen from your spellbook. If you prepare the 1st-level spell magic missile, you can cast it using a 1st-level or a 2nd-level slot. Casting the spell doesn\'t remove it from your list of prepared spells. You can change your list of prepared spells when you finish a long rest. Preparing a new list of wizard spells requires time spent studying your spellbook and memorizing the incantations and gestures you must make to cast the spell: at least 1 minute per spell level for each spell on your list. Spellcasting Ability: Intelligence is your spellcasting ability for your wizard spells, since you learn your wizard spells through dedicated study and memorization. You use your Intelligence whenever a spell refers to your spellcasting ability. In addition, you use your Intelligence modifier when setting the saving throw DC for a wizard spell you cast and when making an attack roll with one. Ritual Casting: You can cast a wizard spell as a ritual if that spell has the ritual tag and you have the spell in your spellbook. You don\'t need to have the spell prepared. Spellcasting Focus: You can use an arcane focus as a spellcasting focus for your wizard spells. Learning Spells of 1st Level and Higher: Each time you gain a wizard level, you can add two wizard spells of your choice to your spellbook. Each of these spells must be of a level for which you have spell slots, as shown on the Wizard table. On your adventures, you might find other spells that you can add to your spellbook (see "Your Spellbook"). The spells that you add to your spellbook as you gain levels reflect the arcane research you conduct on your own, as well as intellectual breakthroughs you have had about the nature of the multiverse. You might find other spells during your adventures. You could discover a spell recorded on a scroll in an evil wizard\'s chest, for example, or in a dusty tome in an ancient library. A spellbook doesn\'t contain cantrips. Copying a Spell into the Book: When you find a wizard spell of 1st level or higher, you can add it to your spellbook if it is of a spell level you can prepare and if you can spare the time to decipher and copy it. Copying a spell into your spellbook involves reproducing the basic form of the spell, then deciphering the unique system of notation used by the wizard who wrote it. You must practice the spell until you understand the sounds or gestures required, then transcribe it into your spellbook using your own notation. For each level of the spell, the process takes 2 hours and costs 50 gp. The cost represents material components you expend as you experiment with the spell to master it, as well as the fine inks you need to record it. Once you have spent this time and money, you can prepare the spell just like your other spells. Copying from a Spell Scroll: A wizard spell on a spell scroll can be copied just as spells in spellbooks can be copied. When you copy a spell from a spell scroll, you must succeed on an Intelligence (Arcana) check with a DC equal to 10 + the spell\'s level. If the check succeeds, the spell is successfully copied. Whether the check succeeds or fails, the spell scroll is destroyed. Replacing the Book: You can copy a spell from your own spellbook into another book—for example, if you want to make a backup copy of your spellbook. This is just like copying a new spell into your spellbook, but faster and easier, since you understand your own notation and already know how to cast the spell. You need spend only 1 hour and 10 gp for each level of the copied spell. If you lose your spellbook, you can use the same procedure to transcribe the spells that you have prepared into a new spellbook. Filling out the remainder of your spellbook requires you to find new spells to do so, as normal. For this reason, many wizards keep backup spellbooks in a safe place. The Book\'s Appearance: Your spellbook is a unique compilation of spells, with its own decorative flourishes and margin notes. It might be a plain, functional leather volume that you received as a gift from your master, a finely bound gilt-edged tome you found in an ancient library, or even a loose collection of notes scrounged together after you lost your previous spellbook in a mishap.'],
+    [2, 'Arcane Tradition', 'When you reach 2nd level, you choose an arcane tradition from the list of available traditions, shaping your practice of magic. Your choice grants you features at 2nd level and again at 6th, 10th, and 14th level.'],
+    [4, 'Ability Score Improvement', 'When you reach 4th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [6, 'Arcane Tradition feature', 'At 6th level, you gain a feature granted by your Arcane Tradition.'],
+    [8, 'Ability Score Improvement', 'When you reach 8th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [10, 'Arcane Tradition feature', 'At 10th level, you gain a feature granted by your Arcane Tradition.'],
+    [12, 'Ability Score Improvement', 'When you reach 12th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [14, 'Arcane Tradition feature', 'At 14th level, you gain a feature granted by your Arcane Tradition.'],
+    [16, 'Ability Score Improvement', 'When you reach 16th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [18, 'Spell Mastery', 'At 18th level, you have achieved such mastery over certain spells that you can cast them at will. Choose a 1st-level wizard spell and a 2nd-level wizard spell that are in your spellbook. You can cast those spells at their lowest level without expending a spell slot when you have them prepared. If you want to cast either spell at a higher level, you must expend a spell slot as normal. By spending 8 hours in study, you can exchange one or both of the spells you chose for different spells of the same levels.'],
+    [19, 'Ability Score Improvement', 'When you reach 19th level, you can increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1. As normal, you can\'t increase an ability score above 20 using this feature. If your DM allows the use of feats, you may instead take a a feat.'],
+    [20, 'Signature Spells', 'When you reach 20th level, you gain mastery over two powerful spells and can cast them with little effort. Choose two 3rd-level wizard spells in your spellbook as your signature spells. You always have these spells prepared, they don\'t count against the number of spells you have prepared, and you can cast each of them once at 3rd level without expending a spell slot. When you do so, you can\'t do so again until you finish a short or long rest. If you want to cast either spell at a higher level, you must expend a spell slot as normal.'],
   ],
 };
 
-function getClassFeaturesUpToLevel(className, level) {
-  const list = CLASS_FEATURES[className] || [];
+const CLASS_FEATURES_2024 = {
+  Barbarian: [
+    [1, 'Rage', 'You can imbue yourself with a primal power called Rage, a force that grants you extraordinary might and resilience. You can enter it as a Bonus Action if you aren\'t wearing Heavy armor. You can enter your Rage the number of times shown for your Barbarian level in the Rages column of the Barbarian Features table. You regain one expended use when you finish a Short Rest, and you regain all expended uses when you finish a Long Rest. While active, your Rage follows the rules below. Damage Resistance: You have Resistance to Bludgeoning, Piercing, and Slashing damage. Rage Damage: When you make an attack using Strength—with either a weapon or an Unarmed Strike—and deal damage to the target, you gain a bonus to the damage that increases as you gain levels as a Barbarian, as shown in the Rage Damage column of the Barbarian Features table. Strength Advantage: You have Advantage on Strength checks and Strength saving throws. No Concentration or Spells: You can\'t maintain Concentration, and you can\'t cast spells. Duration: The Rage lasts until the end of your next turn, and it ends early if you don Heavy armor or have the Incapacitated condition. If your Rage is still active on your next turn, you can extend the Rage for another round by doing one of the following: • Make an attack roll against an enemy. • Force an enemy to make a saving throw. • Take a Bonus Action to extend your Rage. Each time the Rage is extended, it lasts until the end of your next turn. You can maintain a Rage for up to 10 minutes.'],
+    [1, 'Unarmored Defense', 'While you aren\'t wearing any armor, your base Armor Class equals 10 plus your Dexterity and Constitution modifiers. You can use a Shield and still gain this benefit.'],
+    [1, 'Weapon Mastery', 'Your training with weapons allows you to use the weapon mastery properties of two kinds of Simple or Martial Melee weapons of your choice, such as Greataxe and Handaxe. Whenever you finish a Long Rest, you can practice weapon drills and change one of those weapon choices. When you reach certain Barbarian levels, you gain the ability to use the weapon mastery properties of more kinds of weapons, as shown in the Weapon Mastery column of the Barbarian Features table.'],
+    [2, 'Danger Sense', 'You gain an uncanny sense of when things aren\'t as they should be, giving you an edge when you dodge perils. You have Advantage on Dexterity saving throws unless you have the Incapacitated condition.'],
+    [2, 'Reckless Attack', 'You can throw aside all concern for defense to attack with increased ferocity. When you make your first attack roll on your turn, you can decide to attack recklessly. Doing so gives you Advantage on attack rolls using Strength until the start of your next turn, but attack rolls against you have Advantage during that time.'],
+    [3, 'Barbarian Subclass', 'You gain a Barbarian subclass of your choice. A subclass is a specialization that grants you features at certain Barbarian levels. For the rest of your career, you gain each of your subclass\'s features that are of your Barbarian level or lower.'],
+    [3, 'Primal Knowledge', 'You gain proficiency in another skill of your choice from the skill list available to Barbarians at level 1. In addition, while your Rage is active, you can channel primal power when you attempt certain tasks; whenever you make an ability check using one of the following skills, you can make it as a Strength check even if it normally uses a different ability: Acrobatics, Intimidation, Perception, Stealth, or Survival. When you use this ability, your Strength represents primal power coursing through you, honing your agility, bearing, and senses.'],
+    [4, 'Ability Score Improvement', 'You gain the Ability Score Improvement feat or another a feat of your choice for which you qualify. You gain this feature again at Barbarian levels 8, 12, and 16.'],
+    [5, 'Extra Attack', 'You can attack twice instead of once whenever you take the Attack action on your turn.'],
+    [5, 'Fast Movement', 'Your speed increases by 10 feet while you aren\'t wearing Heavy armor.'],
+    [6, 'Subclass Feature', 'You gain a feature from your Barbarian subclass.'],
+    [7, 'Feral Instinct', 'Your instincts are so honed that you have Advantage on Initiative rolls.'],
+    [7, 'Instinctive Pounce', 'As part of the Bonus Action you take to enter your Rage, you can move up to half your Speed.'],
+    [8, 'Ability Score Improvement', 'You gain the Ability Score Improvement feat or another a feat of your choice for which you qualify.'],
+    [9, 'Brutal Strike', 'If you use Reckless Attack, you can forgo any Advantage on one Strength-based attack roll of your choice on your turn. The chosen attack roll mustn\'t have Disadvantage. If the chosen attack roll hits, the target takes an extra 1d10 damage of the same type dealt by the weapon or Unarmed Strike, and you can cause one Brutal Strike effect of your choice. You have the following effect options. Forceful Blow: The target is pushed 15 feet straight away from you. You can then move up to half your Speed straight toward the target without provoking Opportunity Attack. Hamstring Blow: The target\'s Speed is reduced by 15 feet until the start of your next turn. A target can be affected by only one Hamstring Blow at a time—the most recent one.'],
+    [10, 'Subclass Feature', 'You gain a feature from your Barbarian subclass.'],
+    [11, 'Relentless Rage', 'Your Rage can keep you fighting despite grievous wounds. If you drop to 0 Hit Points while your Rage is active and don\'t die outright, you can make a 10 Constitution saving throw. If you succeed, your Hit Points instead change to a number equal to twice your Barbarian level. Each time you use this feature after the first, the DC increases by 5. When you finish a Short Rest or Long Rest, the DC resets to 10.'],
+    [12, 'Ability Score Improvement', 'You gain the Ability Score Improvement feat or another a feat of your choice for which you qualify.'],
+    [13, 'Improved Brutal Strike', 'You have honed new ways to attack furiously. The following effects are now among your Brutal Strike options. Staggering Blow: The target has Disadvantage on the next saving throw it makes, and it can\'t make Opportunity Attack until the start of your next turn. Sundering Blow: Before the start of your next turn, the next attack roll made by another creature against the target gains a +5 bonus to the roll. An attack roll can gain only one Sundering Blow bonus.'],
+    [14, 'Subclass Feature', 'You gain a feature from your Barbarian subclass.'],
+    [15, 'Persistent Rage', 'When you roll Initiative, you can regain all expended uses of Rage. After you regain uses of Rage in this way, you can\'t do so again until you finish a Long Rest. In addition, your Rage is so fierce that it now lasts for 10 minutes without you needing to do anything to extend it from round to round. Your Rage ends early if you have the Unconscious condition (not just the Incapacitated condition) or don Heavy armor.'],
+    [16, 'Ability Score Improvement', 'You gain the Ability Score Improvement feat or another a feat of your choice for which you qualify.'],
+    [17, 'Improved Brutal Strike', 'The extra damage of your Brutal Strike increases to 2d10. In addition, you can use two different Brutal Strike effects whenever you use your Brutal Strike feature.'],
+    [18, 'Indomitable Might', 'If your total for a Strength check or Strength saving throw is less than your Strength score, you can use that score in place of the total.'],
+    [19, 'Epic Boon', 'You gain an Epic Boon feat or another a feat of your choice for which you qualify. Boon of Irresistible Offense is recommended.'],
+    [20, 'Primal Champion', 'You embody primal power. Your Strength and Constitution scores increase by 4, to a maximum of 25.'],
+  ],
+  Bard: [
+    [1, 'Bardic Inspiration', 'You can supernaturally inspire others through words, music, or dance. This inspiration is represented by your Bardic Inspiration die, which is a d6. Using Bardic Inspiration: As a Bonus Action, you can inspire another creature within 60 feet of yourself who can see or hear you. That creature gains one of your Bardic Inspiration dice. A creature can have only one Bardic Inspiration die at a time. Once within the next hour when the creature fails a D20 Test, the creature can roll the Bardic Inspiration die and add the number rolled to the d20, potentially turning the failure into a success. A Bardic Inspiration die is expended when it\'s rolled. Number of Uses: You can confer a Bardic Inspiration die a number of times equal to your Charisma modifier (minimum of once), and you regain all expended uses when you finish a Long Rest. At Higher Levels: Your Bardic Inspiration die changes when you reach certain Bard levels, as shown in the Bardic Die column of the Bard Features table. The die becomes a d8 at level 5, a d10 at level 10, and a d12 at level 15.'],
+    [1, 'Spellcasting', 'You have learned to cast spells through your bardic arts. See chapter 7 for the rules on spellcasting. The information below details how you use those rules with Bard spells, which appear in the Bard spell list later in the class\'s description. Cantrips: You know two cantrips of your choice from the Bard spell list. Dancing Lights and Vicious Mockery are recommended. Whenever you gain a Bard level, you can replace one of your cantrips with another cantrip of your choice from the Bard spell list. When you reach Bard levels 4 and 10, you learn another cantrip of your choice from the Bard spell list, as shown in the Cantrips column of the Bard Features table. Spell Slots: The Bard Features table shows how many spell slots you have to cast your level 1+ spells. You regain all expended slots when you finish a Long Rest. Prepared Spells of Level 1+: You prepare the list of level 1+ spells that are available for you to cast with this feature. To start, choose four level 1 spells from the Bard spell list. Charm Person, Color Spray, Dissonant Whispers, and Healing Word are recommended. The number of spells on your list increases as you gain Bard levels, as shown in the Prepared Spells column of the Bard Features table. Whenever that number increases, choose additional spells from the Bard spell list until the number of spells on your list matches the number on the table. The chosen spells must be of a level for which you have spell slots. For example, if you\'re a level 3 Bard, your list of prepared spells can include six spells of levels 1 and 2 in any combination. If another Bard feature gives you spells that you always have prepared, those spells don\'t count against the number of spells you can prepare with this feature, but those spells otherwise count as Bard spells for you. Changing Your Prepared Spells: Whenever you gain a Bard level, you can replace one spell on your list with another Bard spell for which you have spell slots. Spellcasting Ability: Charisma is your spellcasting ability for your Bard spells. Spellcasting Focus: You can use a Musical Instrument as a Spellcasting Focus for your Bard spells.'],
+    [2, 'Expertise', 'You gain Expertise in two of your skill proficiencies of your choice. Performance and Persuasion are recommended if you have proficiency in them. At Bard level 9, you gain Expertise in two more of your skill proficiencies of your choice.'],
+    [2, 'Jack of All Trades', 'You can add half your Proficiency (round down) to any ability check you make that uses a skill proficiency you lack and that doesn\'t otherwise use your Proficiency. For example, if you make a Strength (Athletics) check and lack Athletics proficiency, you can add half your Proficiency to the check. Does your Bard beat a drum while chanting the deeds of ancient heroes? Strum a lute while crooning romantic tunes? Perform arias of stirring power? Recite dramatic monologues from classic tragedies? Use the rhythm of a folk dance to coordinate the movement of allies in battle? Compose naughty limericks? When you play a Bard, consider the style of artistic performance you favor, the moods you might invoke, and the themes that inspire your own creations. Are your poems inspired by moments of natural beauty, or are they brooding reflections on loss? Do you prefer lofty hymns or rowdy tavern songs? Are you drawn to laments for the fallen or celebrations of joy? Do you dance merry jigs or perform elaborate interpretive choreography? Do you focus on one style of performance or strive to master them all?'],
+    [3, 'Bard Subclass', 'You gain a Bard subclass of your choice. A subclass is a specialization that grants you features at certain Bard levels. For the rest of your career, you gain each of your subclass\'s features that are of your Bard level or lower.'],
+    [4, 'Ability Score Improvement', 'You gain the Ability Score Improvement feat or another a feat of your choice for which you qualify. You gain this feature again at Bard levels 8, 12, and 16.'],
+    [5, 'Font of Inspiration', 'You now regain all your expended uses of Bardic Inspiration when you finish a Short Rest or Long Rest. In addition, you can expend a spell slot (no action required) to regain one expended use of Bardic Inspiration.'],
+    [6, 'Subclass Feature', 'You gain a feature from your Bard Subclass.'],
+    [7, 'Countercharm', 'You can use musical notes or words of power to disrupt mind-influencing effects. If you or a creature within 30 feet of you fails a saving throw against an effect that applies the Charmed or Frightened condition, you can take a Reaction to cause the save to be rerolled, and the new roll has Advantage.'],
+    [8, 'Ability Score Improvement', 'You gain the Ability Score Improvement feat or another a feat of your choice for which you qualify.'],
+    [9, 'Expertise', 'You gain Expertise in two of your Skill Proficiencies of your choice.'],
+    [10, 'Magical Secrets', 'You\'ve learned secrets from various magical traditions. Whenever you reach a Bard level (including this level) and the Prepared Spells number in the Bard Features table increases, you can choose any of your new prepared spells from the Bard, Cleric, Druid, and Wizard spell lists, and the chosen spells count as Bard spells for you (see a class\'s section for its spell list). In addition, whenever you replace a spell prepared for this class, you can replace it with a spell from those lists.'],
+    [12, 'Ability Score Improvement', 'You gain the Ability Score Improvement feat or another a feat of your choice for which you qualify.'],
+    [14, 'Subclass Feature', 'You gain a feature from your Bard Subclass.'],
+    [16, 'Ability Score Improvement', 'You gain the Ability Score Improvement feat or another a feat of your choice for which you qualify.'],
+    [18, 'Superior Inspiration', 'When you roll Initiative, you regain expended uses of Bardic Inspiration until you have two if you have fewer than that.'],
+    [19, 'Epic Boon', 'You gain an Epic Boon feat or another a feat of your choice for which you qualify. Boon of Spell Recall is recommended.'],
+    [20, 'Words of Creation', 'You have mastered two of the Words of Creation: the words of life and death. You therefore always have the Power Word Heal and Power Word Kill spells prepared. When you cast either spell, you can target a second creature with it if that creature is within 10 feet of the first target.'],
+  ],
+  Cleric: [
+    [1, 'Divine Order', 'You have dedicated yourself to one of the following sacred roles of your choice.'],
+    [1, 'Protector', 'Trained for battle, you gain proficiency with Martial weapons and training with Heavy armor.'],
+    [1, 'Spellcasting', 'You have learned to cast spells through prayer and meditation. See chapter 7 for the rules on spellcasting. The information below details how you use those rules with Cleric spells, which appear on the Cleric spell list later in the class\'s description. Cantrips: You know three cantrips of your choice from the Cleric spell list. Guidance, Sacred Flame, and Thaumaturgy are recommended. Whenever you gain a Cleric level, you can replace one of your cantrips with another cantrip of your choice from the Cleric spell list. When you reach Cleric levels 4 and 10, you learn another cantrip of your choice from the Cleric spell list, as shown in the Cantrips column of the Cleric Features table. Spell Slots: The Cleric Features table shows how many spell slots you have to cast your level 1+ spells. You regain all expended slots when you finish a Long Rest. Prepared Spells of Level 1+: You prepare the list of level 1+ spells that are available for you to cast with this feature. To start, choose four level 1 spells from the Cleric spell list. Bless, Cure Wounds, Guiding Bolt, and Shield of Faith are recommended. The number of spells on your list increases as you gain Cleric levels, as shown in the Prepared Spells column of the Cleric Features table. Whenever that number increases, choose additional spells from the Cleric spell list until the number of spells on your list matches the number on the table. The chosen spells must be of a level for which you have spell slots. For example, if you\'re a level 3 Cleric, your list of prepared spells can include six spells of levels 1 and 2 in any combination. If another Cleric feature gives you spells that you always have prepared, those spells don\'t count against the number of spells you can prepare with this feature, but those spells otherwise count as Cleric spells for you. Changing Your Prepared Spells: Whenever you finish a Long Rest, you can change your list of prepared spells, replacing any of the spells there with other Cleric spells for which you have spell slots. Spellcasting Ability: Wisdom is your spellcasting ability for your Cleric spells. Spellcasting Focus: You can use a Holy Symbol as a Spellcasting Focus for your Cleric spells.'],
+    [1, 'Thaumaturge', 'You know one extra cantrip from the Cleric spell list. In addition, your mystical connection to the divine gives you a bonus to your Intelligence (Arcana or Religion) checks. The bonus equals your Wisdom modifier (minimum of +1).'],
+    [2, 'Channel Divinity', 'You can channel divine energy directly from the Outer Planes to fuel magical effects. You start with two such effects: Divine Spark and Turn Undead, each of which is described below. Each time you use this class\'s Channel Divinity, choose which Channel Divinity effect from this class to create. You gain additional effect options at higher Cleric levels. You can use this class\'s Channel Divinity twice. You regain one of its expended uses when you finish a Short Rest, and you regain all expended uses when you finish a Long Rest. You gain additional uses when you reach certain Cleric levels, as shown in the Channel Divinity column of the Cleric Features table. If a Channel Divinity effect requires a saving throw, the DC equals the spell save DC from this class\'s Spellcasting feature.'],
+    [2, 'Divine Spark', 'As a Magic action, you point your Holy Symbol at another creature you can see within 30 feet of yourself and focus divine energy at it. Roll 1d8 and add your Wisdom modifier. You either restore Hit Points to the creature equal to that total or force the creature to make a Constitution saving throw. On a failed save, the creature takes Necrotic or Radiant damage (your choice) equal to that total. On a successful save, the creature takes half as much damage (round down). You roll an additional d8 when you reach Cleric levels 7 (2d8), 13 (3d8), and 18 (4d8).'],
+    [2, 'Turn Undead', 'As a Magic action, you present your Holy Symbol and censure Undead creatures. Each Undead of your choice within 30 feet of you must make a Wisdom saving throw. If the creature fails its save, it has the Frightened and Incapacitated conditions for 1 minute. For that duration, it tries to move as far from you as it can on its turns. This effect ends early on the creature if it takes any damage, if you have the Incapacitated condition, or if you die.'],
+    [3, 'Cleric Subclass', 'You gain a Cleric subclass of your choice. A subclass is a specialization that grants you features at certain Cleric levels. For the rest of your career, you gain each of your subclass\'s features that are of your Cleric level or lower.'],
+    [4, 'Ability Score Improvement', 'You gain the Ability Score Improvement feat or another a feat of your choice for which you qualify. You gain this feature again at Cleric levels 8, 12, and 16.'],
+    [5, 'Sear Undead', 'Whenever you use Turn Undead, you can roll a number of d8s equal to your Wisdom modifier (minimum of 1d8) and add the rolls together. Each Undead that fails its saving throw against that use of Turn Undead takes Radiant damage equal to the roll\'s total. This damage doesn\'t end the turn effect.'],
+    [6, 'Subclass Feature', 'You gain a feature from your Cleric Subclass.'],
+    [7, 'Blessed Strikes', 'Divine power infuses you in battle. You gain one of the following options of your choice (if you get either option from a Cleric subclass in an older book, use only the option you choose for this feature).'],
+    [7, 'Divine Strike', 'Once on each of your turns when you hit a creature with an attack roll using a weapon, you can cause the target to take an extra 1d8 Necrotic or Radiant damage (your choice).'],
+    [7, 'Potent Spellcasting', 'Add your Wisdom modifier to the damage you deal with any Cleric cantrip.'],
+    [8, 'Ability Score Improvement', 'You gain the Ability Score Improvement feat or another a feat of your choice for which you qualify.'],
+    [10, 'Divine Intervention', 'You can call on your deity or pantheon to intervene on your behalf. As a Magic action, choose any Cleric spell of level 5 or lower that doesn\'t require a Reaction to cast. As part of the same action, you cast that spell without expending a spell slot or needing Material components. You can\'t use this feature again until you finish a Long Rest.'],
+    [12, 'Ability Score Improvement', 'You gain the Ability Score Improvement feat or another a feat of your choice for which you qualify.'],
+    [14, 'Improved Blessed Strikes', 'The option you chose for Blessed Strikes grows more powerful. Divine Strike: The extra damage of your Divine Strike increases to 2d8. Potent Spellcasting: When you cast a Cleric cantrip and deal damage to a creature with it, you can give vitality to yourself or another creature within 60 feet of yourself, granting a number of Temporary Hit Points equal to twice your Wisdom modifier.'],
+    [16, 'Ability Score Improvement', 'You gain the Ability Score Improvement feat or another a feat of your choice for which you qualify.'],
+    [17, 'Subclass Feature', 'You gain a feature from your Cleric Subclass.'],
+    [19, 'Epic Boon', 'You gain an Epic Boon feat or another a feat of your choice for which you qualify. Boon of Fate is recommended.'],
+    [20, 'Greater Divine Intervention', 'You can call on even more powerful divine intervention. When you use your Divine Intervention feature, you can choose Wish when you select a spell. If you do so, you can\'t use Divine Intervention again until you finish 2d4 Long Rests.'],
+  ],
+  Druid: [
+    [1, 'Druidic', 'You know Druidic, the secret language of Druids. While learning this ancient tongue, you also unlocked the magic of communicating with animals; you always have the Speak with Animals spell prepared. You can use Druidic to leave hidden messages. You and others who know Druidic automatically spot such a message. Others spot the message\'s presence with a successful 15 Intelligence (Investigation) check but can\'t decipher it without magic.'],
+    [1, 'Magician', 'You know one extra cantrip from the Druid spell list. In addition, your mystical connection to nature gives you a bonus to your Intelligence (Arcana or Nature) checks. The bonus equals your Wisdom modifier (minimum bonus of +1).'],
+    [1, 'Primal Order', 'You have dedicated yourself to one of the following sacred roles of your choice.'],
+    [1, 'Spellcasting', 'You have learned to cast spells through studying the mystical forces of nature. See chapter 7 for the rules on spellcasting. The information below details how you use those rules with Druid spells, which appear on the Druid spell list later in the class\'s description. Cantrips: You know two cantrips of your choice from the Druid spell list. Druidcraft and Produce Flame are recommended. Whenever you gain a Druid level, you can replace one of your cantrips with another cantrip of your choice from the Druid spell list. When you reach Druid levels 4 and 10, you learn another cantrip of your choice from the Druid spell list, as shown in the Cantrips column of the Druid Features table. Spell Slots: The Druid Features table shows how many spell slots you have to cast your level 1+ spells. You regain all expended slots when you finish a Long Rest. Prepared Spells of Level 1+: You prepare the list of level 1+ spells that are available for you to cast with this feature. To start, choose four level 1 spells from the Druid spell list. Animal Friendship, Cure Wounds, Faerie Fire, and Thunderwave are recommended. The number of spells on your list increases as you gain Druid levels, as shown in the Prepared Spells column of the Druid Features table. Whenever that number increases, choose additional spells from the Druid spell list until the number of spells on your list matches the number on the table. The chosen spells must be of a level for which you have spell slots. For example, if you\'re a level 3 Druid, your list of prepared spells can include six spells of levels 1 and 2 in any combination. If another Druid feature gives you spells that you always have prepared, those spells don\'t count against the number of spells you can prepare with this feature, but those spells otherwise count as Druid spells for you. Changing Your Prepared Spells: Whenever you finish a Long Rest, you can change your list of prepared spells, replacing any of the spells with other Druid spells for which you have spell slots. Spellcasting Ability: Wisdom is your spellcasting ability for your Druid spells. Spellcasting Focus: You can use a Druidic Focus as a Spellcasting Focus for your Druid spells.'],
+    [1, 'Warden', 'Trained for battle, you gain proficiency with Martial weapons and training with Medium armor.'],
+    [2, 'Wild Companion', 'You can summon a nature spirit that assumes an animal form to aid you. As a Magic action, you can expend a spell slot or a use of Wild Shape to cast the Find Familiar spell without Material components. When you cast the spell in this way, the familiar is Fey and disappears when you finish a Long Rest.'],
+    [2, 'Wild Shape', 'The power of nature allows you to assume the form of an animal. As a Bonus Action, you shape-shift into a Beast form that you have learned for this feature (see "Known Forms" below). You stay in that form for a number of hours equal to half your Druid level or until you use Wild Shape again, have the Incapacitated condition, or die. You can also leave the form early as a Bonus Action. Number of Uses: You can use Wild Shape twice. You regain one expended use when you finish a Short Rest, and you regain all expended uses when you finish a Long Rest. You gain additional uses when you reach certain Druid levels, as shown in the Wild Shape column of the Druid Features table. Known Forms: You know four Beast forms for this feature, chosen from among Beast stat blocks that have a maximum Challenge Rating of 1/4 and that lack a Fly Speed (see appendix B for stat block options). The Rat, Riding Horse, Spider, and Wolf are recommended. Whenever you finish a Long Rest, you can replace one of your known forms with another eligible form. When you reach certain Druid levels, your number of known forms and the maximum Challenge Rating for those forms increases, as shown in the Beast Shapes table. In addition, starting at level 8, you can adopt a form that has a Fly Speed. When choosing known forms, you may look in the Monster Manual or elsewhere for eligible Beasts if the Dungeon Master permits you to do so. [Table: Beast Shapes] Rules While Shape-Shifted: While in a form, you retain your personality, memories, and ability to speak, and the following rules apply: Temporary Hit Points: When you assume a Wild Shape form, you gain a number of Temporary Hit Points equal to your Druid level. Game Statistics: Your game statistics are replaced by the Beast\'s stat block, but you retain your creature type; Hit Points; Hit Point Dice; Intelligence, Wisdom, and Charisma scores; class features; languages; and feats. You also retain your skill and saving throw proficiencies and use your Proficiency for them, in addition to gaining the proficiencies of the creature. If a skill or saving throw modifier in the Beast\'s stat block is higher than yours, use the one in the stat block. No Spellcasting: You can\'t cast spells, but shape-shifting doesn\'t break your Concentration or otherwise interfere with a spell you\'ve already cast. Objects: Your ability to handle objects is determined by the form\'s limbs rather than your own. In addition, you choose whether your equipment falls in your space, merges into your new form, or is worn by it. Worn equipment functions as normal, but the DM decides whether it\'s practical for the new form to wear a piece of equipment based on the creature\'s size and shape. Your equipment doesn\'t change size or shape to match the new form, and any equipment that the new form can\'t wear must either fall to the ground or merge with the form. Equipment that merges with the form has no effect while you\'re in that form.'],
+    [3, 'Druid Subclass', 'You gain a Druid subclass of your choice. A subclass is a specialization that grants you features at certain Druid levels. For the rest of your career, you gain each of your subclass\'s features that are of your Druid level or lower.'],
+    [4, 'Ability Score Improvement', 'You gain the Ability Score Improvement feat or another a feat of your choice for which you qualify. You gain this feature again at Druid levels 8, 12, and 16.'],
+    [5, 'Wild Resurgence', 'Once on each of your turns, if you have no uses of Wild Shape left, you can give yourself one use by expending a spell slot (no action required). In addition, you can expend one use of Wild Shape (no action required) to give yourself a level 1 spell slot, but you can\'t do so again until you finish a Long Rest.'],
+    [6, 'Subclass Feature', 'You gain a feature from your Druid Subclass.'],
+    [7, 'Elemental Fury', 'The might of the elements flows through you. You gain one of the following options of your choice.'],
+    [7, 'Potent Spellcasting', 'Add your Wisdom modifier to the damage you deal with any Druid cantrip.'],
+    [7, 'Primal Strike', 'Once on each of your turns when you hit a creature with an attack roll using a weapon or a Beast form\'s attack in Wild Shape, you can cause the target to take an extra 1d8 Cold, Fire, Lightning, or Thunder damage (choose when you hit).'],
+    [8, 'Ability Score Improvement', 'You gain the Ability Score Improvement Feat or another a feat of your choice for which you qualify.'],
+    [10, 'Subclass Feature', 'You gain a feature from your Druid Subclass.'],
+    [12, 'Ability Score Improvement', 'You gain the Ability Score Improvement Feat or another a feat of your choice for which you qualify.'],
+    [14, 'Subclass Feature', 'You gain a feature from your Druid Subclass.'],
+    [15, 'Improved Elemental Fury', 'The option you chose for Elemental Fury grows more powerful, as detailed below. Potent Spellcasting: When you cast a Druid cantrip with a range of 10 feet or greater, the spell\'s range increases by 300 feet. Primal Strike: The extra damage of your Primal Strike increases to 2d8.'],
+    [16, 'Ability Score Improvement', 'You gain the Ability Score Improvement Feat or another a feat of your choice for which you qualify.'],
+    [18, 'Beast Spells', 'While using Wild Shape, you can cast spells in Beast form, except for any spell that has a Material component with a cost specified or that consumes its Material component.'],
+    [19, 'Epic Boon', 'You gain an Epic Boon feat or another a feat of your choice for which you qualify. Boon of Dimensional Travel is recommended.'],
+    [20, 'Archdruid', 'The vitality of nature constantly blooms within you, granting you the following benefits. Evergreen Wild Shape: Whenever you roll Initiative and have no uses of Wild Shape left, you regain one expended use of it. Nature Magician: You can convert uses of Wild Shape into a spell slot (no action required). Choose a number of your unexpended uses of Wild Shape and convert them into a single spell slot, with each use contributing 2 spell levels. For example, if you convert two uses of Wild Shape, you produce a level 4 spell slot. Once you use this benefit, you can\'t do so again until you finish a Long Rest. Longevity: The primal magic that you wield causes you to age more slowly. For every ten years that pass, your body ages only one year.'],
+  ],
+  Fighter: [
+    [1, 'Fighting Style', 'You have honed your martial prowess and gain a Fighting Style feat of your choice. Defense is recommended. Whenever you gain a Fighter level, you can replace the feat you chose with a different Fighting Style feat.'],
+    [1, 'Second Wind', 'You have a limited well of physical and mental stamina that you can draw on. As a Bonus Action, you can use it to regain Hit Points equal to 1d10 plus your Fighter level. You can use this feature twice. You regain one expended use when you finish a Short Rest, and you regain all expended uses when you finish a Long Rest. When you reach certain Fighter levels, you gain more uses of this feature, as shown in the Second Wind column of the Fighter Features table.'],
+    [1, 'Weapon Mastery', 'Your training with weapons allows you to use the weapon mastery properties of three kinds of Simple or Martial weapons of your choice. Whenever you finish a Long Rest, you can practice weapon drills and change one of those weapon choices. When you reach certain Fighter levels, you gain the ability to use the weapon mastery properties of more kinds of weapons, as shown in the Weapon Mastery column of the Fighter Features table.'],
+    [2, 'Action Surge', 'You can push yourself beyond your normal limits for a moment. On your turn, you can take one additional action, except the Magic action. Once you use this feature, you can\'t do so again until you finish a Short Rest or Long Rest. Starting at level 17, you can use it twice before a rest but only once on a turn.'],
+    [2, 'Tactical Mind', 'You have a mind for tactics on and off the battlefield. When you fail an ability check, you can expend a use of your Second Wind to push yourself toward success. Rather than regaining Hit Points, you roll 1d10 and add the number rolled to the ability check, potentially turning it into a success. If the check still fails, this use of Second Wind isn\'t expended.'],
+    [3, 'Fighter Subclass', 'You gain a Fighter subclass of your choice. A subclass is a specialization that grants you features at certain Fighter levels. For the rest of your career, you gain each of your subclass\'s features that are of your Fighter level or lower.'],
+    [4, 'Ability Score Improvement', 'You gain the Ability Score Improvement feat or another a feat of your choice for which you qualify. You gain this feature again at Fighter levels 6, 8, 12, 14, and 16.'],
+    [5, 'Extra Attack', 'You can attack twice instead of once whenever you take the Attack action on your turn.'],
+    [5, 'Tactical Shift', 'Whenever you activate your Second Wind with a Bonus Action, you can move up to half your Speed without provoking Opportunity Attack.'],
+    [6, 'Ability Score Improvement', 'You gain the Ability Score Improvement feat or another a feat of your choice for which you qualify.'],
+    [7, 'Subclass Feature', 'You gain a feature from your Fighter Subclass.'],
+    [8, 'Ability Score Improvement', 'You gain the Ability Score Improvement feat or another a feat of your choice for which you qualify.'],
+    [9, 'Indomitable', 'If you fail a saving throw, you can reroll it with a bonus equal to your Fighter level. You must use the new roll, and you can\'t use this feature again until you finish a Long Rest. You can use this feature twice before a Long Rest starting at level 13 and three times before a Long Rest starting at level 17.'],
+    [9, 'Tactical Master', 'When you attack with a weapon whose mastery property you can use, you can replace that property with the , , or property for that attack.'],
+    [10, 'Subclass Feature', 'You gain a feature from your Fighter Subclass.'],
+    [11, 'Two Extra Attacks', 'You can attack three times instead of once whenever you take the Attack action on your turn.'],
+    [12, 'Ability Score Improvement', 'You gain the Ability Score Improvement feat or another a feat of your choice for which you qualify.'],
+    [13, 'Indomitable', 'If you fail a saving throw, you can reroll it with a bonus equal to your Fighter level. You must use the new roll, and you can\'t use this feature again until you finish a Long Rest. You can use this feature twice before a Long Rest starting at level 13 and three times before a Long Rest starting at level 17.'],
+    [13, 'Studied Attacks', 'You study your opponents and learn from each attack you make. If you make an attack roll against a creature and miss, you have Advantage on your next attack roll against that creature before the end of your next turn.'],
+    [14, 'Ability Score Improvement', 'You gain the Ability Score Improvement feat or another a feat of your choice for which you qualify.'],
+    [15, 'Subclass Feature', 'You gain a feature from your Fighter Subclass.'],
+    [16, 'Ability Score Improvement', 'You gain the Ability Score Improvement feat or another a feat of your choice for which you qualify.'],
+    [17, 'Action Surge', 'You can push yourself beyond your normal limits for a moment. On your turn, you can take one additional action, except the Magic action. Once you use this feature, you can\'t do so again until you finish a Short Rest or Long Rest. Starting at level 17, you can use it twice before a rest but only once on a turn.'],
+    [17, 'Indomitable', 'If you fail a saving throw, you can reroll it with a bonus equal to your Fighter level. You must use the new roll, and you can\'t use this feature again until you finish a Long Rest. You can use this feature twice before a Long Rest starting at level 13 and three times before a Long Rest starting at level 17.'],
+    [18, 'Subclass Feature', 'You gain a feature from your Fighter Subclass.'],
+    [19, 'Epic Boon', 'You gain an Epic Boon feat or another a feat of your choice for which you qualify. Boon of Combat Prowess is recommended.'],
+    [20, 'Three Extra Attacks', 'You can attack four times instead of once whenever you take the Attack action on your turn.'],
+  ],
+  Monk: [
+    [1, 'Bonus Unarmed Strike', 'You can make an Unarmed Strike as a Bonus Action.'],
+    [1, 'Dexterous Attacks', 'You can use your Dexterity modifier instead of your Strength modifier for the attack and damage rolls of your Unarmed Strikes and Monk weapons. In addition, when you use the Grapple or Shove option of your Unarmed Strike, you can use your Dexterity modifier instead of your Strength modifier to determine the save DC.'],
+    [1, 'Martial Arts', 'Your practice of martial arts gives you mastery of combat styles that use your Unarmed Strike and Monk weapons, which are the following: • Simple Melee Weapons • Martial Melee Weapons that have the Light property You gain the following benefits while you are unarmed or wielding only Monk weapons and you aren\'t wearing armor or wielding a Shield.'],
+    [1, 'Martial Arts Die', 'You can roll 1d6 in place of the normal damage of your Unarmed Strike or Monk weapons. This die changes as you gain Monk levels, as shown in the Martial Arts column of the Monk Features table.'],
+    [1, 'Unarmored Defense', 'While you aren\'t wearing armor or wielding a Shield, your base Armor Class equals 10 plus your Dexterity and Wisdom modifiers.'],
+    [2, 'Flurry of Blows', 'You can expend 1 Focus Point to make two Unarmed Strikes as a Bonus Action.'],
+    [2, 'Monk\'s Focus', 'Your focus and martial training allow you to harness a well of extraordinary energy within yourself. This energy is represented by Focus Points. Your Monk level determines the number of points you have, as shown in the Focus Points column of the Monk Features table. You can expend these points to enhance or fuel certain Monk features. You start knowing three such features: Flurry of Blows, Patient Defense, and Step of the Wind, each of which is detailed below. When you expend a Focus Point, it is unavailable until you finish a Short Rest or Long Rest, at the end of which you regain all your expended points. Some features that use Focus Points require your target to make a saving throw. The save DC equals 8 plus your Wisdom modifier and Proficiency.'],
+    [2, 'Patient Defense', 'You can take the Disengage action as a Bonus Action. Alternatively, you can expend 1 Focus Point to take both the Disengage and the Dodge actions as a Bonus Action.'],
+    [2, 'Step of the Wind', 'You can take the Dash action as a Bonus Action. Alternatively, you can expend 1 Focus Point to take both the Disengage and Dash actions as a Bonus Action, and your jump distance is doubled for the turn.'],
+    [2, 'Unarmored Movement', 'Your speed increases by 10 feet while you aren\'t wearing armor or wielding a Shield. This bonus increases when you reach certain Monk levels, as shown on the Monk Features table.'],
+    [2, 'Uncanny Metabolism', 'When you roll Initiative, you can regain all expended Focus Points. When you do so, roll your Martial Arts die, and regain a number of Hit Points equal to your Monk level plus the number rolled. Once you use this feature, you can\'t use it again until you finish a Long Rest.'],
+    [3, 'Deflect Attacks', 'When an attack roll hits you and its damage includes Bludgeoning, Piercing, or Slashing damage, you can take a Reaction to reduce the attack\'s total damage against you. The reduction equals 1d10 plus your Dexterity modifier and Monk level. If you reduce the damage to 0, you can expend 1 Focus Point to redirect some of the attack\'s force. If you do so, choose a creature you can see within 5 feet of yourself if the attack was a melee attack or a creature you can see within 60 feet of yourself that isn\'t behind Cover if the attack was a ranged attack. That creature must succeed on a Dexterity saving throw or take damage equal to two rolls of your Martial Arts die plus your Dexterity modifier. The damage is the same type dealt by the attack.'],
+    [3, 'Monk Subclass', 'You gain a Monk subclass of your choice. A subclass is a specialization that grants you features at certain Monk levels. For the rest of your career, you gain each of your subclass\'s features that are of your Monk level or lower.'],
+    [4, 'Ability Score Improvement', 'You gain the Ability Score Improvement feat or another a feat of your choice for which you qualify. You gain this feature again at Monk levels 8, 12, and 16.'],
+    [4, 'Slow Fall', 'You can take a Reaction when you fall to reduce any damage you take from the fall by an amount equal to five times your Monk level.'],
+    [5, 'Extra Attack', 'You can attack twice instead of once whenever you take the Attack action on your turn.'],
+    [5, 'Stunning Strike', 'Once per turn when you hit a creature with a Monk weapon or an Unarmed Strike, you can expend 1 Focus Point to attempt a stunning strike. The target must make a Constitution saving throw. On a failed save, the target has the Stunned condition until the start of your next turn. On a successful save, the target\'s Speed is halved until the start of your next turn, and the next attack roll made against the target before then has Advantage.'],
+    [6, 'Empowered Strikes', 'Whenever you deal damage with your Unarmed Strike, it can deal your choice of Force damage or its normal damage type.'],
+    [6, 'Subclass Feature', 'You gain a feature from your Monk subclass.'],
+    [7, 'Evasion', 'When you\'re subjected to an effect that allows you to make a Dexterity saving throw to take only half damage, you instead take no damage if you succeed on the saving throw and only half damage if you fail. You don\'t benefit from this feature if you have the Incapacitated condition.'],
+    [8, 'Ability Score Improvement', 'You gain the Ability Score Improvement feat or another a feat of your choice for which you qualify.'],
+    [9, 'Acrobatic Movement', 'While you aren\'t wearing armor or wielding a Shield, you gain the ability to move along vertical surfaces and across liquids on your turn without falling during the movement.'],
+    [10, 'Heightened Focus', 'Your Flurry of Blows, Patient Defense, and Step of the Wind gain the following benefits. Flurry of Blows: You can expend 1 Focus Point to use Flurry of Blows and make three Unarmed Strikes with it instead of two. Patient Defense: When you expend a Focus Point to use Patient Defense, you gain a number of Temporary Hit Points equal to two rolls of your Martial Arts die. Step of the Wind: When you expend a Focus Point to use Step of the Wind, you can choose a willing creature within 5 feet of yourself that is Large or smaller. You move the creature with you until the end of your turn. The creature\'s movement doesn\'t provoke Opportunity Attack.'],
+    [10, 'Self-Restoration', 'Through sheer force of will, you can remove one of the following conditions from yourself at the end of each of your turns: Charmed, Frightened, or Poisoned. In addition, forgoing food and drink doesn\'t give you levels of Exhaustion.'],
+    [11, 'Subclass Feature', 'You gain a feature from your Monk subclass.'],
+    [12, 'Ability Score Improvement', 'You gain the Ability Score Improvement feat or another a feat of your choice for which you qualify.'],
+    [13, 'Deflect Energy', 'You can now use your Deflect Attacks feature against attacks that deal any damage type, not just Bludgeoning, Piercing, or Slashing.'],
+    [14, 'Disciplined Survivor', 'Your physical and mental discipline grant you proficiency in all saving throws. Additionally, whenever you make a saving throw and fail, you can expend 1 Focus Point to reroll it, and you must use the new roll.'],
+    [15, 'Perfect Focus', 'When you roll Initiative and don\'t use Uncanny Metabolism, you regain expended Focus Points until you have 4 if you have 3 or fewer.'],
+    [16, 'Ability Score Improvement', 'You gain the Ability Score Improvement feat or another a feat of your choice for which you qualify.'],
+    [17, 'Subclass Feature', 'You gain a feature from your Monk subclass.'],
+    [18, 'Superior Defense', 'At the start of your turn, you can expend 3 Focus Points to bolster yourself against harm for 1 minute or until you have the Incapacitated condition. During that time, you have Resistance to all damage except Force damage.'],
+    [19, 'Epic Boon', 'You gain an Epic Boon feat or another a feat of your choice for which you qualify. Boon of Irresistible Offense is recommended.'],
+    [20, 'Body and Mind', 'You have developed your body and mind to new heights. Your Dexterity and Wisdom scores increase by 4, to a maximum of 25.'],
+  ],
+  Paladin: [
+    [1, 'Lay on Hands', 'Your blessed touch can heal wounds. You have a pool of healing power that replenishes when you finish a Long Rest. With that pool, you can restore a total number of Hit Points equal to five times your Paladin level. As a Bonus Action, you can touch a creature (which could be yourself) and draw power from the pool of healing to restore a number of Hit Points to that creature, up to the maximum amount remaining in the pool. You can also expend 5 Hit Points from the pool of healing power to remove the Poisoned condition from the creature; those points don\'t also restore Hit Points to the creature.'],
+    [1, 'Spellcasting', 'You have learned to cast spells through prayer and meditation. See chapter 7 for the rules on spellcasting. The information below details how you use those rules with Paladin spells, which appear in the Paladin spell list later in the class\'s description. Spell Slots: The Paladin Features table shows how many spell slots you have to cast your level 1+ spells. You regain all expended slots when you finish a Long Rest. Prepared Spells of Level 1+: You prepare the list of level 1+ spells that are available for you to cast with this feature. To start, choose two level 1 Paladin spells. Heroism and Searing Smite are recommended. The number of spells on your list increases as you gain Paladin levels, as shown in the Prepared Spells column of the Paladin Features table. Whenever that number increases, choose additional Paladin spells until the number of spells on your list matches the number in the Paladin Features table. The chosen spells must be of a level for which you have spell slots. For example, if you\'re a level 5 Paladin, your list of prepared spells can include six Paladin spells of level 1 or 2 in any combination. If another Paladin feature gives you spells that you always have prepared, those spells don\'t count against the number of spells you can prepare with this feature, but those spells otherwise count as Paladin spells for you. Changing Your Prepared Spells: Whenever you finish a Long Rest, you can replace one spell on your list with another Paladin spell for which you have spell slots. Spellcasting Ability: Charisma is your spellcasting ability for your Paladin spells. Spellcasting Focus: You can use a Holy Symbol as a Spellcasting Focus for your Paladin spells.'],
+    [1, 'Weapon Mastery', 'Your training with weapons allows you to use the weapon mastery properties of two kinds of weapons of your choice with which you have proficiency, such as Longsword and Javelin. Whenever you finish a Long Rest, you can change the kinds of weapons you chose. For example, you could switch to using the weapon mastery properties of Halberd and Flail.'],
+    [2, 'Fighting Style', 'You gain a Fighting Style feat of your choice. Instead of choosing one of those feats, you can choose the option below.'],
+    [2, 'Paladin\'s Smite', 'You always have the Divine Smite spell prepared. In addition, you can cast it without expending a spell slot, but you must finish a Long Rest before you can cast it in this way again.'],
+    [3, 'Channel Divinity', 'You can channel divine energy directly from the Outer Planes, using it to fuel magical effects. You start with one such effect: Divine Sense, which is described below. Other Paladin features give additional Channel Divinity effect options. Each time you use this class\'s Channel Divinity, you choose which effect from this class to create. You can use this class\'s Channel Divinity twice. You regain one of its expended uses when you finish a Short Rest, and you regain all expended uses when you finish a Long Rest. You gain an additional use when you reach Paladin level 11. If a Channel Divinity effect requires a saving throw, the DC equals the spell save DC from this class\'s Spellcasting feature.'],
+    [3, 'Divine Sense', 'As a Bonus Action, you can open your awareness to detect Celestials, Fiends, and Undead. For the next 10 minutes or until you have the Incapacitated condition, you know the location of any creature of those types within 60 feet of yourself, and you know its creature type. Within the same radius, you also detect the presence of any place or object that has been consecrated or desecrated, as with the Hallow spell.'],
+    [3, 'Paladin Subclass', 'You gain a Paladin subclass of your choice. A subclass is a specialization that grants you features at certain Paladin levels. For the rest of your career, you gain each of your subclass\'s features that are of your Paladin level or lower. A Paladin tries to hold to the highest standards of conduct, but even the most dedicated are fallible. Sometimes a Paladin transgresses their oath. A Paladin who has broken a vow typically seeks absolution, spending an all-night vigil as a sign of penitence or undertaking a fast. After a rite of forgiveness, the Paladin starts fresh. If your Paladin unrepentantly violates their oath, talk to your DM. Your Paladin should probably take a more appropriate subclass or even abandon the class and adopt another one.'],
+    [4, 'Ability Score Improvement', 'You gain the Ability Score Improvement feat or another a feat of your choice for which you qualify. You gain this feature again at Paladin levels 8, 12, and 16.'],
+    [5, 'Extra Attack', 'You can attack twice instead of once whenever you take the Attack action on your turn.'],
+    [5, 'Faithful Steed', 'You can call on the aid of an otherworldly steed. You always have the Find Steed spell prepared. You can also cast the spell once without expending a spell slot, and you regain the ability to do so when you finish a Long Rest.'],
+    [6, 'Aura of Protection', 'You radiate a protective, unseeable aura in a 10-foot Emanation [Area of Effect] that originates from you. The aura is inactive while you have the Incapacitated condition. You and your allies in the aura gain a bonus to saving throws equal to your Charisma modifier (minimum bonus of +1). If another Paladin is present, a creature can benefit from only one Aura of Protection at a time; the creature chooses which aura while in them.'],
+    [7, 'Subclass Feature', 'You gain a feature from your Paladin Subclass.'],
+    [8, 'Ability Score Improvement', 'You gain the Ability Score Improvement Feat or another a feat of your choice for which you qualify.'],
+    [9, 'Abjure Foes', 'As a Magic action, you can expend one use of this class\'s Channel Divinity to overwhelm foes with awe. As you present your Holy Symbol or weapon, you can target a number of creatures equal to your Charisma modifier (minimum of one creature) that you can see within 60 feet of yourself. Each target must succeed on a Wisdom saving throw or have the Frightened condition for 1 minute or until it takes any damage. While Frightened in this way, a target can do only one of the following on its turns: move, take an action, or take a Bonus Action.'],
+    [10, 'Aura of Courage', 'You and your allies have Immunity to the Frightened condition while in your Aura of Protection. If a Frightened ally enters the aura, that condition has no effect on that ally while there.'],
+    [11, 'Radiant Strikes', 'Your strikes now carry supernatural power. When you hit a target with an attack roll using a Melee weapon or an Unarmed Strike, the target takes an extra 1d8 Radiant damage.'],
+    [12, 'Ability Score Improvement', 'You gain the Ability Score Improvement Feat or another a feat of your choice for which you qualify.'],
+    [14, 'Restoring Touch', 'When you use Lay On Hands on a creature, you can also remove one or more of the following conditions from the creature: Blinded, Charmed, Deafened, Frightened, Paralyzed, or Stunned. You must expend 5 Hit Points from the healing pool of Lay On Hands for each of these conditions you remove; those points don\'t also restore Hit Points to the creature.'],
+    [15, 'Subclass Feature', 'You gain a feature from your Paladin Subclass.'],
+    [16, 'Ability Score Improvement', 'You gain the Ability Score Improvement Feat or another a feat of your choice for which you qualify.'],
+    [18, 'Aura Expansion', 'Your Aura of Protection is now a 30-foot Emanation [Area of Effect].'],
+    [19, 'Epic Boon', 'You gain an Epic Boon feat or another a feat of your choice for which you qualify. Boon of Truesight is recommended.'],
+    [20, 'Subclass Feature', 'You gain a feature from your Paladin Subclass.'],
+  ],
+  Ranger: [
+    [1, 'Favored Enemy', 'You always have the Hunter\'s Mark spell prepared. You can cast it twice without expending a spell slot, and you regain all expended uses of this ability when you finish a Long Rest. The number of times you can cast the spell without a spell slot increases when you reach certain Ranger levels, as shown in the Favored Enemy column of the Ranger Features table.'],
+    [1, 'Spellcasting', 'You have learned to channel the magical essence of nature to cast spells. See chapter 7 for the rules on spellcasting. The information below details how you use those rules with Ranger spells, which appear in the Ranger spell list later in the class\'s description. Spell Slots: The Ranger Features table shows how many spell slots you have to cast your level 1+ spells. You regain all expended slots when you finish a Long Rest. Prepared Spells of Level 1+: You prepare the list of level 1+ spells that are available for you to cast with this feature. To start, choose two level 1 Ranger spells. Cure Wounds and Ensnaring Strike are recommended. The number of spells on your list increases as you gain Ranger levels, as shown in the Prepared Spells column of the Ranger Features table. Whenever that number increases, choose additional Ranger spells until the number of spells on your list matches the number in the Ranger Features table. The chosen spells must be of a level for which you have spell slots. For example, if you\'re a level 5 Ranger, your list of prepared spells can include six Ranger spells of level 1 or 2 in any combination. If another Ranger feature gives you spells that you always have prepared, those spells don\'t count against the number of spells you can prepare with this feature, but those spells otherwise count as Ranger spells for you. Changing Your Prepared Spells: Whenever you finish a Long Rest, you can replace one spell on your list with another Ranger spell for which you have spell slots. Spellcasting Ability: Wisdom is your spellcasting ability for your Ranger spells. Spellcasting Focus: You can use a Druidic Focus as a Spellcasting Focus for your Ranger spells.'],
+    [1, 'Weapon Mastery', 'Your training with weapons allows you to use the weapon mastery properties of two kinds of weapons of your choice with which you have proficiency, such as Longbow and Shortsword. Whenever you finish a Long Rest, you can change the kinds of weapons you chose. For example, you could switch to using the weapon mastery properties of Scimitar and Longsword.'],
+    [2, 'Deft Explorer', 'Thanks to your travels, you gain the following benefits. Expertise: Choose one of your skill proficiencies with which you lack Expertise. You gain Expertise in that skill. Languages: You know two languages of your choice from the language tables in chapter 2.'],
+    [2, 'Fighting Style', 'You gain a Fighting Style feat of your choice. Instead of choosing one of those feats, you can choose the option below.'],
+    [3, 'Ranger Subclass', 'You gain a Ranger subclass of your choice. A subclass is a specialization that grants you features at certain Ranger levels. For the rest of your career, you gain each of your subclass\'s features that are of your Ranger level or lower.'],
+    [4, 'Ability Score Improvement', 'You gain the Ability Score Improvement feat or another a feat of your choice for which you qualify. You gain this feature again at Ranger levels 8, 12, and 16.'],
+    [5, 'Extra Attack', 'You can attack twice instead of once whenever you take the Attack action on your turn.'],
+    [6, 'Roving', 'Your Speed increases by 10 feet while you aren\'t wearing Heavy armor. You also have a Climb Speed and a Swim Speed equal to your Speed.'],
+    [7, 'Subclass Feature', 'You gain a feature from your Ranger Subclass.'],
+    [8, 'Ability Score Improvement', 'You gain the Ability Score Improvement feat or another a feat of your choice for which you qualify.'],
+    [9, 'Expertise', 'Choose two of your skill proficiencies with which you lack Expertise. You gain Expertise in those skills.'],
+    [10, 'Tireless', 'Primal forces now help fuel you on your journeys, granting you the following benefits. Temporary Hit Points: As a Magic action, you can give yourself a number of Temporary Hit Points equal to 1d8 plus your Wisdom modifier (minimum of 1). You can use this action a number of times equal to your Wisdom modifier (minimum of once), and you regain all expended uses when you finish a Long Rest. Decrease Exhaustion: Whenever you finish a Short Rest, your Exhaustion level, if any, decreases by 1.'],
+    [11, 'Subclass Feature', 'You gain a feature from your Ranger Subclass.'],
+    [12, 'Ability Score Improvement', 'You gain the Ability Score Improvement feat or another a feat of your choice for which you qualify.'],
+    [13, 'Relentless Hunter', 'Taking damage can\'t break your Concentration on Hunter\'s Mark.'],
+    [14, 'Nature\'s Veil', 'You invoke spirits of nature to magically hide yourself. As a Bonus Action, you can give yourself the Invisible condition until the end of your next turn. You can use this feature a number of times equal to your Wisdom modifier (minimum of once), and you regain all expended uses when you finish a Long Rest.'],
+    [15, 'Subclass Feature', 'You gain a feature from your Ranger Subclass.'],
+    [16, 'Ability Score Improvement', 'You gain the Ability Score Improvement feat or another a feat of your choice for which you qualify.'],
+    [17, 'Precise Hunter', 'You have Advantage on attack rolls against the creature currently marked by your Hunter\'s Mark.'],
+    [18, 'Feral Senses', 'Your connection to the forces of nature grants you Blindsight with a range of 30 feet.'],
+    [19, 'Epic Boon', 'You gain an Epic Boon feat or another a feat of your choice for which you qualify. Boon of Dimensional Travel is recommended.'],
+    [20, 'Foe Slayer', 'The damage die of your Hunter\'s Mark is a d10 rather than a d6.'],
+  ],
+  Rogue: [
+    [1, 'Expertise', 'You gain Expertise in two of your skill proficiencies of your choice. Sleight of Hand and Stealth are recommended if you have proficiency in them. At Rogue level 6, you gain Expertise in two more of your skill proficiencies of your choice.'],
+    [1, 'Sneak Attack', 'You know how to strike subtly and exploit a foe\'s distraction. Once per turn, you can deal an extra 1d6 damage to one creature you hit with an attack roll if you have Advantage on the roll and the attack uses a Finesse or a Ranged weapon. The extra damage\'s type is the same as the weapon\'s type. You don\'t need Advantage on the attack roll if at least one of your allies is within 5 feet of the target, the ally doesn\'t have the Incapacitated condition, and you don\'t have Disadvantage on the attack roll. The extra damage increases as you gain Rogue levels, as shown in the Sneak Attack column of the Rogue Features table.'],
+    [1, 'Thieves\' Cant', 'You picked up various languages in the communities where you plied your roguish talents. You know Thieves\' Cant and one other language of your choice, which you choose from the language tables in chapter 2.'],
+    [1, 'Weapon Mastery', 'Your training with weapons allows you to use the weapon mastery properties of two kinds of weapons of your choice with which you have proficiency, such as Dagger and Shortbow. Whenever you finish a Long Rest, you can change the kinds of weapons you chose. For example, you could switch to using the weapon mastery properties of Scimitar and Shortsword.'],
+    [2, 'Cunning Action', 'Your quick thinking and agility allow you to move and act quickly. On your turn, you can take one of the following actions as a Bonus Action: Dash, Disengage, or Hide.'],
+    [3, 'Rogue Subclass', 'You gain a Rogue subclass of your choice. A subclass is a specialization that grants you features at certain Rogue levels. For the rest of your career, you gain each of your subclass\'s features that are of your Rogue level or lower.'],
+    [3, 'Steady Aim', 'As a Bonus Action, you give yourself Advantage on your next attack roll on the current turn. You can use this feature only if you haven\'t moved during this turn, and after you use it, your Speed is 0 until the end of the current turn.'],
+    [4, 'Ability Score Improvement', 'You gain the Ability Score Improvement feat or another a feat of your choice for which you qualify. You gain this feature again at Rogue levels 8, 10, 12, and 16.'],
+    [5, 'Cunning Strike', 'You\'ve developed cunning ways to use your Sneak Attack. When you deal Sneak Attack damage, you can add one of the following Cunning Strike effects. Each effect has a die cost, which is the number of Sneak Attack damage dice you must forgo to add the effect. You remove the die before rolling, and the effect occurs immediately after the attack\'s damage is dealt. For example, if you add the Poison effect, remove 1d6 from the Sneak Attack\'s damage before rolling. If a Cunning Strike effect requires a saving throw, the DC equals 8 plus your Dexterity modifier and Proficiency.'],
+    [5, 'Poison (Cost: 1d6)', 'You add a toxin to your strike, forcing the target to make a Constitution saving throw. On a failed save, the target has the Poisoned condition for 1 minute. At the end of each of its turns, the Poisoned target repeats the save, ending the effect on itself on a success. To use this effect, you must have a Poisoner\'s Kit on your person.'],
+    [5, 'Trip (Cost: 1d6)', 'If the target is Large or smaller, it must succeed on a Dexterity saving throw or have the Prone condition.'],
+    [5, 'Uncanny Dodge', 'When an attacker that you can see hits you with an attack roll, you can take a Reaction to halve the attack\'s damage against you (round down).'],
+    [5, 'Withdraw (Cost: 1d6)', 'Immediately after the attack, you move up to half your Speed without provoking Opportunity Attack.'],
+    [6, 'Expertise', 'You gain Expertise in two of your Skill Proficiencies of your choice.'],
+    [7, 'Evasion', 'You can nimbly dodge out of the way of certain dangers. When you\'re subjected to an effect that allows you to make a Dexterity saving throw to take only half damage, you instead take no damage if you succeed on the saving throw and only half damage if you fail. You can\'t use this feature if you have the Incapacitated condition.'],
+    [7, 'Reliable Talent', 'Whenever you make an ability check that uses one of your skill or tool proficiencies, you can treat a d20 roll of 9 or lower as a 10.'],
+    [8, 'Ability Score Improvement', 'You gain the Ability Score Improvement feat or another a feat of your choice for which you qualify.'],
+    [9, 'Subclass Feature', 'You gain a feature from your Rogue Subclass.'],
+    [10, 'Ability Score Improvement', 'You gain the Ability Score Improvement feat or another a feat of your choice for which you qualify.'],
+    [11, 'Improved Cunning Strike', 'You can use up to two Cunning Strike effects when you deal Sneak Attack damage, paying the die cost for each effect.'],
+    [12, 'Ability Score Improvement', 'You gain the Ability Score Improvement feat or another a feat of your choice for which you qualify.'],
+    [13, 'Subclass Feature', 'You gain a feature from your Rogue Subclass.'],
+    [14, 'Daze (Cost: 2d6)', 'The target must succeed on a Constitution saving throw, or on its next turn, it can do only one of the following: move or take an action or a Bonus Action.'],
+    [14, 'Devious Strikes', 'You\'ve practiced new ways to use your Sneak Attack deviously. The following effects are now among your Cunning Strike options.'],
+    [14, 'Knock Out (Cost: 6d6)', 'The target must succeed on a Constitution saving throw, or it has the Unconscious condition for 1 minute or until it takes any damage. The Unconscious target repeats the save at the end of each of its turns, ending the effect on itself on a success.'],
+    [14, 'Obscure (Cost: 3d6)', 'The target must succeed on a Dexterity saving throw, or it has the Blinded condition until the end of its next turn.'],
+    [15, 'Slippery Mind', 'Your cunning mind is exceptionally difficult to control. You gain proficiency in Wisdom and Charisma saving throws.'],
+    [16, 'Ability Score Improvement', 'You gain the Ability Score Improvement feat or another a feat of your choice for which you qualify.'],
+    [17, 'Subclass Feature', 'You gain a feature from your Rogue Subclass.'],
+    [18, 'Elusive', 'You\'re so evasive that attackers rarely gain the upper hand against you. No attack roll can have Advantage against you unless you have the Incapacitated condition.'],
+    [19, 'Epic Boon', 'You gain an Epic Boon feat or another a feat of your choice for which you qualify. Boon of the Night Spirit is recommended.'],
+    [20, 'Stroke of Luck', 'You have a marvelous knack for succeeding when you need to. If you fail a D20 Test, you can turn the roll into a 20. Once you use this feature, you can\'t use it again until you finish a Short Rest or Long Rest.'],
+  ],
+  Sorcerer: [
+    [1, 'Innate Sorcery', 'An event in your past left an indelible mark on you, infusing you with simmering magic. As a Bonus Action, you can unleash that magic for 1 minute, during which you gain the following benefits: • The spell save DC of your Sorcerer spells increases by 1. • You have Advantage on the attack rolls of Sorcerer spells you cast. You can use this feature twice, and you regain all expended uses of it when you finish a Long Rest.'],
+    [1, 'Spellcasting', 'Drawing from your innate magic, you can cast spells. See chapter 7 for the rules on spellcasting. The information below details how you use those rules with Sorcerer spells, which appear in the Sorcerer spell list later in the class\'s description. Cantrips: You know four Sorcerer cantrips of your choice. Light, Prestidigitation, Shocking Grasp, and Sorcerous Burst are recommended. Whenever you gain a Sorcerer level, you can replace one of your cantrips from this feature with another Sorcerer cantrip of your choice. When you reach Sorcerer levels 4 and 10, you learn another Sorcerer cantrip of your choice, as shown in the Cantrips column of the Sorcerer Features table. Spell Slots: The Sorcerer Features table shows how many spell slots you have to cast your level 1+ spells. You regain all expended slots when you finish a Long Rest. Prepared Spells of Level 1+: You prepare the list of level 1+ spells that are available for you to cast with this feature. To start, choose two level 1 Sorcerer spells. Burning Hands and Detect Magic are recommended. The number of spells on your list increases as you gain Sorcerer levels, as shown in the Prepared Spells column of the Sorcerer Features table. Whenever that number increases, choose additional Sorcerer spells until the number of spells on your list matches the number in the Sorcerer Features table. The chosen spells must be of a level for which you have spell slots. For example, if you\'re a level 3 Sorcerer, your list of prepared spells can include six Sorcerer spells of level 1 or 2 in any combination. If another Sorcerer feature gives you spells that you always have prepared, those spells don\'t count against the number of spells you can prepare with this feature, but those spells otherwise count as Sorcerer spells for you. Changing Your Prepared Spells: Whenever you gain a Sorcerer level, you can replace one spell on your list with another Sorcerer spell for which you have spell slots. Spellcasting Ability: Charisma is your spellcasting ability for your Sorcerer spells. Spellcasting Focus: You can use an Arcane Focus as a Spellcasting Focus for your Sorcerer spells.'],
+    [2, 'Font of Magic', 'You can tap into the wellspring of magic within yourself. This wellspring is represented by Sorcery Points, which allow you to create a variety of magical effects. You have 2 Sorcery Points, and you gain more as you reach higher levels, as shown in the Sorcery Points column of the Sorcerer Features table. You can\'t have more Sorcery Points than the number shown in the table for your level. You regain all expended Sorcery Points when you finish a Long Rest. You can use your Sorcery Points to fuel the options below, along with other features, such as Metamagic, that use those points. Converting Spell Slots to Sorcery Points: You can expend a spell slot to gain a number of Sorcery Points equal to the slot\'s level (no action required). Creating Spell Slots: As a Bonus Action, you can transform unexpended Sorcery Points into one spell slot. The Creating Spell Slots table shows the cost of creating a spell slot of a given level, and it lists the minimum Sorcerer level you must be to create a slot. You can create a spell slot no higher than level 5. Any spell slot you create with this feature vanishes when you finish a Long Rest. [Table: Creating Spell Slots]'],
+    [2, 'Metamagic', 'Because your magic flows from within, you can alter your spells to suit your needs; you gain two Metamagic options of your choice from "Metamagic Options" later in this class\'s description. You use the chosen options to temporarily modify spells you cast. To use an option, you must spend the number of Sorcery Points that it costs. You can use only one Metamagic option on a spell when you cast it unless otherwise noted in one of those options. Whenever you gain a Sorcerer level, you can replace one of your Metamagic options with one you don\'t know. You gain two more options at Sorcerer level 10 and two more at Sorcerer level 17.'],
+    [2, 'Metamagic Options', 'The following options are available to your Metamagic feature. The options are presented in alphabetical order. '],
+    [3, 'Sorcerer Subclass', 'You gain a Sorcerer subclass of your choice. A subclass is a specialization that grants you features at certain Sorcerer levels. For the rest of your career, you gain each of your subclass\'s features that are of your Sorcerer level or lower.'],
+    [4, 'Ability Score Improvement', 'You gain the Ability Score Improvement feat or another a feat of your choice for which you qualify. You gain this feature again at Sorcerer levels 8, 12, and 16.'],
+    [5, 'Sorcerous Restoration', 'When you finish a Short Rest, you can regain expended Sorcery Points, but no more than a number equal to half your Sorcerer level (round down). Once you use this feature, you can\'t do so again until you finish a Long Rest.'],
+    [6, 'Subclass Feature', 'You gain a feature from your Sorcerer subclass.'],
+    [7, 'Sorcery Incarnate', 'If you have no uses of Innate Sorcery left, you can use it if you spend 2 Sorcery Points when you take the Bonus Action to activate it. In addition, while your Innate Sorcery feature is active, you can use up to two of your Metamagic options on each spell you cast.'],
+    [8, 'Ability Score Improvement', 'You gain the Ability Score Improvement feat or another a feat of your choice for which you qualify.'],
+    [10, 'Metamagic', 'Because your magic flows from within you, you can alter your spells to suit your needs; you gain two Metamagic options of your choice from the "Metamagic Options" section later in this class\'s description. You can use only one Metamagic option on a spell when you cast it, unless otherwise noted in one of those options. Whenever you gain a Sorcerer level, you can replace one of your Metamagic options with one you don\'t know.'],
+    [12, 'Ability Score Improvement', 'You gain the Ability Score Improvement feat or another a feat of your choice for which you qualify.'],
+    [14, 'Subclass Feature', 'You gain a feature from your Sorcerer subclass.'],
+    [16, 'Ability Score Improvement', 'You gain the Ability Score Improvement feat or another a feat of your choice for which you qualify.'],
+    [17, 'Metamagic', 'Because your magic flows from within you, you can alter your spells to suit your needs; you gain two Metamagic options of your choice from the "Metamagic Options" section later in this class\'s description. You can use only one Metamagic option on a spell when you cast it, unless otherwise noted in one of those options. Whenever you gain a Sorcerer level, you can replace one of your Metamagic options with one you don\'t know.'],
+    [18, 'Subclass Feature', 'You gain a feature from your Sorcerer subclass.'],
+    [19, 'Epic Boon', 'You gain an Epic Boon feat or another a feat of your choice for which you qualify. Boon of Dimensional Travel is recommended.'],
+    [20, 'Arcane Apotheosis', 'While your Innate Sorcery feature is active, you can use one Metamagic option on each of your turns without spending Sorcery Points on it.'],
+  ],
+  Warlock: [
+    [1, 'Eldritch Invocation Options', 'Eldritch Invocation options appear in alphabetical order. '],
+    [1, 'Eldritch Invocations', 'You have unearthed Eldritch Invocations, pieces of forbidden knowledge that imbue you with an abiding magical ability or other lessons. You gain one invocation of your choice, such as Pact of the Tome. Invocations are described in the "Eldritch Invocation Options" section later in this class\'s description. Prerequisites: If an invocation has a prerequisite, you must meet it to learn that invocation. For example, if an invocation requires you to be a level 5+ Warlock, you can select the invocation once you reach Warlock level 5. Replacing and Gaining Invocations: Whenever you gain a Warlock level, you can replace one of your invocations with another one for which you qualify. You can\'t replace an invocation if it\'s a prerequisite for another invocation that you have. When you gain certain Warlock levels, you gain more invocations of your choice, as shown in the Invocations column of the Warlock Features table. You can\'t pick the same invocation more than once unless its description says otherwise.'],
+    [1, 'Pact Magic', 'Through occult ceremony, you have formed a pact with a mysterious entity to gain magical powers. The entity is a voice in the shadows—its identity unclear—but its boon to you is concrete: the ability to cast spells. See chapter 7 for the rules on spellcasting. The information below details how you use those rules with Warlock spells, which appear in the Warlock spell list later in the class\'s description. Cantrips: You know two Warlock cantrips of your choice. Eldritch Blast and Prestidigitation are recommended. Whenever you gain a Warlock level, you can replace one of your cantrips from this feature with another Warlock cantrip of your choice. When you reach Warlock levels 4 and 10, you learn another Warlock cantrip of your choice, as shown in the Cantrips column of the Warlock Features table. Spell Slots: The Warlock Features table shows how many spell slots you have to cast your Warlock spells of levels 1–5. The table also shows the level of those slots, all of which are the same level. You regain all expended Pact Magic spell slots when you finish a Short Rest or Long Rest. For example, when you\'re a level 5 Warlock, you have two level 3 spell slots. To cast the level 1 spell Witch Bolt, you must spend one of those slots, and you cast it as a level 3 spell. Prepared Spells of Level 1+: You prepare the list of level 1+ spells that are available for you to cast with this feature. To start, choose two level 1 Warlock spells. Charm Person and Hex are recommended. The number of spells on your list increases as you gain Warlock levels, as shown in the Prepared Spells column of the Warlock Features table. Whenever that number increases, choose additional Warlock spells until the number of spells on your list matches the number in the table. The chosen spells must be of a level no higher than what\'s shown in the table\'s Slot Level column for your level. When you reach level 6, for example, you learn a new Warlock spell, which can be of levels 1–3. If another Warlock feature gives you spells that you always have prepared, those spells don\'t count against the number of spells you can prepare with this feature, but those spells otherwise count as Warlock spells for you. Changing Your Prepared Spells: Whenever you gain a Warlock level, you can replace one spell on your list with another Warlock spell of an eligible level. Spellcasting Ability: Charisma is the spellcasting ability for your Warlock spells. Spellcasting Focus: You can use an Arcane Focus as a Spellcasting Focus for your Warlock spells.'],
+    [2, 'Magical Cunning', 'You can perform an esoteric rite for 1 minute. At the end of it, you regain expended Pact Magic spell slots but no more than a number equal to half your maximum (round up). Once you use this feature, you can\'t do so again until you finish a Long Rest.'],
+    [3, 'Warlock Subclass', 'You gain a Warlock subclass of your choice. A subclass is a specialization that grants you features at certain Warlock levels. For the rest of your career, you gain each of your subclass\'s features that are of your Warlock level or lower.'],
+    [4, 'Ability Score Improvement', 'You gain the Ability Score Improvement feat or another a feat of your choice for which you qualify. You gain this feature again at Warlock levels 8, 12, and 16.'],
+    [6, 'Subclass Feature', 'You gain a feature from your Warlock subclass.'],
+    [8, 'Ability Score Improvement', 'You gain the Ability Score Improvement Feat or another a feat of your choice for which you qualify.'],
+    [9, 'Contact Patron', 'In the past, you usually contacted your patron through intermediaries. Now you can communicate directly; you always have the Contact Other Plane spell prepared. With this feature, you can cast the spell without expending a spell slot to contact your patron, and you automatically succeed on the spell\'s saving throw. Once you cast the spell with this feature, you can\'t do so in this way again until you finish a Long Rest.'],
+    [10, 'Subclass Feature', 'You gain a feature from your Warlock subclass.'],
+    [11, 'Mystic Arcanum', 'Your patron grants you a magical secret called an arcanum. Choose one level 6 Warlock spell as this arcanum. You can cast your arcanum spell once without expending a spell slot, and you must finish a Long Rest before you can cast it in this way again. As shown in the Warlock Features table, you gain another Warlock spell of your choice that can be cast in this way when you reach Warlock levels 13 (level 7 spell), 15 (level 8 spell), and 17 (level 9 spell). You regain all uses of your Mystic Arcanum when you finish a Long Rest. Whenever you gain a Warlock level, you can replace one of your arcanum spells with another Warlock spell of the same level.'],
+    [12, 'Ability Score Improvement', 'You gain the Ability Score Improvement Feat or another a feat of your choice for which you qualify.'],
+    [13, 'Mystic Arcanum', 'You gain a level 7 Warlock Spell of your choice.'],
+    [14, 'Subclass Feature', 'You gain a feature from your Warlock subclass.'],
+    [15, 'Mystic Arcanum', 'You gain a level 8 Warlock Spell of your choice.'],
+    [16, 'Ability Score Improvement', 'You gain the Ability Score Improvement Feat or another a feat of your choice for which you qualify.'],
+    [17, 'Mystic Arcanum', 'You gain a level 9 Warlock Spell of your choice.'],
+    [19, 'Epic Boon', 'You gain an Epic Boon feat or another a feat of your choice for which you qualify. Boon of Fate is recommended.'],
+    [20, 'Eldritch Master', 'When you use your Magical Cunning feature, you regain all your expended Pact Magic spell slots.'],
+  ],
+  Wizard: [
+    [1, 'Arcane Recovery', 'You can regain some of your magical energy by studying your spellbook. When you finish a Short Rest, you can choose expended spell slots to recover. The spell slots can have a combined level equal to no more than half your Wizard level (round up), and none of the slots can be level 6 or higher. For example, if you\'re a level 4 Wizard, you can recover up to two levels\' worth of spell slots, regaining either one level 2 spell slot or two level 1 spell slots. Once you use this feature, you can\'t do so again until you finish a Long Rest.'],
+    [1, 'Ritual Adept', 'You can cast any spell as a Ritual if that spell has the Ritual tag and the spell is in your spellbook. You needn\'t have the spell prepared, but you must read from the book to cast a spell in this way.'],
+    [1, 'Spellcasting', 'As a student of arcane magic, you have learned to cast spells. See chapter 7 for the rules on spellcasting. The information below details how you use those rules with Wizard spells, which appear in the Wizard spell list later in the class\'s description. Cantrips: You know three Wizard cantrips of your choice. Light, Mage Hand, and Ray of Frost are recommended. Whenever you finish a Long Rest, you can replace one of your cantrips from this feature with another Wizard cantrip of your choice. When you reach Wizard levels 4 and 10, you learn another Wizard cantrip of your choice, as shown in the Cantrips column of the Wizard Features table. Spellbook: Your wizardly apprenticeship culminated in the creation of a unique book: your spellbook. It is a Tiny object that weighs 3 pounds, contains 100 pages, and can be read only by you or someone casting Identify. You determine the book\'s appearance and materials, such as a gilt-edged tome or a collection of vellum bound with twine. The book contains the level 1+ spells you know. It starts with six level 1 Wizard spells of your choice. Detect Magic, Feather Fall, Mage Armor, Magic Missile, Sleep, and Thunderwave are recommended. Whenever you gain a Wizard level after 1, add two Wizard spells of your choice to your spellbook. Each of these spells must be of a level for which you have spell slots, as shown in the Wizard Features table. The spells are the culmination of arcane research you do regularly. Spell Slots: The Wizard Features table shows how many spell slots you have to cast your level 1+ spells. You regain all expended slots when you finish a Long Rest. Prepared Spells of Level 1+: You prepare the list of level 1+ spells that are available for you to cast with this feature. To do so, choose four spells from your spellbook. The chosen spells must be of a level for which you have spell slots. The number of spells on your list increases as you gain Wizard levels, as shown in the Prepared Spells column of the Wizard Features table. Whenever that number increases, choose additional Wizard spells until the number of spells on your list matches the number in the table. The chosen spells must be of a level for which you have spell slots. For example, if you\'re a level 3 Wizard, your list of prepared spells can include six spells of levels 1 and 2 in any combination, chosen from your spellbook. If another Wizard feature gives you spells that you always have prepared, those spells don\'t count against the number of spells you can prepare with this feature, but those spells otherwise count as Wizard spells for you. Changing Your Prepared Spells: Whenever you finish a Long Rest, you can change your list of prepared spells, replacing any of the spells there with spells from your spellbook. Spellcasting Ability: Intelligence is your spellcasting ability for your Wizard spells. Spellcasting Focus: You can use an Arcane Focus or your spellbook as a Spellcasting Focus for your Wizard spells. The spells you add to your spellbook as you gain levels reflect your ongoing magical research, but you might find other spells during your adventures that you can add to the book. You could discover a Wizard spell on a Spell Scroll, for example, and then copy it into your spellbook. Copying a Spell into the Book: When you find a level 1+ Wizard spell, you can copy it into your spellbook if it\'s of a level you can prepare and if you have time to copy it. For each level of the spell, the transcription takes 2 hours and costs 50 GP. Afterward you can prepare the spell like the other spells in your spellbook. Copying the Book: You can copy a spell from your spellbook into another book. This is like copying a new spell into your spellbook but faster, since you already know how to cast the spell. You need spend only 1 hour and 10 GP for each level of the copied spell. If you lose your spellbook, you can use the same procedure to transcribe the Wizard spells that you have prepared into a new spellbook. Filling out the remainder of the new book requires you to find new spells to do so. For this reason, many wizards keep a backup spellbook.'],
+    [2, 'Scholar', 'While studying magic, you also specialized in another field of study. Choose one of the following skills in which you have proficiency: Arcana, History, Investigation, Medicine, Nature, or Religion. You have Expertise in the chosen skill.'],
+    [3, 'Wizard Subclass', 'You gain a Wizard subclass of your choice. A subclass is a specialization that grants you features at certain Wizard levels. For the rest of your career, you gain each of your subclass\'s features that are of your Wizard level or lower.'],
+    [4, 'Ability Score Improvement', 'You gain the Ability Score Improvement feat or another a feat of your choice for which you qualify. You gain this feature again at Wizard levels 8, 12, and 16.'],
+    [5, 'Memorize Spell', 'Whenever you finish a Short Rest, you can study your spellbook and replace one of the level 1+ Wizard spells you have prepared for your Spellcasting feature with another level 1+ spell from the book.'],
+    [6, 'Subclass Feature', 'You gain a feature from your Wizard Subclass.'],
+    [8, 'Ability Score Improvement', 'You gain the Ability Score Improvement Feat or another a feat of your choice for which you qualify.'],
+    [10, 'Subclass Feature', 'You gain a feature from your Wizard Subclass.'],
+    [12, 'Ability Score Improvement', 'You gain the Ability Score Improvement Feat or another a feat of your choice for which you qualify.'],
+    [14, 'Subclass Feature', 'You gain a feature from your Wizard Subclass.'],
+    [16, 'Ability Score Improvement', 'You gain the Ability Score Improvement Feat or another a feat of your choice for which you qualify.'],
+    [18, 'Spell Mastery', 'You have achieved such mastery over certain spells that you can cast them at will. Choose a level 1 and a level 2 spell in your spellbook that have a casting time of an action. You always have those spells prepared, and you can cast them at their lowest level without expending a spell slot. To cast either spell at a higher level, you must expend a spell slot. Whenever you finish a Long Rest, you can study your spellbook and replace one of those spells with an eligible spell of the same level from the book.'],
+    [19, 'Epic Boon', 'You gain an Epic Boon feat or another a feat of your choice for which you qualify. Boon of Spell Recall is recommended.'],
+    [20, 'Signature Spells', 'Choose two level 3 spells in your spellbook as your signature spells. You always have these spells prepared, and you can cast each of them once at level 3 without expending a spell slot. When you do so, you can\'t cast them in this way again until you finish a Short Rest or Long Rest. To cast either spell at a higher level, you must expend a spell slot.'],
+  ],
+};
+
+// Pick the feature set matching the character's rules edition (2024 falls back to 2014
+// for classes without an XPHB version, e.g. Artificer)
+function _classFeaturesFor(className, ch) {
+  const ed = (ch && ch.edition) || '2024';
+  if (ed !== '2014' && typeof CLASS_FEATURES_2024 !== 'undefined' && CLASS_FEATURES_2024[className]) return CLASS_FEATURES_2024[className];
+  return CLASS_FEATURES[className] || [];
+}
+
+function getClassFeaturesUpToLevel(className, level, ch) {
+  const list = _classFeaturesFor(className, ch);
   return list.filter(([lvl]) => lvl <= level).map(([lvl, name, desc]) => ({ name, desc }));
 }
 
-function openFeatureModal(name, desc) {
+function openClassFeaturesModal(charId) {
+  const ch = db.characters[charId]; if (!ch) return;
+  const cls = ch.class || '';
+  const level = parseInt(ch.level) || 1;
+  const allFeats = _classFeaturesFor(cls, ch);
+
+  // Group by level
+  const byLevel = {};
+  allFeats.forEach(([lvl, name, desc]) => {
+    if (!byLevel[lvl]) byLevel[lvl] = [];
+    byLevel[lvl].push({ name, desc });
+  });
+
+  const unlockedTotal = allFeats.filter(([lvl]) => lvl <= level).length;
+
+  const rows = Object.keys(byLevel).map(Number).sort((a, b) => a - b).map(lvl => {
+    const unlocked = lvl <= level;
+    const feats = byLevel[lvl].map(f => `
+      <div style="margin-bottom:0.8rem;opacity:${unlocked ? 1 : 0.4}">
+        <div style="font-weight:600;color:${unlocked ? 'var(--gold-lt)' : 'var(--text-dim)'};font-size:0.85rem;margin-bottom:0.25rem">${esc(f.name)}</div>
+        <div style="font-size:0.8rem;color:var(--text);line-height:1.55">${esc(f.desc)}</div>
+      </div>`).join('');
+    return `
+      <div style="margin-bottom:1.1rem">
+        <div style="font-size:0.68rem;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${unlocked ? 'var(--gold)' : 'var(--text-dim)'};margin-bottom:0.5rem;padding-bottom:0.25rem;border-bottom:1px solid rgba(var(--accent-rgb),${unlocked ? '0.25' : '0.1'})">
+          Level ${lvl}${!unlocked ? '&ensp;<span style="font-weight:400;font-size:0.65rem;opacity:0.55">not yet</span>' : ''}
+        </div>
+        ${feats}
+      </div>`;
+  }).join('');
+
   openModal(`
-    <h3 style="margin:0 0 0.75rem;color:var(--gold)">${esc(name)}</h3>
-    <p style="white-space:pre-wrap;line-height:1.6;color:var(--text)">${esc(desc || 'No description.')}</p>
-    <div class="form-actions" style="margin-top:1rem;justify-content:flex-end">
-      <button class="btn" onclick="closeModal()">Close</button>
-    </div>`);
+    <h2 style="margin:0 0 0.2rem">✦ ${esc(cls)} Features</h2>
+    <p style="color:var(--text-dim);font-size:0.8rem;margin:0 0 1rem">Level ${level} &middot; ${unlockedTotal} feature${unlockedTotal !== 1 ? 's' : ''} unlocked</p>
+    <div style="max-height:62vh;overflow-y:auto;padding-right:0.4rem">
+      ${rows || '<p style="color:var(--text-dim)">No feature data available.</p>'}
+    </div>
+    <div class="form-actions" style="margin-top:1rem"><button class="btn" onclick="closeModal()">Close</button></div>`);
+
+  const modalEl = document.querySelector('#modal-overlay .modal');
+  if (modalEl) modalEl.style.maxWidth = '520px';
 }
 
 function renderFeaturesSection(ch) {
@@ -4894,17 +5511,12 @@ function renderFeaturesSection(ch) {
   const speciesFeatures  = allFeatures.filter(f => f._species);
   const subFeatures      = allFeatures.filter(f => f._subclass);
   const bgFeatures       = allFeatures.filter(f => f._background);
-  // Re-flag any background-granted feats that lost their _feat flag after a round-trip
-  allFeatures.forEach(f => {
-    if (!f._feat && !f._subclass && !f._species && !f._background &&
-        (f._fromBackground ||
-         (typeof f._featSource === 'string' && f._featSource.startsWith('Background')))) {
-      f._feat = true;
-    }
-  });
   const featFeatures     = allFeatures.filter(f => f._feat);
   // Class features: either explicitly flagged, or name matches a known class feature (handles old data without _class flag)
-  const knownClassNames  = new Set((CLASS_FEATURES[ch.class] || []).map(([, name]) => name));
+  const knownClassNames  = new Set([
+    ...(CLASS_FEATURES[ch.class] || []),
+    ...((typeof CLASS_FEATURES_2024 !== 'undefined' && CLASS_FEATURES_2024[ch.class]) || []),
+  ].map(([, name]) => name));
   const classFeatures    = allFeatures.filter(f => !f._subclass && !f._species && !f._background && !f._feat && (f._class || knownClassNames.has(f.name)));
   const customFeatures   = allFeatures.filter(f => !f._subclass && !f._species && !f._background && !f._feat && !f._class && !knownClassNames.has(f.name));
 
@@ -5015,34 +5627,64 @@ function renderFeaturesSection(ch) {
     const i = allFeatures.indexOf(f);
     const idKey = `ft-desc-${i}`;
     const srcInfo = FEAT_SOURCE_COLORS[f._featSource] || { abbr: f._featSource || 'Feat', color: '#9b6dff' };
+    const _AB  = { int:'INT', wis:'WIS', cha:'CHA' };
+    const _DIV = `<div style="margin-top:0.5rem;border-top:1px solid rgba(var(--accent-rgb),0.15);padding-top:0.4rem">`;
+    let spellSection = '';
+    if (f._mi) {
+      spellSection = `${_DIV}
+          <div style="font-size:0.72rem;color:var(--text-dim);margin-bottom:0.3rem">${esc(f._mi.cls)} list · ${_AB[f._mi.ability] || ''}</div>
+          ${(f._mi.cantripNames || []).map(n => `<span class="spell-badge" style="margin:0 2px 2px 0;font-size:0.7rem;display:inline-block">${esc(n)}</span>`).join('')}
+          ${f._mi.spellName ? `<span class="spell-badge" style="margin:0 2px 2px 0;font-size:0.7rem;display:inline-block;border-color:#f59e0b;color:#f59e0b">${esc(f._mi.spellName)} <em>1/LR</em></span>` : ''}
+          <button class="btn btn-sm" style="margin-top:0.4rem;font-size:0.72rem;display:block" onclick="event.stopPropagation();_editMiFeat(${i})">Edit Spell Choices</button>
+        </div>`;
+    } else if (f.name === 'Magic Initiate') {
+      spellSection = `${_DIV}<button class="btn btn-sm" style="font-size:0.72rem" onclick="event.stopPropagation();_editMiFeat(${i})">Choose Spells</button></div>`;
+    } else if (f._sf) {
+      const _sfCfg = _sfConfigKey({ name: f.name, source: f._featSource || '' });
+      const _fixedNames = [
+        ...(_sfCfg?.fixed || []).map(fx => fx.name),
+        ...(f._sf.archetype && _sfCfg?.classFixed?.[f._sf.archetype] ? _sfCfg.classFixed[f._sf.archetype].map(x => x.name) : [])
+      ];
+      const _pickNames = (f._sf.pickNames || []).flat();
+      const _allNames  = [..._fixedNames, ..._pickNames];
+      const _hasPicks  = !!((_sfCfg?.picks || []).length || _sfCfg?.classChoice);
+      const _abilityLine = f._sf.archetype
+        ? `${esc(f._sf.archetype)} · ${_AB[f._sf.ability] || _AB[_sfCfg?.ability] || ''}`
+        : (_AB[f._sf.ability] || '');
+      spellSection = `${_DIV}
+          ${_abilityLine ? `<div style="font-size:0.72rem;color:var(--text-dim);margin-bottom:0.3rem">${_abilityLine}</div>` : ''}
+          ${_allNames.map(n => `<span class="spell-badge" style="margin:0 2px 2px 0;font-size:0.7rem;display:inline-block">${esc(n)}</span>`).join('')}
+          ${_hasPicks ? `<button class="btn btn-sm" style="margin-top:0.4rem;font-size:0.72rem;display:block" onclick="event.stopPropagation();_editSfFeat(${i})">Edit Spell Choices</button>` : ''}
+        </div>`;
+    } else if (_sfConfigKey({ name: f.name, source: f._featSource || '' })) {
+      spellSection = `${_DIV}<button class="btn btn-sm" style="font-size:0.72rem" onclick="event.stopPropagation();_editSfFeat(${i})">Choose Spells</button></div>`;
+    }
     return `
       <div class="sf-card cf-card" id="ft-card-${i}">
         <div class="sf-card-header" onclick="toggleSfCard('${idKey}', this)">
           <span class="sf-source-badge" ${badgeStyle(srcInfo.color)}>${esc(srcInfo.abbr)}</span>
           <span class="sf-name">${esc(f.name)}</span>
           <span class="sf-toggle">▼</span>
-          <button class="feature-del-btn cf-del-btn" onclick="event.stopPropagation();removeFeatureByName('${esc(f.name)}','_feat')" title="Remove">&times;</button>
+          <button class="feature-del-btn cf-del-btn" onclick="event.stopPropagation();removeFeatureByName('${jsStr(f.name)}','_feat')" title="Remove">&times;</button>
         </div>
         <div class="sf-card-body hidden" id="${idKey}">
           <p class="sf-desc">${esc(f.desc || 'No description.')}</p>
           ${f._fromBackground ? `<p style="font-size:0.75rem;color:var(--text-dim);margin-top:0.4rem">Granted by ${esc(f._fromBackground)} background</p>` : ''}
+          ${spellSection}
         </div>
       </div>`;
   }).join('');
 
-  // Class feature cards — click to open modal popup
-  const classCards = classFeatures.map(f => {
-    const safeDesc = esc(f.desc || 'No description.');
-    const safeName = esc(f.name);
-    return `
-      <div class="sf-card" onclick="openFeatureModal('${safeName.replace(/'/g,"&#39;")}','${safeDesc.replace(/'/g,"&#39;")}')">
-        <div class="sf-card-header" style="cursor:pointer">
-          <span class="sf-source-badge" ${badgeStyle('#6366f1')}>${esc(f._class || ch.class)}</span>
-          <span class="sf-name">${esc(f.name)}</span>
-          <span class="sf-toggle" style="font-size:0.7rem;opacity:0.6">↗</span>
-        </div>
-      </div>`;
-  }).join('');
+  // Class features — single card that opens the full modal
+  const classFeatTotal = _classFeaturesFor(ch.class, ch).filter(([lvl]) => lvl <= (parseInt(ch.level) || 1)).length;
+  const classCard = (_classFeaturesFor(ch.class, ch).length || classFeatures.length) ? `
+    <div class="sf-card" onclick="openClassFeaturesModal('${ch.id}')" style="cursor:pointer">
+      <div class="sf-card-header">
+        <span class="sf-source-badge" ${badgeStyle('#6366f1')}>${esc(ch.class || 'Class').toUpperCase()}</span>
+        <span class="sf-name" style="flex:1">${classFeatTotal} feature${classFeatTotal !== 1 ? 's' : ''} at your level</span>
+        <span style="color:var(--text-dim);font-size:0.72rem">View all ↗</span>
+      </div>
+    </div>` : '';
 
   // Custom feature cards — editable
   const customRows = customFeatures.map(f => {
@@ -5082,9 +5724,9 @@ function renderFeaturesSection(ch) {
   const subclassModalBtn = hasSubclassModalData
     ? `<button class="btn btn-sm" onclick="openSubclassModal('${ch.id}')" style="font-size:0.7rem;padding:0.2rem 0.5rem;margin-left:0.5rem;vertical-align:middle;text-transform:none;letter-spacing:0">✦ Spells &amp; Tables</button>`
     : '';
-  const classSection = classFeatures.length ? `
+  const classSection = classCard ? `
     ${sectionLabel(`${esc(ch.class || 'Class')} Features`)}
-    ${classCards}` : '';
+    ${classCard}` : '';
 
   const subSection = (subFeatures.length || hasSubclassModalData) ? `
     ${sectionLabel('✦ Subclass Features' + subclassModalBtn)}
@@ -5127,6 +5769,9 @@ const FEAT_SOURCE_COLORS = {
   "Tasha's":     { abbr: 'TCE',   color: '#22c55e' },
   "Bigby's":     { abbr: 'BGG',   color: '#f59e0b' },
   'Dragonlance': { abbr: 'DSotDQ',color: '#ef4444' },
+  'Eberron':     { abbr: 'ERLW',  color: '#8b5cf6' },
+  "Fizban's":    { abbr: 'FTD',   color: '#eab308' },
+  'Sigil and the Outlands': { abbr: 'SatO', color: '#06b6d4' },
 };
 const FEAT_CAT_COLORS = {
   'General': '#9b6dff', 'Origin': '#f59e0b',
@@ -5138,7 +5783,7 @@ const FEAT_CAT_LABELS = { 'EB': 'Epic Boon', 'FS:P': 'Fighting Style', 'FS:R': '
 let _featSearch = '', _featCatFilter = 'All', _featSrcFilter = 'All', _featShowCount = 50;
 
 const FEAT_CAT_OPTS = ['All','General','Origin','Fighting Style','Epic Boon'];
-const FEAT_SRC_OPTS = ['All','PHB 2024','PHB 2014',"Xanathar's","Tasha's"];
+const FEAT_SRC_OPTS = ['All','PHB 2024','PHB 2014',"Xanathar's","Tasha's","Fizban's","Bigby's",'Dragonlance','Eberron','Sigil and the Outlands'];
 
 // Magic item browser
 const MAGIC_RARITY_OPTS = ['All','common','uncommon','rare','very rare','legendary'];
@@ -5257,7 +5902,10 @@ function toggleFeatDesc(uid) {
 
 function addFeatByIdx(i) {
   const f = (window._featVisible || [])[i];
-  if (f) addFeatToChar(f.name);
+  if (!f) return;
+  if (f.name === 'Magic Initiate') openMagicInitiatePicker(f);
+  else if (_sfConfigKey(f)) openSpellFeatPicker(f);
+  else addFeatToChar(f.name);
 }
 
 function addFeatToChar(featName) {
@@ -5270,6 +5918,534 @@ function addFeatToChar(featName) {
   saveData(db);
   updateFeatResults();
   renderApp();
+}
+
+// ── Magic Initiate Spell Picker ──────────────────────────────────────────────
+const _MI_2014_CLASSES = ['Bard','Cleric','Druid','Sorcerer','Warlock','Wizard'];
+const _MI_2024_CLASSES = ['Cleric','Druid','Wizard'];
+const _MI_DEFAULT_ABILITY = { Bard:'cha', Cleric:'wis', Druid:'wis', Sorcerer:'cha', Warlock:'cha', Wizard:'int' };
+let _miState = null;
+let _miSpellPool = [];
+
+function openMagicInitiatePicker(featData, editIdx) {
+  if (!allSpellsDb && !spellFetching) fetchAllSpells();
+  const is2024 = (featData.source_key || '') === 'XPHB';
+  const classes = is2024 ? _MI_2024_CLASSES : _MI_2014_CLASSES;
+  const defaultCls = classes[0];
+  let miId = Math.random().toString(36).slice(2, 8);
+  let initCls = defaultCls;
+  let initAbility = _MI_DEFAULT_ABILITY[defaultCls] || 'wis';
+  if (editIdx >= 0) {
+    const existingFeat = db.characters[currentCharId]?.featuresList?.[editIdx];
+    if (existingFeat?._mi) {
+      miId = existingFeat._mi.id || miId;
+      initCls = existingFeat._mi.cls || initCls;
+      initAbility = existingFeat._mi.ability || initAbility;
+    }
+  }
+  _miState = { featData, editIdx: editIdx ?? -1, miId, step: 1, cls: initCls, ability: initAbility, cantrips: [], spell1: null, is2024, classes };
+  // Pre-fill existing selections from tagged known spells when editing
+  if (editIdx >= 0) {
+    const knownSpells = db.characters[currentCharId]?.spells?.known || [];
+    const miKnown = knownSpells.filter(s => typeof s === 'object' && s._miId === miId);
+    _miState.cantrips = miKnown.filter(s => s.level_int === 0).map(s => ({
+      name: s.name, level_int: 0, school: s.school || '', casting_time: s.casting_time || '', range: s.range || '', components: s.components || '', concentration: s.concentration || 'no', ritual: s.ritual || 'no', dnd_class: s.dnd_class || ''
+    }));
+    const sp1 = miKnown.find(s => s._miFreeCast);
+    if (sp1) _miState.spell1 = { name: sp1.name, level_int: sp1.level_int || 1, school: sp1.school || '', casting_time: sp1.casting_time || '', range: sp1.range || '', components: sp1.components || '', concentration: sp1.concentration || 'no', ritual: sp1.ritual || 'no', dnd_class: sp1.dnd_class || '' };
+  }
+  _renderMiModal();
+}
+
+function _renderMiModal() {
+  if (!_miState) return;
+  const { step, cls, is2024, classes, ability } = _miState;
+  const ABILITY_LABELS = { int: 'Intelligence', wis: 'Wisdom', cha: 'Charisma' };
+  if (step === 1) {
+    const classBtns = classes.map(c =>
+      `<button class="btn btn-sm ${c === cls ? 'btn-primary' : ''}" onclick="_miSetClass('${c}')">${esc(c)}</button>`
+    ).join('');
+    const abilBtns = ['int', 'wis', 'cha'].map(a =>
+      `<button class="btn btn-sm ${ability === a ? 'btn-primary' : ''}" onclick="_miSetAbility('${a}')">${esc(ABILITY_LABELS[a])}</button>`
+    ).join('');
+    openModal(`<h2>✦ Magic Initiate</h2>
+      <p style="color:var(--text-dim);font-size:0.85rem;margin-bottom:0.9rem">Choose a class and spellcasting ability, then pick 2 cantrips and 1 level 1 spell.</p>
+      <div class="form-group"><label>Spell List</label><div class="flex gap-1 flex-wrap" style="margin-top:0.3rem">${classBtns}</div></div>
+      <div class="form-group" style="margin-top:0.7rem"><label>Spellcasting Ability</label><div class="flex gap-1" style="margin-top:0.3rem">${abilBtns}</div></div>
+      <div class="form-actions" style="margin-top:1.1rem">
+        <button class="btn" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="_miNextStep(2)">Next: Cantrips →</button>
+      </div>`);
+  } else if (step === 2) {
+    _renderMiSpellStep(0, 2, 'Choose 2 Cantrips', 3);
+  } else {
+    _renderMiSpellStep(1, 1, 'Choose 1 Level 1 Spell', null);
+  }
+}
+
+function _renderMiSpellStep(level, count, title, nextStep) {
+  const { cls, cantrips, spell1, ability } = _miState;
+  const ABILITY_LABELS = { int: 'Intelligence', wis: 'Wisdom', cha: 'Charisma' };
+  if (!allSpellsDb) {
+    openModal(`<h2>✦ Magic Initiate — ${esc(title)}</h2>
+      <p style="color:var(--text-dim);padding:0.5rem 0">Spell data is still loading. Try again in a moment.</p>
+      <div class="form-actions">
+        <button class="btn" onclick="_miNextStep(${level === 0 ? 1 : 2})">← Back</button>
+        <button class="btn btn-primary" onclick="_renderMiModal()">Retry</button>
+      </div>`);
+    return;
+  }
+  _miSpellPool = getMergedSpells().filter(sp =>
+    sp.level_int === level && (sp.dnd_class || '').toLowerCase().includes(cls.toLowerCase())
+  ).slice(0, 300);
+  const selectedNames = new Set(level === 0 ? cantrips.map(s => s.name) : (spell1 ? [spell1.name] : []));
+  const selCount = selectedNames.size;
+  const rows = _miSpellPool.map((sp, idx) => {
+    const isSel = selectedNames.has(sp.name);
+    const sc = SCHOOL_COLORS[sp.school || ''] || '#7b6d8d';
+    return `<div class="spell-browser-row" style="${isSel ? 'background:rgba(var(--accent-rgb),0.1)' : ''}">
+      <div class="spell-browser-left" style="flex:1;min-width:0">
+        <span class="spell-name" style="font-size:0.82rem">${esc(sp.name)}</span>
+        <span class="spell-badge" style="border-color:${sc};color:${sc};font-size:0.58rem">${esc(sp.school || '')}</span>
+        ${sp.concentration === 'yes' ? `<span class="spell-tag conc">C</span>` : ''}
+        ${sp.ritual === 'yes' ? `<span class="spell-tag ritual">R</span>` : ''}
+      </div>
+      <button class="btn btn-sm${isSel ? ' btn-primary' : ''}" onclick="_miToggleByIdx(${idx},${level})">${isSel ? '✓' : 'Select'}</button>
+    </div>`;
+  }).join('');
+  const canProceed = selCount >= count;
+  const nextBtn = nextStep !== null
+    ? `<button class="btn btn-primary" onclick="_miNextStep(${nextStep})" ${canProceed ? '' : 'disabled'}>Next: Level 1 Spell →</button>`
+    : `<button class="btn btn-primary" onclick="_miConfirm()" ${canProceed ? '' : 'disabled'}>✓ Add Magic Initiate</button>`;
+  openModal(`<h2>✦ Magic Initiate — ${esc(title)}</h2>
+    <p style="color:var(--text-dim);font-size:0.82rem;margin-bottom:0.5rem">${esc(cls)} list · ${esc(ABILITY_LABELS[ability] || ability)} · Selected: <strong>${selCount}/${count}</strong></p>
+    <div style="max-height:340px;overflow-y:auto;border:1px solid rgba(var(--accent-rgb),0.2);border-radius:6px;padding:0.2rem">
+      ${rows || '<p style="padding:0.5rem;color:var(--text-dim)">No spells found for this class.</p>'}
+    </div>
+    <div class="form-actions" style="margin-top:0.8rem">
+      <button class="btn" onclick="_miNextStep(${level === 0 ? 1 : 2})">← Back</button>
+      ${nextBtn}
+    </div>`);
+}
+
+function _miToggleByIdx(idx, level) {
+  const sp = _miSpellPool[idx]; if (!sp) return;
+  const mini = { name: sp.name, level_int: sp.level_int || 0, school: sp.school || '', casting_time: sp.casting_time || '', range: sp.range || '', components: sp.components || '', concentration: sp.concentration || 'no', ritual: sp.ritual || 'no', dnd_class: sp.dnd_class || '' };
+  if (level === 0) {
+    const i = _miState.cantrips.findIndex(s => s.name === sp.name);
+    if (i >= 0) _miState.cantrips.splice(i, 1);
+    else if (_miState.cantrips.length < 2) _miState.cantrips.push(mini);
+  } else {
+    _miState.spell1 = _miState.spell1?.name === sp.name ? null : mini;
+  }
+  _renderMiModal();
+}
+
+function _miSetClass(cls) {
+  _miState.cls = cls;
+  _miState.ability = _MI_DEFAULT_ABILITY[cls] || 'wis';
+  _miState.cantrips = []; _miState.spell1 = null;
+  _renderMiModal();
+}
+
+function _miSetAbility(a) { _miState.ability = a; _renderMiModal(); }
+function _miNextStep(step) { _miState.step = step; _renderMiModal(); }
+
+function _miConfirm() {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  const { featData, editIdx, miId, cls, ability, cantrips, spell1 } = _miState;
+  ch.featuresList = ch.featuresList || []; ch.spells.known = ch.spells.known || []; ch.resources = ch.resources || [];
+  const existing = editIdx >= 0 ? ch.featuresList[editIdx] : null;
+  if (existing?._mi) _cleanupMiFeatData(ch, existing._mi);
+  const featEntry = { name: featData.name, desc: featData.desc || '', _feat: true, _featSource: featData.source, _mi: { id: miId, cls, ability, cantripNames: cantrips.map(s => s.name), spellName: spell1?.name || null } };
+  if (editIdx >= 0) ch.featuresList[editIdx] = featEntry;
+  else ch.featuresList.push(featEntry);
+  cantrips.forEach(sp => {
+    if (!ch.spells.known.some(s => (typeof s === 'object' ? s.name : s) === sp.name))
+      ch.spells.known.push({ ...sp, _fromFeat: 'Magic Initiate', _miId: miId, _miAbility: ability });
+  });
+  if (spell1) {
+    if (!ch.spells.known.some(s => (typeof s === 'object' ? s.name : s) === spell1.name))
+      ch.spells.known.push({ ...spell1, _fromFeat: 'Magic Initiate', _miId: miId, _miAbility: ability, _miFreeCast: true });
+    const resIdx = ch.resources.findIndex(r => r._miId === miId);
+    const AB_SHORT = { int: 'INT', wis: 'WIS', cha: 'CHA' };
+    const resEntry = { name: `MI: ${spell1.name}`, max: 1, current: 1, recharge: 'long', type: 'pips', custom: true, _fromFeat: 'Magic Initiate', _miId: miId, desc: `Free cast once per Long Rest (no spell slot needed). Spellcasting ability: ${AB_SHORT[ability] || ability}.` };
+    if (resIdx >= 0) ch.resources[resIdx] = resEntry;
+    else ch.resources.push(resEntry);
+  }
+  _miState = null;
+  saveData(db); closeModal(); renderApp();
+}
+
+function _cleanupMiFeatData(ch, miData) {
+  const miId = miData?.id; if (!miId) return;
+  ch.spells.known = (ch.spells.known || []).filter(s => typeof s !== 'object' || s._miId !== miId);
+  ch.resources    = (ch.resources || []).filter(r => r._miId !== miId);
+}
+
+function _editMiFeat(i) {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  const feat = (ch.featuresList || [])[i];
+  if (!feat || feat.name !== 'Magic Initiate') return;
+  const featData = (FEATS_ITEMS_DATA?.feats || []).find(x => x.name === 'Magic Initiate' && x.source === feat._featSource)
+    || (FEATS_ITEMS_DATA?.feats || []).find(x => x.name === 'Magic Initiate');
+  if (!featData) return;
+  openMagicInitiatePicker(featData, i);
+}
+
+// ── Spell-Feat Picker (General) ───────────────────────────────────────────────
+const _SF_SRC_MAP = { 'PHB 2024':'XPHB', 'PHB 2014':'PHB', "Xanathar's":'XGE', "Tasha's":'TCE', 'Dragonlance':'DSotDQ', "Strixhaven":'SCC', "Spelljammer":'BAM', "Bigby's":'BGG' };
+
+const SPELL_FEAT_CONFIG = {
+  'Blessed Warrior':    { ability:'cha', picks:[{type:'cantrip',count:2,classFilter:'Cleric',label:'2 Cleric Cantrips'}] },
+  'Druidic Warrior':    { ability:'wis', picks:[{type:'cantrip',count:2,classFilter:'Druid',label:'2 Druid Cantrips'}] },
+  'Artificer Initiate': { ability:'int', picks:[
+    {type:'cantrip',count:1,classFilter:'Artificer',label:'1 Artificer Cantrip'},
+    {type:'spell',level:1,count:1,classFilter:'Artificer',freeCast:true,label:'1st-Level Artificer Spell (free 1/LR)'}
+  ]},
+  'Fey-Touched':    { ability:'choose', fixed:[{name:'Misty Step',freeCast:true,level:2}], picks:[{type:'spell',level:1,count:1,schoolFilter:['Divination','Enchantment'],freeCast:true,label:'1st-Level Divination or Enchantment Spell (free 1/LR)'}] },
+  'Fey Touched':    { ability:'choose', fixed:[{name:'Misty Step',freeCast:true,level:2}], picks:[{type:'spell',level:1,count:1,schoolFilter:['Divination','Enchantment'],freeCast:true,label:'1st-Level Divination or Enchantment Spell (free 1/LR)'}] },
+  'Shadow-Touched': { ability:'choose', fixed:[{name:'Invisibility',freeCast:true,level:2}], picks:[{type:'spell',level:1,count:1,schoolFilter:['Illusion','Necromancy'],freeCast:true,label:'1st-Level Illusion or Necromancy Spell (free 1/LR)'}] },
+  'Shadow Touched': { ability:'choose', fixed:[{name:'Invisibility',freeCast:true,level:2}], picks:[{type:'spell',level:1,count:1,schoolFilter:['Illusion','Necromancy'],freeCast:true,label:'1st-Level Illusion or Necromancy Spell (free 1/LR)'}] },
+  'Wood Elf Magic': { ability:'wis', fixed:[{name:'Longstrider',freeCast:true,level:1},{name:'Pass Without Trace',freeCast:true,level:2}], picks:[{type:'cantrip',count:1,classFilter:'Druid',label:'1 Druid Cantrip'}] },
+  'Telekinetic':    { ability:'choose', fixed:[{name:'Mage Hand',freeCast:false,level:0}] },
+  'Telepathic':     { ability:'choose', fixed:[{name:'Detect Thoughts',freeCast:true,level:2}] },
+  'Drow High Magic':   { ability:'cha', fixed:[{name:'Detect Magic',freeCast:false,level:1},{name:'Levitate',freeCast:true,level:2},{name:'Dispel Magic',freeCast:true,level:3}] },
+  'Fey Teleportation': { ability:'int', fixed:[{name:'Misty Step',freeCast:true,level:2}] },
+  'Adept of the Black Robes': { ability:'choose', picks:[{type:'spell',level:2,count:1,schoolFilter:['Enchantment','Necromancy'],freeCast:true,label:'2nd-Level Enchantment or Necromancy Spell (free 1/LR)'}] },
+  'Adept of the Red Robes':   { ability:'choose', picks:[{type:'spell',level:2,count:1,schoolFilter:['Illusion','Transmutation'],freeCast:true,label:'2nd-Level Illusion or Transmutation Spell (free 1/LR)'}] },
+  'Adept of the White Robes': { ability:'choose', picks:[{type:'spell',level:2,count:1,schoolFilter:['Abjuration','Divination'],freeCast:true,label:'2nd-Level Abjuration or Divination Spell (free 1/LR)'}] },
+  'Divinely Favored': {
+    classChoice:['Evil','Good','Neutral'], classLabel:'Alignment', ability:'choose',
+    classFixed:{ Evil:[{name:'Augury',freeCast:true,level:2}], Good:[{name:'Augury',freeCast:true,level:2}], Neutral:[{name:'Augury',freeCast:true,level:2}] },
+    archetypeClassFilter:{ Evil:'Warlock', Good:'Cleric', Neutral:'Druid' },
+    picks:[
+      {type:'cantrip',count:1,classFilter:'Cleric',label:'1 Cleric Cantrip'},
+      {type:'spell',level:1,count:1,classFilter:'{class}',freeCast:true,label:'1st-Level Spell from Alignment Class (free 1/LR)'}
+    ]
+  },
+  'Initiate of High Sorcery': {
+    classChoice:['Nuitari','Lunitari','Solinari'], classLabel:'Moon', ability:'choose',
+    archetypeSpellList:{
+      Nuitari:['Dissonant Whispers','False Life','Hex','Ray of Sickness'],
+      Lunitari:['Color Spray','Disguise Self','Feather Fall','Longstrider'],
+      Solinari:['Comprehend Languages','Detect Evil and Good','Protection from Evil and Good','Shield']
+    },
+    picks:[
+      {type:'cantrip',count:1,classFilter:'Wizard',label:'1 Wizard Cantrip'},
+      {type:'fromList',count:1,freeCast:true,label:'1st-Level Spell from Moon List (free 1/LR)'}
+    ]
+  },
+  'Ritual Caster|PHB': {
+    classChoice:['Bard','Cleric','Druid','Sorcerer','Warlock','Wizard'], classLabel:'Class',
+    classAbility:{Bard:'cha',Cleric:'wis',Druid:'wis',Sorcerer:'cha',Warlock:'cha',Wizard:'int'},
+    picks:[{type:'spell',level:1,count:2,classFilter:'{class}',ritual:true,label:'2 Level-1 Ritual Spells from {class} List'}]
+  },
+  'Ritual Caster|XPHB': { ability:'choose', picks:[{type:'spell',level:1,count:2,ritual:true,label:'2 Level-1 Ritual Spells (Any Class)'}] },
+  'Spell Sniper|PHB': {
+    classChoice:['Bard','Cleric','Druid','Sorcerer','Warlock','Wizard'], classLabel:'Class',
+    classAbility:{Bard:'cha',Cleric:'wis',Druid:'wis',Sorcerer:'cha',Warlock:'cha',Wizard:'int'},
+    picks:[{type:'cantrip',count:1,classFilter:'{class}',label:'1 Attack-Roll Cantrip from {class} List'}]
+  }
+};
+
+function _sfConfigKey(featData) {
+  if (!featData) return null;
+  const n = featData.name;
+  const rawSrc = featData.source_key || featData.source || featData._featSource || '';
+  const sk = _SF_SRC_MAP[rawSrc] || rawSrc;
+  return SPELL_FEAT_CONFIG[n + '|' + sk] || SPELL_FEAT_CONFIG[n] || null;
+}
+
+function _featBadgeAbbr(featName) {
+  return (featName || '').split(/[\s-]+/)
+    .filter(w => /^[A-Za-z]/.test(w) && !['of','the','a','an'].includes(w.toLowerCase()))
+    .map(w => w[0]).join('').slice(0, 3).toUpperCase() || 'SF';
+}
+
+let _sfState = null;
+
+function openSpellFeatPicker(featData, editIdx = -1) {
+  const config = _sfConfigKey(featData);
+  if (!config) return;
+  if (!allSpellsDb && !spellFetching && (config.picks?.length)) fetchAllSpells();
+
+  const existingSf = editIdx >= 0 ? db.characters[currentCharId]?.featuresList?.[editIdx]?._sf : null;
+  const sfId = existingSf?.id || Math.random().toString(36).slice(2, 8);
+
+  const hasPicks    = !!(config.picks?.length);
+  const needsConfig = !!(config.classChoice || config.ability === 'choose');
+
+  // Fixed-ability, no-picks feats: skip modal on add; on edit, re-apply spells
+  if (!needsConfig && !hasPicks) {
+    const ch = db.characters[currentCharId]; if (!ch) return;
+    ch.featuresList = ch.featuresList || []; ch.spells = ch.spells || {};
+    ch.spells.known = ch.spells.known || []; ch.resources = ch.resources || [];
+    const ability = config.ability !== 'choose' ? config.ability : null;
+    if (editIdx >= 0) {
+      const ex = ch.featuresList[editIdx]?._sf;
+      if (ex) _cleanupSfFeatData(ch, ex);
+      ch.featuresList[editIdx] = { name: featData.name, desc: featData.desc || '', _feat: true, _featSource: featData.source || '', _sf: { id: sfId, ability, archetype: null, pickNames: [] } };
+    } else {
+      ch.featuresList.push({ name: featData.name, desc: featData.desc || '', _feat: true, _featSource: featData.source || '', _sf: { id: sfId, ability, archetype: null, pickNames: [] } });
+    }
+    _sfAddSpells(ch, featData.name, config, sfId, ability, null, []);
+    saveData(db); renderApp(); return;
+  }
+
+  let initArchetype = existingSf?.archetype || null;
+  let initAbility   = existingSf?.ability   || (config.ability !== 'choose' ? config.ability : null);
+  let initPicks     = existingSf?.pickNames ? existingSf.pickNames.map(arr => [...arr]) : [];
+  if (!initAbility && initArchetype && config.classAbility) initAbility = config.classAbility[initArchetype] || null;
+
+  _sfState = { featData, editIdx, sfId, archetype: initArchetype, ability: initAbility, step: needsConfig ? 0 : 1, picks: initPicks, _filter: '' };
+  _renderSfModal();
+}
+
+function _sfCancel() { _sfState = null; closeModal(); }
+
+function _renderSfModal() {
+  if (!_sfState) return;
+  const config = _sfConfigKey(_sfState.featData);
+  if (!config) return;
+  const picks = config.picks || [];
+  if (_sfState.step === 0) { _renderSfConfigStep(); return; }
+  const pickIdx = _sfState.step - 1;
+  if (pickIdx >= 0 && pickIdx < picks.length) _renderSfPickStep(pickIdx);
+}
+
+function _renderSfConfigStep() {
+  const { featData, archetype, ability } = _sfState;
+  const config = _sfConfigKey(featData);
+  const archetypeLabel = config.classLabel || 'Class';
+  const hasPicks = !!(config.picks?.length);
+  const AB_OPTS = [['int','Intelligence'],['wis','Wisdom'],['cha','Charisma']];
+
+  const archetypeSection = config.classChoice ? `
+    <div style="margin-bottom:1rem">
+      <div style="font-size:0.8rem;color:var(--text-dim);margin-bottom:0.5rem">${esc(archetypeLabel)}:</div>
+      <div style="display:flex;flex-wrap:wrap;gap:0.4rem">
+        ${config.classChoice.map(c => `<button class="btn btn-sm${archetype===c?' btn-primary':''}" onclick="_sfSetArchetype('${jsStr(c)}')">${esc(c)}</button>`).join('')}
+      </div>
+    </div>` : '';
+
+  const abilitySection = config.ability === 'choose' ? `
+    <div style="margin-bottom:1rem">
+      <div style="font-size:0.8rem;color:var(--text-dim);margin-bottom:0.5rem">Spellcasting Ability:</div>
+      <div style="display:flex;gap:0.4rem">
+        ${AB_OPTS.map(([k,v]) => `<button class="btn btn-sm${ability===k?' btn-primary':''}" onclick="_sfSetAbility('${k}')">${esc(v)}</button>`).join('')}
+      </div>
+    </div>` : '';
+
+  const canContinue = !!((!config.classChoice || archetype) && (config.ability !== 'choose' || ability));
+
+  openModal(`
+    <h3 style="margin:0 0 1rem">${esc(featData.name)}</h3>
+    ${archetypeSection}
+    ${abilitySection}
+    <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:1.5rem">
+      <button class="btn" onclick="_sfCancel()">Cancel</button>
+      <button class="btn btn-primary" onclick="${hasPicks ? '_sfNextStep(1)' : '_sfConfirm()'}" ${canContinue ? '' : 'disabled'}>${hasPicks ? 'Choose Spells →' : 'Add Feat'}</button>
+    </div>`);
+}
+
+function _sfSetArchetype(a) {
+  if (!_sfState) return;
+  _sfState.archetype = a;
+  const cfg = _sfConfigKey(_sfState.featData);
+  if (cfg?.classAbility?.[a]) _sfState.ability = cfg.classAbility[a];
+  _renderSfConfigStep();
+}
+
+function _sfSetAbility(a) { if (_sfState) { _sfState.ability = a; _renderSfConfigStep(); } }
+
+function _sfNextStep(step) {
+  if (!_sfState) return;
+  _sfState._filter = '';
+  _sfState.step = step;
+  _renderSfModal();
+}
+
+function _sfGetPool(pick, state) {
+  const config = _sfConfigKey(state.featData);
+  const all = getMergedSpells();
+  if (pick.type === 'fromList') {
+    const names = config.archetypeSpellList?.[state.archetype] || [];
+    return all.filter(sp => names.includes(sp.name));
+  }
+  let pool = all;
+  if (pick.type === 'cantrip') pool = pool.filter(sp => sp.level_int === 0);
+  else if (pick.type === 'spell') pool = pool.filter(sp => sp.level_int === pick.level);
+  let classF = pick.classFilter;
+  if (classF === '{class}') classF = config.archetypeClassFilter?.[state.archetype] || state.archetype || '';
+  if (classF) pool = pool.filter(sp => sp.dnd_class && sp.dnd_class.includes(classF));
+  if (pick.schoolFilter?.length) pool = pool.filter(sp => pick.schoolFilter.includes(sp.school));
+  if (pick.ritual) pool = pool.filter(sp => sp.ritual === 'yes');
+  return pool;
+}
+
+function _sfSetFilter(val, pickIdx) {
+  if (!_sfState) return;
+  _sfState._filter = val;
+  _renderSfPickStep(pickIdx);
+}
+
+function _renderSfPickStep(pickIdx) {
+  if (!_sfState) return;
+  const config = _sfConfigKey(_sfState.featData);
+  const picks = config.picks || [];
+  const pick  = picks[pickIdx];
+  if (!pick) return;
+
+  const pool = _sfGetPool(pick, _sfState);
+  const needsConfig = !!(config.classChoice || config.ability === 'choose');
+
+  if (!allSpellsDb) {
+    openModal(`
+      <h3 style="margin:0 0 1rem">${esc(_sfState.featData.name)}</h3>
+      <p style="color:var(--text-dim)">Loading spell list…</p>
+      <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:1.5rem">
+        <button class="btn" onclick="${needsConfig ? '_sfNextStep(0)' : '_sfCancel()'}">${needsConfig ? '← Back' : 'Cancel'}</button>
+        <button class="btn btn-primary" onclick="_renderSfModal()">Retry</button>
+      </div>`);
+    return;
+  }
+
+  const state    = _sfState;
+  const curPick  = state.picks[pickIdx] || [];
+  let classF = pick.classFilter;
+  if (classF === '{class}') classF = config.archetypeClassFilter?.[state.archetype] || state.archetype || '';
+  const label = pick.label.replace('{class}', classF || '');
+  const totalSteps = picks.length;
+  const stepLabel  = totalSteps > 1 ? ` (${pickIdx + 1}/${totalSteps})` : '';
+  const backStep   = pickIdx === 0 ? (needsConfig ? 0 : 'cancel') : pickIdx;
+  const isLast     = pickIdx + 1 >= totalSteps;
+  const sfFilter   = (state._filter || '').toLowerCase();
+  const filtered   = pool.filter(sp => !sfFilter || sp.name.toLowerCase().includes(sfFilter));
+
+  const rows = filtered.map(sp => {
+    const sel = curPick.includes(sp.name);
+    const sc  = _schoolColor(sp.school || '');
+    return `<div class="spell-list-item" onclick="_sfToggle(${pool.indexOf(sp)},${pickIdx})"
+        style="cursor:pointer;padding:0.4rem 0.6rem;border-radius:6px;margin-bottom:2px;${sel ? 'background:rgba(var(--accent-rgb),0.18)' : ''}">
+      <div style="display:flex;align-items:center;gap:0.4rem">
+        <span style="flex:1;font-size:0.88rem">${esc(sp.name)}</span>
+        <span class="spell-badge" style="font-size:0.65rem;border-color:${sc};color:${sc}">${esc(sp.school || '')}</span>
+        ${sp.ritual === 'yes' ? `<span class="spell-tag ritual">R</span>` : ''}
+        ${sp.concentration === 'yes' ? `<span class="spell-tag conc">C</span>` : ''}
+        ${sel ? `<span style="color:var(--accent);font-size:0.9rem">✓</span>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+
+  const selected   = curPick.length;
+  const needed     = pick.count;
+  const canProceed = selected === needed;
+
+  openModal(`
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.75rem">
+      <h3 style="margin:0">${esc(state.featData.name)}</h3>
+      <span style="font-size:0.8rem;color:var(--text-dim)">${selected}/${needed} chosen${stepLabel}</span>
+    </div>
+    <div style="font-size:0.82rem;color:var(--text-dim);margin-bottom:0.6rem">${esc(label)}</div>
+    <input id="sf-pick-filter" type="text" class="search-input" placeholder="Search spells…" value="${esc(sfFilter)}"
+      oninput="_sfSetFilter(this.value,${pickIdx})" style="width:100%;margin-bottom:0.6rem;box-sizing:border-box">
+    <div style="max-height:55vh;overflow-y:auto">${rows || '<p style="color:var(--text-dim);text-align:center;padding:1rem">No spells found.</p>'}</div>
+    <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:0.75rem">
+      <button class="btn" onclick="${backStep === 'cancel' ? '_sfCancel()' : '_sfNextStep(' + backStep + ')'}">${backStep === 'cancel' ? 'Cancel' : '← Back'}</button>
+      <button class="btn btn-primary" onclick="${isLast ? '_sfConfirm()' : '_sfNextStep(' + (pickIdx + 2) + ')'}" ${canProceed ? '' : 'disabled'}>${isLast ? 'Confirm →' : 'Next →'}</button>
+    </div>`);
+}
+
+function _sfToggle(idx, pickIdx) {
+  if (!_sfState) return;
+  const config = _sfConfigKey(_sfState.featData);
+  const pick   = (config.picks || [])[pickIdx]; if (!pick) return;
+  const pool   = _sfGetPool(pick, _sfState);
+  const sp     = pool[idx]; if (!sp) return;
+  _sfState.picks = _sfState.picks || [];
+  const cur    = _sfState.picks[pickIdx] = _sfState.picks[pickIdx] || [];
+  const i = cur.indexOf(sp.name);
+  if (i >= 0) cur.splice(i, 1);
+  else if (cur.length < pick.count) cur.push(sp.name);
+  _renderSfPickStep(pickIdx);
+}
+
+function _sfAddSpells(ch, featName, config, sfId, ability, archetype, pickNamesArr) {
+  const AB_SHORT = { int:'INT', wis:'WIS', cha:'CHA' };
+  const abStr = AB_SHORT[ability] || '';
+  const all = getMergedSpells();
+  const resolve = (name, levelHint) => {
+    const found = all.find(s => s.name.toLowerCase() === name.toLowerCase());
+    return found || { name, level_int: levelHint ?? 1, school:'', casting_time:'', range:'', components:'', concentration:'no', ritual:'no', dnd_class:'', desc:'' };
+  };
+
+  const fixedList = [
+    ...(config.fixed || []),
+    ...(archetype && config.classFixed?.[archetype] ? config.classFixed[archetype] : [])
+  ];
+  fixedList.forEach(fx => {
+    const sp = resolve(fx.name, fx.level);
+    const spLevel = fx.level ?? sp.level_int;
+    if (!ch.spells.known.some(s => (typeof s === 'object' ? s.name : s) === sp.name))
+      ch.spells.known.push({ ...sp, _fromFeat: featName, _sfId: sfId, _sfAbility: ability, _sfFixed: true, _sfFreeCast: !!fx.freeCast });
+    if (fx.freeCast && spLevel > 0) {
+      const res = { name: `${featName}: ${sp.name}`, max: 1, current: 1, recharge: 'long', type: 'pips', custom: true, _fromFeat: featName, _sfId: sfId, desc: `Free cast 1/Long Rest.${abStr ? ' Ability: ' + abStr + '.' : ''}` };
+      const ei = ch.resources.findIndex(r => r._sfId === sfId && r.name === res.name);
+      if (ei >= 0) ch.resources[ei] = res; else ch.resources.push(res);
+    }
+  });
+
+  (config.picks || []).forEach((pick, pi) => {
+    (pickNamesArr[pi] || []).forEach(name => {
+      const sp = resolve(name, pick.level ?? 0);
+      if (!ch.spells.known.some(s => (typeof s === 'object' ? s.name : s) === sp.name))
+        ch.spells.known.push({ ...sp, _fromFeat: featName, _sfId: sfId, _sfAbility: ability, _sfPickIdx: pi, _sfFreeCast: !!pick.freeCast });
+      if (pick.freeCast) {
+        const res = { name: `${featName}: ${sp.name}`, max: 1, current: 1, recharge: 'long', type: 'pips', custom: true, _fromFeat: featName, _sfId: sfId, desc: `Free cast 1/Long Rest.${abStr ? ' Ability: ' + abStr + '.' : ''}` };
+        const ei = ch.resources.findIndex(r => r._sfId === sfId && r.name === res.name);
+        if (ei >= 0) ch.resources[ei] = res; else ch.resources.push(res);
+      }
+    });
+  });
+}
+
+function _sfConfirm() {
+  if (!_sfState) return;
+  const { featData, editIdx, sfId, ability, archetype, picks } = _sfState;
+  const config = _sfConfigKey(featData); if (!config) return;
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  ch.featuresList = ch.featuresList || []; ch.spells = ch.spells || {};
+  ch.spells.known = ch.spells.known || []; ch.resources = ch.resources || [];
+  if (editIdx >= 0) {
+    const ex = ch.featuresList[editIdx]?._sf;
+    if (ex) _cleanupSfFeatData(ch, ex);
+  }
+  const featEntry = { name: featData.name, desc: featData.desc || '', _feat: true, _featSource: featData.source || '', _sf: { id: sfId, ability, archetype, pickNames: picks.map(arr => [...(arr || [])]) } };
+  if (editIdx >= 0) ch.featuresList[editIdx] = featEntry;
+  else ch.featuresList.push(featEntry);
+  _sfAddSpells(ch, featData.name, config, sfId, ability, archetype, picks);
+  _sfState = null;
+  closeModal(); saveData(db); renderApp();
+}
+
+function _cleanupSfFeatData(ch, sfData) {
+  if (!sfData?.id) return;
+  const sfId = sfData.id;
+  ch.spells = ch.spells || {}; ch.spells.known = ch.spells.known || [];
+  ch.resources = ch.resources || [];
+  ch.spells.known = ch.spells.known.filter(s => !(typeof s === 'object' && s._sfId === sfId));
+  ch.resources    = ch.resources.filter(r => r._sfId !== sfId);
+}
+
+function _editSfFeat(i) {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  const feat = (ch.featuresList || [])[i]; if (!feat) return;
+  const config = _sfConfigKey({ name: feat.name, source: feat._featSource || '' }); if (!config) return;
+  const featData = (FEATS_ITEMS_DATA?.feats || []).find(x => x.name === feat.name && x.source === feat._featSource)
+    || (FEATS_ITEMS_DATA?.feats || []).find(x => x.name === feat.name)
+    || { name: feat.name, desc: feat.desc || '', source: feat._featSource || '' };
+  openSpellFeatPicker(featData, i);
 }
 
 // ── Magic Item Randomizer (DM Tool) ───────────────────────────────────────────
@@ -5769,6 +6945,8 @@ function removeFeature(i) {
   if (!ch || !ch.featuresList) return;
   const target = ch.featuresList[i];
   if (target !== undefined) {
+    if (target._mi) _cleanupMiFeatData(ch, target._mi);
+    if (target._sf) _cleanupSfFeatData(ch, target._sf);
     ch.featuresList.splice(i, 1);
   }
   saveData(db); renderApp();
@@ -5779,22 +6957,37 @@ function removeFeatureByName(name, flag) {
   const idx = ch.featuresList.findIndex(f =>
     f.name === name && (flag ? f[flag] : true)
   );
-  if (idx >= 0) ch.featuresList.splice(idx, 1);
+  if (idx >= 0) {
+    const feat = ch.featuresList[idx];
+    if (feat._mi) _cleanupMiFeatData(ch, feat._mi);
+    if (feat._sf) _cleanupSfFeatData(ch, feat._sf);
+    ch.featuresList.splice(idx, 1);
+  }
   saveData(db); renderApp();
 }
 function updateFeatureField(i, field, value) {
   const ch = db.characters[currentCharId];
   if (ch.featuresList && ch.featuresList[i]) ch.featuresList[i][field] = value;
 }
+function ch_edition(ed) {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  if (ch.edition === ed) return;
+  ch.edition = ed;
+  // Refresh stored class features so their text matches the new edition
+  ch.featuresList = (ch.featuresList || []).filter(f => !f._class);
+  populateClassFeatures(currentCharId);
+  saveData(db); renderApp();
+}
+
 function populateClassFeatures(charIdOverride) {
   const charId = charIdOverride || currentCharId;
   const ch = db.characters[charId]; if (!ch) return;
   const cls = ch.class || ch.className || '';
   const lvl = parseInt(ch.level) || 1;
-  const feats = getClassFeaturesUpToLevel(cls, lvl);
+  const feats = getClassFeaturesUpToLevel(cls, lvl, ch);
   if (!feats.length) return;
   const existingNames = new Set((ch.featuresList || []).map(f => f.name));
-  const newFeats = feats.filter(f => !existingNames.has(f.name));
+  const newFeats = feats.filter(f => !existingNames.has(f.name) && f.name !== 'ASI');
   (ch.featuresList = ch.featuresList || []);
   newFeats.forEach(f => ch.featuresList.push({ ...f, _class: cls }));
   if (!charIdOverride) { saveData(db); renderApp(); } // only save/render if called from current character
@@ -6136,27 +7329,8 @@ function syncSubclassFeatures(charId) {
     showToast(`<div class="toast-title">✦ Level ${level} unlocked:</div>${lines}`);
   }
 
-  // Sync base class resource maxes for level-scaling resources
-  (ch.resources || []).forEach(r => {
-    if (!r._baseClass) return;
-    const newMax = resolveMaxFormula(r.maxFormula, ch);
-    if (r.max !== newMax) {
-      r.current = Math.min(r.current || 0, newMax);
-      r.max = newMax;
-    }
-    // Sync die scaling (Bardic Inspiration)
-    const scaledDieVal = scaledDie(r.name, level);
-    if (scaledDieVal) r.die = scaledDieVal;
-    // Bardic Inspiration recharge changes at level 5
-    if (r.name === 'Bardic Inspiration') {
-      r.recharge = level >= 5 ? 'short' : 'long';
-    }
-    // Action Surge gets 2 uses at level 17
-    if (r.name === 'Action Surge') {
-      const newMax2 = level >= 17 ? 2 : 1;
-      if (r.max !== newMax2) { r.max = newMax2; r.current = Math.min(r.current, newMax2); }
-    }
-  });
+  // Sync base class resource maxes and inject newly unlocked ones
+  _syncBaseClassResources(ch);
 }
 
 function renderSubclassField(ch) {
@@ -6215,33 +7389,53 @@ const BASE_CLASS_RESOURCES = {
     { name: 'Wild Shape', maxFormula: 2, die: null, recharge: 'short', type: 'pips',
       desc: 'Magically assume the shape of a beast.' },
   ],
-  Fighter: ch => [
-    { name: 'Second Wind', maxFormula: 1, die: 'd10', recharge: 'short', type: 'pips',
-      desc: 'Regain 1d10 + Fighter level HP as a Bonus Action.' },
-    { name: 'Action Surge', maxFormula: (ch.level || 1) >= 17 ? 2 : 1, die: null, recharge: 'short', type: 'pips',
-      desc: 'Take one additional action on your turn.' },
-  ],
+  Fighter: ch => {
+    const lv = ch.level || 1;
+    const resources = [
+      { name: 'Second Wind', maxFormula: 'second_wind', die: 'd10', recharge: 'short', type: 'pips',
+        desc: 'Regain HP as a Bonus Action. Uses scale with level (2024).' },
+      { name: 'Action Surge', maxFormula: 'action_surge', die: null, recharge: 'short', type: 'pips',
+        desc: 'Take one additional action on your turn.' },
+    ];
+    if (lv >= 9) resources.push(
+      { name: 'Indomitable', maxFormula: 'indomitable', die: null, recharge: 'long', type: 'pips',
+        desc: 'Reroll a saving throw you fail. Gains extra uses at L13 and L17.' }
+    );
+    return resources;
+  },
   Monk: ch => [
-    { name: 'Ki Points', maxFormula: 'level', die: null, recharge: 'short', type: 'pips',
+    { name: 'Ki Points', maxFormula: 'ki_points', die: null, recharge: 'short', type: 'pips',
       desc: 'Fuel special monk abilities like Flurry of Blows and Patient Defense.' },
   ],
   Paladin: ch => [
     { name: 'Lay on Hands', maxFormula: 'level_x5', die: null, recharge: 'long', type: 'pool',
       desc: 'Restore HP by touch. Pool of HP equal to 5× Paladin level.' },
-    { name: 'Channel Divinity', maxFormula: 2, die: null, recharge: 'short', type: 'pips',
+    { name: 'Channel Divinity', maxFormula: 'paladin_cd', die: null, recharge: 'short', type: 'pips',
       desc: 'Channel divine energy through your sacred oath.' },
   ],
   Sorcerer: ch => [
-    { name: 'Sorcery Points', maxFormula: 'level', die: null, recharge: 'long', type: 'pips',
+    { name: 'Sorcery Points', maxFormula: 'sorcery_points', die: null, recharge: 'long', type: 'pips',
       desc: 'Points that fuel Metamagic and other sorcerous effects.' },
   ],
-  Warlock: ch => [],
+  Warlock: ch => {
+    const lv = ch.level || 1;
+    const resources = [];
+    if (lv >= 11) resources.push({ name: 'Mystic Arcanum (6th)', maxFormula: 1, die: null, recharge: 'long', type: 'pips',
+      desc: 'Cast a 6th-level spell once per long rest without expending a spell slot.' });
+    if (lv >= 13) resources.push({ name: 'Mystic Arcanum (7th)', maxFormula: 1, die: null, recharge: 'long', type: 'pips',
+      desc: 'Cast a 7th-level spell once per long rest without expending a spell slot.' });
+    if (lv >= 15) resources.push({ name: 'Mystic Arcanum (8th)', maxFormula: 1, die: null, recharge: 'long', type: 'pips',
+      desc: 'Cast an 8th-level spell once per long rest without expending a spell slot.' });
+    if (lv >= 17) resources.push({ name: 'Mystic Arcanum (9th)', maxFormula: 1, die: null, recharge: 'long', type: 'pips',
+      desc: 'Cast a 9th-level spell once per long rest without expending a spell slot.' });
+    return resources;
+  },
   Wizard: ch => [
     { name: 'Arcane Recovery', maxFormula: 1, die: null, recharge: 'long', type: 'pips',
       desc: 'Recover expended spell slots during a Short Rest (once per Long Rest).' },
   ],
   Artificer: ch => [
-    { name: 'Infuse Item', maxFormula: 'proficiency', die: null, recharge: 'long', type: 'pips',
+    { name: 'Infuse Item', maxFormula: 'artificer_infuse', die: null, recharge: 'long', type: 'pips',
       desc: 'Infuse mundane items with magical power.' },
   ],
 };
@@ -6258,6 +7452,7 @@ function _injectBaseClassResourcesForCh(ch) {
   toAdd.forEach(def => {
     if (existingNames.has(def.name)) return;
     const max = resolveMaxFormula(def.maxFormula, ch);
+    if (max <= 0) return;
     ch.resources.push({
       id: `res_${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
       name: def.name,
@@ -6280,6 +7475,43 @@ function injectBaseClassResources(charId) {
   _injectBaseClassResourcesForCh(db.characters[charId]);
 }
 
+// Updates existing base-class resource maxes on level-up and injects newly available ones.
+// Unlike _injectBaseClassResourcesForCh it does NOT reset current values.
+function _syncBaseClassResources(ch) {
+  const factory = BASE_CLASS_RESOURCES[ch.class];
+  if (!factory) return;
+  const defined = factory(ch);
+  const level = ch.level || 1;
+
+  (ch.resources || []).forEach(r => {
+    if (!r._baseClass) return;
+    const def = defined.find(d => d.name === r.name);
+    if (!def) return;
+    const newMax = resolveMaxFormula(def.maxFormula, ch);
+    if (r.max !== newMax) {
+      r.current = Math.min(r.current || 0, newMax);
+      r.max = newMax;
+    }
+    const dieVal = scaledDie(r.name, level);
+    if (dieVal) r.die = dieVal;
+    if (r.name === 'Bardic Inspiration') r.recharge = level >= 5 ? 'short' : 'long';
+  });
+
+  const existing = new Set((ch.resources || []).map(r => r.name));
+  defined.forEach(def => {
+    if (existing.has(def.name)) return;
+    const max = resolveMaxFormula(def.maxFormula, ch);
+    if (max <= 0) return;
+    (ch.resources = ch.resources || []).push({
+      id: `res_${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
+      name: def.name, type: def.type, current: max, max,
+      maxFormula: def.maxFormula, die: def.die || null,
+      recharge: def.recharge, source: ch.class,
+      desc: def.desc, custom: false, _baseClass: true, _forClass: ch.class,
+    });
+  });
+}
+
 // ── Subclass System ───────────────────────────────────────────────────────────
 function resolveMaxFormula(formula, ch) {
   if (typeof formula === 'number') return formula;
@@ -6294,7 +7526,21 @@ function resolveMaxFormula(formula, ch) {
     case 'level_div_2': return Math.max(1, Math.floor(lv / 2));
     case 'level_x5':   return lv * 5;
     case 'rage_uses':  return lv >= 17 ? 6 : lv >= 12 ? 5 : lv >= 6 ? 4 : lv >= 3 ? 3 : 2;
-    case 'channel_divinity': return lv >= 18 ? 3 : lv >= 6 ? 2 : 1;
+    // Cleric: 0 at L1, then 1/2/3 at L2/6/18
+    case 'channel_divinity': return lv >= 18 ? 3 : lv >= 6 ? 2 : lv >= 2 ? 1 : 0;
+    // Monk/Sorcerer: features begin at L2
+    case 'ki_points':       return lv >= 2 ? lv : 0;
+    case 'sorcery_points':  return lv >= 2 ? lv : 0;
+    // Paladin: Channel Divinity starts at L3 (2 uses 2024; L11+ gets 3)
+    case 'paladin_cd':      return lv >= 11 ? 3 : lv >= 3 ? 2 : 0;
+    // Artificer: Infuse Item starts at L2, increases every 4 levels
+    case 'artificer_infuse': return lv >= 18 ? 6 : lv >= 14 ? 5 : lv >= 10 ? 4 : lv >= 6 ? 3 : lv >= 2 ? 2 : 0;
+    // Fighter: Indomitable starts at L9
+    case 'indomitable':     return lv >= 17 ? 3 : lv >= 13 ? 2 : lv >= 9 ? 1 : 0;
+    // Fighter: Second Wind scales (2024 PHB)
+    case 'second_wind':     return lv >= 10 ? 4 : lv >= 4 ? 3 : 2;
+    // Fighter: Action Surge (2 uses at L17)
+    case 'action_surge':    return lv >= 17 ? 2 : 1;
     default:           return parseInt(formula) || 1;
   }
 }
@@ -6442,7 +7688,20 @@ function renderCharacterSheet() {
           <div class="mc-pill mc-pill-add" onclick="addCharClass()">+ Add Class</div>
         </div>
         <div id="mc-editor-slot">${mcEditIdx !== null ? renderClassEditor(ch, mcEditIdx) : ''}</div>
-        <div class="mc-total">Total Level ${ch.level} · PB +${pb}</div>
+        <div class="mc-total" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+          <span>Total Level ${ch.level} · PB +${pb}</span>
+          ${(()=>{
+            const pillBase = 'padding:1px 7px;font-size:0.65rem;border-radius:10px;cursor:pointer;border:1px solid var(--border);transition:background 0.15s,color 0.15s;';
+            const ed = ch.edition || '2024';
+            const p24 = pillBase + (ed==='2024' ? 'background:var(--accent);color:#fff;' : 'background:transparent;color:var(--muted);');
+            const p14 = pillBase + (ed==='2014' ? 'background:var(--accent);color:#fff;' : 'background:transparent;color:var(--muted);');
+            return `<span style="margin-left:auto;display:inline-flex;gap:4px;align-items:center" title="Which edition's class features this character uses">
+              <span style="font-size:0.6rem;color:var(--text-dim)">Rules</span>
+              <button style="${p24}" onclick="ch_edition('2024')">2024</button>
+              <button style="${p14}" onclick="ch_edition('2014')">2014</button>
+            </span>`;
+          })()}
+        </div>
       </div>
       <div class="cs-header-field">
         <label>Background</label>
@@ -6534,15 +7793,28 @@ function renderCharacterSheet() {
 function changeBackground(newBg) {
   const ch = db.characters[currentCharId];
   if (!ch) return;
+  ch.backgroundTools = ch.backgroundTools || [];
 
-  // Strip skills the OLD background added (search both editions)
+  // Strip skills the OLD background added (tagged entries + legacy plain strings)
   if (ch.background) {
     const allBgPool = [...(SPECIES_DATA?.backgrounds_2024||[]), ...(SPECIES_DATA?.backgrounds_2014||[])];
     const oldBgData = allBgPool.find(b => b.name === ch.background);
-    (oldBgData?.skills || []).forEach(skill => {
-      const idx = ch.skillProficiencies.indexOf(skill);
-      if (idx !== -1) ch.skillProficiencies.splice(idx, 1);
+    const oldBgSkillSet = new Set(oldBgData?.skills || []);
+    ch.skillProficiencies = (ch.skillProficiencies || []).filter(e => {
+      if (!oldBgSkillSet.has(skillProfName(e))) return true;
+      const src = skillProfSource(e);
+      return src !== 'background' && src !== null; // keep class entries, remove bg-tagged and plain strings
     });
+    // Remove old background tools from ch.proficiencies, guarding against class-shared tools
+    const primaryClass = ch.classes?.[0]?.class || ch.class || 'Fighter';
+    const classToolsLower = new Set((CLASS_STARTING_PROFICIENCIES[primaryClass]?.tools || []).map(t => t.toLowerCase()));
+    const oldBgToolsToRemove = new Set(
+      (oldBgData?.tools || []).filter(t => !classToolsLower.has(t.toLowerCase())).map(t => t.toLowerCase())
+    );
+    if (oldBgToolsToRemove.size) {
+      const parts = (ch.proficiencies || '').split(',').map(s => s.trim()).filter(Boolean);
+      ch.proficiencies = parts.filter(p => !oldBgToolsToRemove.has(p.toLowerCase())).join(', ');
+    }
   }
 
   // Strip old background-sourced features and feat
@@ -6557,12 +7829,11 @@ function changeBackground(newBg) {
   const _bgSecondary = _bgEdition === '2014' ? (SPECIES_DATA?.backgrounds_2024||[]) : (SPECIES_DATA?.backgrounds_2014||[]);
   const newBgData = _bgPrimary.find(b => b.name === newBg) || _bgSecondary.find(b => b.name === newBg);
   if (newBgData) {
-    // Skills
-    (newBgData.skills || []).forEach(skill => {
-      if (!ch.skillProficiencies.includes(skill)) ch.skillProficiencies.push(skill);
-    });
-    // Tool proficiencies
-    ch.proficiencies = (newBgData.tools || []).join(', ');
+    // Skills — tagged as background source
+    (newBgData.skills || []).forEach(skill => addBackgroundSkill(ch, skill));
+    // Tool proficiencies — merge additively to preserve class profs
+    ch.proficiencies = mergeProfString(ch.proficiencies, newBgData.tools || []);
+    ch.backgroundTools = [...(newBgData.tools || [])];
     // Feat
     if (newBgData.feat) {
       const featName = newBgData.feat;
@@ -6572,8 +7843,8 @@ function changeBackground(newBg) {
       ch.featuresList.push({ name: featName, desc: featData?.desc || 'Granted by your background.', _feat: true, _featSource: 'Background (' + newBg + ')' });
     }
   } else {
-    // Custom/unknown background — clear derived profs
-    ch.proficiencies = '';
+    // Custom/unknown background — clear background tools only, class profs stay
+    ch.backgroundTools = [];
   }
 
   saveData(db);
@@ -6760,6 +8031,7 @@ function chClassField(idx, field, value) {
     const otherSum = ch.classes.reduce((s, c, i) => i === idx ? s : s + c.level, 0);
     ch.classes[idx].level = Math.min(newLvl, 20 - otherSum);
     syncClassFields(ch);
+    _syncBaseClassResources(ch);
   } else if (field === 'subclass') {
     ch.classes[idx].subclass = value;
     syncClassFields(ch);
@@ -7324,7 +8596,8 @@ function updateWeaponResults() {
       const dmgType = dmgParts.slice(1).join(' ');
       const chips = w.properties.map(p =>
         `<span style="font-size:0.6rem;border:1px solid rgba(var(--accent-rgb),0.45);color:var(--text-dim);border-radius:3px;padding:0 3px;white-space:nowrap">${esc(p)}</span>`
-      ).join('');
+      ).join('') + (w.mastery ?
+        `<span title="${esc((typeof WEAPON_MASTERY_DESC !== 'undefined' && WEAPON_MASTERY_DESC[w.mastery]) || '')}" style="font-size:0.6rem;border:1px solid #f59e0b;color:#f59e0b;border-radius:3px;padding:0 3px;white-space:nowrap">✦ ${esc(w.mastery)}</span>` : '');
       const rangeTxt = w.range ? `<span style="font-size:0.65rem;color:var(--text-dim)">${esc(w.range)}</span>` : '';
       return `<div class="wpn-row" onclick="pickWeapon(${idx})"
           style="display:flex;align-items:center;gap:0.4rem;flex-wrap:wrap;
@@ -7376,7 +8649,7 @@ function pickWeapon(idx) {
       }
     }
 
-    ch.attacks.push({ id: uid(), name: w.name, weaponType, bonus: bonusStr, damage: finalDmg, _unarmed: w._isUnarmed });
+    ch.attacks.push({ id: uid(), name: w.name, weaponType, bonus: bonusStr, damage: finalDmg, mastery: w.mastery || '', _unarmed: w._isUnarmed });
     saveData(db); renderApp();
   }
 
@@ -7543,7 +8816,7 @@ function _openLevelUpHPModal(ch, classIdx) {
   const conMod = Math.floor(((ch.abilities?.con || 10) - 10) / 2);
   const conStr = conMod >= 0 ? `+${conMod}` : `${conMod}`;
   const newClassLevel = (entry ? entry.level : ch.level) + 1;
-  const classFeats = (CLASS_FEATURES[className] || [])
+  const classFeats = _classFeaturesFor(className, ch)
     .filter(f => f[0] === newClassLevel)
     .map(f => ({ name: f[1], desc: f[2], tag: null }));
   const subclassFeats = (() => {
@@ -8331,11 +9604,10 @@ function wizardFinish() {
   // Background data
   if (wizardData.backgroundData) {
     ch.background = wizardData.background;
-    (wizardData.backgroundData.skills || []).forEach(skill => {
-      if (!ch.skillProficiencies.includes(skill)) ch.skillProficiencies.push(skill);
-    });
-    const tools = (wizardData.backgroundData.tools || []).join(', ');
-    if (tools) ch.proficiencies = tools;
+    (wizardData.backgroundData.skills || []).forEach(skill => addBackgroundSkill(ch, skill));
+    const bgTools = wizardData.backgroundData.tools || [];
+    ch.proficiencies = mergeProfString(ch.proficiencies, bgTools);
+    ch.backgroundTools = [...bgTools];
     if (wizardData.backgroundData.feat) {
       ch.featuresList = ch.featuresList || [];
       const featName = wizardData.backgroundData.feat;
@@ -8372,6 +9644,8 @@ function wizardFinish() {
 // Used when an anonymous player created a character via a setup link.
 // Writes the character directly to the GM's Firestore path (no local db save)
 // and appends its ID to the campaign's characters array.
+let _setupPendingChar = null; // held for retry so we don't create a second doc on failure
+
 async function _setupWizardFinish() {
   wizardData.maxHP = Math.max(1, parseInt(document.getElementById('wiz-hp')?.value) || wizardData.maxHP || 1);
   // Build character locally using the same logic as wizardFinish
@@ -8396,11 +9670,10 @@ async function _setupWizardFinish() {
   }
   if (wizardData.backgroundData) {
     ch.background = wizardData.background;
-    (wizardData.backgroundData.skills || []).forEach(skill => {
-      if (!ch.skillProficiencies.includes(skill)) ch.skillProficiencies.push(skill);
-    });
-    const tools = (wizardData.backgroundData.tools || []).join(', ');
-    if (tools) ch.proficiencies = tools;
+    (wizardData.backgroundData.skills || []).forEach(skill => addBackgroundSkill(ch, skill));
+    const bgTools = wizardData.backgroundData.tools || [];
+    ch.proficiencies = mergeProfString(ch.proficiencies, bgTools);
+    ch.backgroundTools = [...bgTools];
     if (wizardData.backgroundData.feat) {
       ch.featuresList = ch.featuresList || [];
       const featName = wizardData.backgroundData.feat;
@@ -8433,17 +9706,23 @@ async function _setupWizardFinish() {
   try { applySpellSlots(ch); } catch (e) { console.warn('[Setup] applySpellSlots failed:', e); }
   ch.shareToken = 'tok_' + uid();
 
-  // Show saving spinner
-  const appEl = document.getElementById('app');
+  _setupPendingChar = ch; // save before first write so retry reuses same doc
   closeModal();
+  await _retrySaveSetupChar();
+}
+
+async function _retrySaveSetupChar() {
+  const ch = _setupPendingChar;
+  if (!ch) return;
+  const appEl = document.getElementById('app');
   appEl.innerHTML = `
     <div style="padding:3rem;text-align:center">
       <div style="font-size:2rem">✾</div>
       <p>Saving your character…</p>
     </div>`;
 
-  // Write to GM's Firestore
   try {
+    // charRef.set is idempotent — safe to repeat on retry
     const charRef = firebase.firestore().doc(`users/${SETUP_GM_UID}/characters/${ch.id}`);
     await charRef.set(ch);
     const campRef = firebase.firestore().doc(`users/${SETUP_GM_UID}/campaigns/${SETUP_CAMPAIGN_ID}`);
@@ -8455,11 +9734,12 @@ async function _setupWizardFinish() {
       <div style="padding:2rem;max-width:600px;margin:0 auto;text-align:center">
         <h2 style="color:var(--red-lt)">⚠ Could not save</h2>
         <p>${esc(e.message || 'Network error')}</p>
-        <button class="btn btn-primary" onclick="_setupWizardFinish()">Try Again</button>
+        <button class="btn btn-primary" onclick="_retrySaveSetupChar()">Try Again</button>
       </div>`;
     return;
   }
 
+  _setupPendingChar = null;
   // Show success screen with personal player link
   const playerLink = `${window.location.origin}${window.location.pathname}?campaign=${SETUP_CAMPAIGN_ID}&player=${ch.id}&token=${ch.shareToken}&gm=${SETUP_GM_UID}`;
   const safeLink = playerLink.replace(/'/g, "\\'");
@@ -8495,11 +9775,21 @@ function openStartingProfsModal(ch) {
       <span>${esc(s)}</span>
     </label>`
   ).join('');
+  const allProfs = [...(data.armor||[]), ...(data.weapons||[]), ...(data.tools||[])];
+  const profSection = allProfs.length ? `
+    <div class="cs-field-label" style="margin:0.75rem 0 0.35rem">Armor, Weapons &amp; Tools <span style="font-size:0.7rem;opacity:0.6">(granted)</span></div>
+    <div class="sp-saves-list">${allProfs.map(p =>
+      `<label class="sp-save-row sp-save-granted">
+        <input type="checkbox" checked disabled>
+        <span>${esc(p)}</span>
+      </label>`
+    ).join('')}</div>` : '';
   openModal(`
     <h2 style="color:${color}">${CLASS_ICONS[cls]||''} ${cls} Starting Proficiencies</h2>
     <p style="font-size:0.8rem;color:var(--text-dim);margin:0 0 0.75rem">These proficiencies are granted at character creation.</p>
     <div class="cs-field-label" style="margin-bottom:0.35rem">Saving Throws <span style="font-size:0.7rem;opacity:0.6">(granted)</span></div>
     <div class="sp-saves-list">${saveRows}</div>
+    ${profSection}
     <div class="cs-field-label" style="margin:0.75rem 0 0.35rem">
       Skills —
       <span id="sp-counter" style="color:${color}">Choose ${data.choose} of ${data.skills.length}</span>
@@ -8547,6 +9837,9 @@ function confirmStartingProfs() {
   document.querySelectorAll('.sp-skill-cb:checked').forEach(cb => {
     ch.skillProficiencies.push({ name: cb.value, _class: cls });
   });
+  // Merge armor/weapon/tool proficiencies into ch.proficiencies
+  const allProfs = [...(data.armor||[]), ...(data.weapons||[]), ...(data.tools||[])];
+  if (allProfs.length) ch.proficiencies = mergeProfString(ch.proficiencies, allProfs);
   saveData(db);
   closeModal();
   renderApp();
@@ -8612,6 +9905,12 @@ function importData(event) {
 function esc(str) {
   if(str==null) return '';
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+// For embedding values inside single-quoted JS strings in onclick attributes.
+// HTML entities decoded before JS runs, so use backslash-escaping instead of &#39;.
+function jsStr(str) {
+  if(str==null) return '';
+  return String(str).replace(/\\/g,'\\\\').replace(/'/g,"\\'");
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

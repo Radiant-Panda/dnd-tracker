@@ -1811,6 +1811,12 @@ const SPECIES_DATA = {
     { name: "Sage", skills: ["Arcana", "History"], tools: [], desc: "You spent years learning the lore of the multiverse." },
     { name: "Sailor", skills: ["Athletics", "Perception"], tools: ["Navigator's Tools"], desc: "You sailed on a seagoing vessel for years, weathering storms and seeing wonders." },
     { name: "Soldier", skills: ["Athletics", "Intimidation"], tools: ["Any Gaming Set"], desc: "War has been your life for as long as you care to remember." },
-    { name: "Urchin", skills: ["Sleight of Hand", "Stealth"], tools: ["Disguise Kit", "Thieves' Tools"], desc: "You grew up on the streets alone, orphaned, and poor." }
+    { name: "Urchin", skills: ["Sleight of Hand", "Stealth"], tools: ["Disguise Kit", "Thieves' Tools"], desc: "You grew up on the streets alone, orphaned, and poor." },
+    { name: "Criminal (Spy)", skills: ["Deception", "Stealth"], tools: ["Any Gaming Set", "Thieves' Tools"], desc: "Variant Criminal — you secretly gathered information for a crime lord, noble, or other patron. Feature: Spy Contact." },
+    { name: "Entertainer (Gladiator)", skills: ["Acrobatics", "Performance"], tools: ["Disguise Kit", "Any Musical Instrument"], desc: "Variant Entertainer — you fought in arenas for the entertainment of the masses. Feature: By Popular Demand (fighting venues)." },
+    { name: "Guild Artisan (Guild Merchant)", skills: ["Insight", "Persuasion"], tools: ["Navigator's Tools"], desc: "Variant Guild Artisan — you belong to a guild of traders and shippers rather than craftspeople. You may take Navigator's Tools or an additional language." },
+    { name: "Noble (Knight)", skills: ["History", "Persuasion"], tools: ["Any Gaming Set"], desc: "Variant Noble — you are a knight with a retinue. Feature: Retainers (three commoners, one of whom is a squire)." },
+    { name: "Noble (Retainers)", skills: ["History", "Persuasion"], tools: ["Any Gaming Set"], desc: "Variant Noble — instead of Position of Privilege, you have the Retainers feature: three loyal commoner servants." },
+    { name: "Sailor (Pirate)", skills: ["Athletics", "Perception"], tools: ["Navigator's Tools"], desc: "Variant Sailor — you sailed under a pirate flag. Feature: Bad Reputation (people fear you; minor crimes go unpunished)." }
   ]
 };
