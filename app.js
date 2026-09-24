@@ -835,8 +835,8 @@ function migrateCharacter(ch) {
     ch.resources = (ch.resources || []).filter(r => r.name !== 'Pact Magic Slots');
     ch.spells._autoCalcApplied = true;
   }
-  // Inject base class resources inline (deduplicates by name)
-  _injectBaseClassResourcesForCh(ch);
+  // Keep class resource trackers in step with classes/levels (never refills uses)
+  syncClassResources(ch);
   // Migrate cantrips: move any level_int===0 spells from prepared into known only
   if (ch.spells.prepared && ch.spells.prepared.length) {
     const cantripsPrepared = ch.spells.prepared.filter(s => typeof s === 'object' && s.level_int === 0);
@@ -1151,7 +1151,7 @@ function createCharacter() {
   const level = parseInt(document.getElementById('ch-level').value)||1;
   const ch = newCharacter(name, document.getElementById('ch-race').value.trim(), document.getElementById('ch-class').value, level);
   db.characters[ch.id] = ch;
-  injectBaseClassResources(ch.id);
+  syncClassResources(ch);
   applySpellSlots(ch);
   const campaign = db.campaigns.find(c => c.id === currentCampaignId);
   (campaign.characters = campaign.characters||[]).push(ch.id);
@@ -5590,7 +5590,7 @@ function renderFeaturesSection(ch) {
 
   function renderResourceMini(r) {
     if (!r) return '';
-    const max = resolveMaxFormula(r.max, ch);
+    const max = resourceMax(r, ch);
     const current = Math.min(r.current || 0, max);
     if (max >= 20) {
       return `<span class="feat-res-mini feat-res-pool">${current}/${max}</span>`;
@@ -7221,10 +7221,11 @@ function renderSensesSection(ch, pb) {
 // ── Resources Panel ───────────────────────────────────────────────────────────
 // ── Resources Panel ───────────────────────────────────────────────────────────
 function renderResourceCard(r, i, ch) {
-  const max = resolveMaxFormula(r.max, ch);
+  const max = resourceMax(r, ch);
   const current = Math.min(r.current || 0, max);
-  const rechargeLabel = { short: 'Short Rest', long: 'Long Rest', dawn: 'Dawn', manual: 'Manual' }[r.recharge] || 'Long Rest';
-  const dieBadge = r.die ? `<span class="res-die-badge">${r.die}</span>` : '';
+  const rechargeLabel = { short: 'Short Rest', long: 'Long Rest', dawn: 'Dawn', manual: 'Manual' }[resourceRecharge(r, ch)] || 'Long Rest';
+  const die = resourceDie(r, ch);
+  const dieBadge = die ? `<span class="res-die-badge">${die}</span>` : '';
   const controls = r.type === 'pool'
     ? `<div class="res-pool-controls">
         <button class="res-pool-btn" onclick="adjustResource(${i},-1)">−</button>
@@ -7282,7 +7283,7 @@ function renderResourcesPanel(ch) {
 function toggleResourcePip(index, pipIndex) {
   const ch = db.characters[currentCharId]; if (!ch) return;
   const r = ch.resources[index]; if (!r) return;
-  const max = resolveMaxFormula(r.max, ch);
+  const max = resourceMax(r, ch);
   const current = Math.min(r.current || 0, max);
   r.current = pipIndex < current ? pipIndex : pipIndex + 1;
   r.current = Math.max(0, Math.min(max, r.current));
@@ -7295,7 +7296,7 @@ function toggleResourcePip(index, pipIndex) {
 function adjustResource(index, delta) {
   const ch = db.characters[currentCharId]; if (!ch) return;
   const r = ch.resources[index]; if (!r) return;
-  const max = resolveMaxFormula(r.max, ch);
+  const max = resourceMax(r, ch);
   r.current = Math.max(0, Math.min(max, (r.current || 0) + delta));
   saveData(db); renderApp();
 }
@@ -7303,13 +7304,16 @@ function adjustResource(index, delta) {
 function setResourceCurrent(index, val) {
   const ch = db.characters[currentCharId]; if (!ch) return;
   const r = ch.resources[index]; if (!r) return;
-  const max = resolveMaxFormula(r.max, ch);
+  const max = resourceMax(r, ch);
   r.current = Math.max(0, Math.min(max, Math.floor(val) || 0));
   saveData(db); renderApp();
 }
 
 function deleteResource(index) {
   const ch = db.characters[currentCharId]; if (!ch) return;
+  const r = ch.resources[index];
+  // Remember deleted class trackers so syncClassResources doesn't bring them back
+  if (r && r._baseClass) ch.dismissedResources = [...new Set([...(ch.dismissedResources || []), r.name])];
   ch.resources.splice(index, 1);
   saveData(db); renderApp();
 }
@@ -7357,6 +7361,21 @@ function saveResourceEdit(index) {
   const name = document.getElementById('re-name').value.trim();
   if (!name) return;
   const max = Math.max(1, parseInt(document.getElementById('re-max').value) || 1);
+  const prev = index === -1 ? null : ch.resources[index];
+  if (prev && !prev.custom) {
+    // Class resource: keep its formula; a changed max becomes a manual override
+    Object.assign(prev, {
+      name, type: document.getElementById('re-type').value || prev.type,
+      die: document.getElementById('re-die').value || null,
+      recharge: document.getElementById('re-recharge').value || prev.recharge,
+      source: document.getElementById('re-source').value.trim(),
+      desc: document.getElementById('re-desc').value.trim(),
+    });
+    if (max !== prev.max) prev.maxOverride = max;
+    prev.current = Math.min(prev.current ?? max, resourceMax(prev, ch));
+    saveData(db); closeModal(); renderApp();
+    return;
+  }
   const entry = {
     id: index === -1 ? `res_${Date.now()}_${Math.random().toString(36).slice(2,6)}` : (ch.resources[index]?.id || `res_${Date.now()}`),
     name,
@@ -7380,25 +7399,9 @@ function restoreResources(rechargeType, charId) {
   const id = charId || currentCharId;
   const ch = db.characters[id]; if (!ch) return;
   (ch.resources || []).forEach(r => {
-    if (r.recharge === rechargeType) r.current = resolveMaxFormula(r.max, ch);
-    if (rechargeType === 'long' && r.recharge === 'short') r.current = resolveMaxFormula(r.max, ch);
+    const recharge = resourceRecharge(r, ch);
+    if (recharge === rechargeType || (rechargeType === 'long' && recharge === 'short')) r.current = resourceMax(r, ch);
   });
-}
-
-// ── Die Scaling Rules ─────────────────────────────────────────────────────────
-// Maps resource name → [[minLevel, die], ...] sorted ascending
-const RESOURCE_DIE_SCALE = {
-  'Bardic Inspiration':   [[1,'d6'],[5,'d8'],[10,'d10'],[15,'d12']],
-  'Superiority Dice':     [[3,'d8'],[10,'d10'],[18,'d12']],
-  'Psionic Energy Dice':  [[3,'d6'],[5,'d8'],[11,'d10'],[17,'d12']],
-};
-
-function scaledDie(resourceName, level) {
-  const tiers = RESOURCE_DIE_SCALE[resourceName];
-  if (!tiers) return null;
-  let die = tiers[0][1];
-  for (const [lvl, d] of tiers) { if (level >= lvl) die = d; }
-  return die;
 }
 
 // ── Toast Notifications ───────────────────────────────────────────────────────
@@ -7463,34 +7466,12 @@ function syncSubclassFeatures(charId) {
     }
   });
 
-  // 2. Update resource maxes and die scaling
-  (ch.resources || []).forEach(r => {
-    if (!r._subclass) return;
-    // Recalculate max from stored formula
-    if (r.maxFormula !== undefined) {
-      const newMax = resolveMaxFormula(r.maxFormula, ch);
-      if (r.max !== newMax) {
-        r.current = Math.min(r.current || 0, newMax);
-        r.max = newMax;
-      }
-    }
-    // Update die scaling
-    const newDie = scaledDie(r.name, level);
-    if (newDie && r.die !== newDie) {
-      r.die = newDie;
-    }
-    // Bardic Inspiration recharges on short rest at level 5+
-    if (r.name === 'Bardic Inspiration' && cls === 'Bard') {
-      r.recharge = level >= 5 ? 'short' : 'long';
-    }
-  });
-
   // 3. Create resource trackers for newly unlocked features
-  const existingResNames = new Set((ch.resources || []).filter(r => r._subclass === subclassName).map(r => r.name));
+  const existingResNames = new Set((ch.resources || []).map(r => r.name));
   unlocked.forEach(({ resource }) => {
     if (!resource || existingResNames.has(resource.name)) return;
     existingResNames.add(resource.name);
-    const max = resolveMaxFormula(resource.maxFormula, ch);
+    const max = resourceMax({ maxFormula: resource.maxFormula, _subclass: subclassName, _forClass: cls }, ch);
     ch.resources = ch.resources || [];
     ch.resources.push({
       id: `res_${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
@@ -7499,7 +7480,7 @@ function syncSubclassFeatures(charId) {
       current: max,
       max,
       maxFormula: resource.maxFormula,
-      die: scaledDie(resource.name, level) || resource.die || null,
+      die: resource.die || null,
       recharge: resource.recharge || 'long',
       source: subclassName,
       desc: '',
@@ -7514,7 +7495,7 @@ function syncSubclassFeatures(charId) {
     const lines = unlocked.map(u => {
       let msg = `<strong>${esc(u.name)}</strong>`;
       if (u.resource) {
-        const die = scaledDie(u.resource.name, level) || u.resource.die;
+        const die = scaledDie(u.resource.name, _resClassLevel(ch, cls)) || u.resource.die;
         const recharge = u.resource.recharge === 'short' ? 'short rest' : 'long rest';
         msg += ` — ${esc(u.resource.name)}${die ? ' '+die : ''}, recharges on ${recharge}`;
       }
@@ -7523,8 +7504,7 @@ function syncSubclassFeatures(charId) {
     showToast(`<div class="toast-title">✦ Level ${level} unlocked:</div>${lines}`);
   }
 
-  // Sync base class resource maxes and inject newly unlocked ones
-  _syncBaseClassResources(ch);
+  syncClassResources(ch);
 }
 
 function renderSubclassField(ch) {
@@ -7564,181 +7544,39 @@ function renderSubclassField(ch) {
 }
 
 // ── Base Class Resources ──────────────────────────────────────────────────────
-const BASE_CLASS_RESOURCES = {
-  Barbarian: ch => [
-    { name: 'Rage', maxFormula: 'rage_uses', die: null, recharge: 'long', type: 'pips',
-      desc: 'Enter a rage as a Bonus Action. Lasts 1 minute.' },
-  ],
-  Bard: ch => [
-    { name: 'Bardic Inspiration', maxFormula: 'cha_mod',
-      die: scaledDie('Bardic Inspiration', ch.level || 1) || 'd6',
-      recharge: (ch.level || 1) >= 5 ? 'short' : 'long', type: 'pips',
-      desc: 'Give a creature a Bardic Inspiration die as a Bonus Action.' },
-  ],
-  Cleric: ch => [
-    { name: 'Channel Divinity', maxFormula: 'channel_divinity', die: null, recharge: 'short', type: 'pips',
-      desc: 'Channel divine energy to fuel special abilities.' },
-  ],
-  Druid: ch => [
-    { name: 'Wild Shape', maxFormula: 2, die: null, recharge: 'short', type: 'pips',
-      desc: 'Magically assume the shape of a beast.' },
-  ],
-  Fighter: ch => {
-    const lv = ch.level || 1;
-    const resources = [
-      { name: 'Second Wind', maxFormula: 'second_wind', die: 'd10', recharge: 'short', type: 'pips',
-        desc: 'Regain HP as a Bonus Action. Uses scale with level (2024).' },
-      { name: 'Action Surge', maxFormula: 'action_surge', die: null, recharge: 'short', type: 'pips',
-        desc: 'Take one additional action on your turn.' },
-    ];
-    if (lv >= 9) resources.push(
-      { name: 'Indomitable', maxFormula: 'indomitable', die: null, recharge: 'long', type: 'pips',
-        desc: 'Reroll a saving throw you fail. Gains extra uses at L13 and L17.' }
-    );
-    return resources;
-  },
-  Monk: ch => [
-    { name: 'Ki Points', maxFormula: 'ki_points', die: null, recharge: 'short', type: 'pips',
-      desc: 'Fuel special monk abilities like Flurry of Blows and Patient Defense.' },
-  ],
-  Paladin: ch => [
-    { name: 'Lay on Hands', maxFormula: 'level_x5', die: null, recharge: 'long', type: 'pool',
-      desc: 'Restore HP by touch. Pool of HP equal to 5× Paladin level.' },
-    { name: 'Channel Divinity', maxFormula: 'paladin_cd', die: null, recharge: 'short', type: 'pips',
-      desc: 'Channel divine energy through your sacred oath.' },
-  ],
-  Sorcerer: ch => [
-    { name: 'Sorcery Points', maxFormula: 'sorcery_points', die: null, recharge: 'long', type: 'pips',
-      desc: 'Points that fuel Metamagic and other sorcerous effects.' },
-  ],
-  Warlock: ch => {
-    const lv = ch.level || 1;
-    const resources = [];
-    if (lv >= 11) resources.push({ name: 'Mystic Arcanum (6th)', maxFormula: 1, die: null, recharge: 'long', type: 'pips',
-      desc: 'Cast a 6th-level spell once per long rest without expending a spell slot.' });
-    if (lv >= 13) resources.push({ name: 'Mystic Arcanum (7th)', maxFormula: 1, die: null, recharge: 'long', type: 'pips',
-      desc: 'Cast a 7th-level spell once per long rest without expending a spell slot.' });
-    if (lv >= 15) resources.push({ name: 'Mystic Arcanum (8th)', maxFormula: 1, die: null, recharge: 'long', type: 'pips',
-      desc: 'Cast an 8th-level spell once per long rest without expending a spell slot.' });
-    if (lv >= 17) resources.push({ name: 'Mystic Arcanum (9th)', maxFormula: 1, die: null, recharge: 'long', type: 'pips',
-      desc: 'Cast a 9th-level spell once per long rest without expending a spell slot.' });
-    return resources;
-  },
-  Wizard: ch => [
-    { name: 'Arcane Recovery', maxFormula: 1, die: null, recharge: 'long', type: 'pips',
-      desc: 'Recover expended spell slots during a Short Rest (once per Long Rest).' },
-  ],
-  Artificer: ch => [
-    { name: 'Infuse Item', maxFormula: 'artificer_infuse', die: null, recharge: 'long', type: 'pips',
-      desc: 'Infuse mundane items with magical power.' },
-  ],
-};
+// Rules (formulas, BASE_CLASS_RESOURCES, resourceMax/Die/Recharge) live in resources-rules.js.
 
-function _injectBaseClassResourcesForCh(ch) {
+// Brings class resource trackers in line with the character's classes and levels: adds newly
+// unlocked ones, drops ones no longer granted, and refreshes stored max/die/recharge.
+// Never refills: current uses are only capped at the new max.
+function syncClassResources(ch) {
   if (!ch) return;
-  const factory = BASE_CLASS_RESOURCES[ch.class];
-  if (!factory) return;
-  if (!ch.resources) ch.resources = [];
-  // Remove old base class resources for this class
-  ch.resources = ch.resources.filter(r => !(r._baseClass === true && r.source === ch.class));
-  const toAdd = factory(ch);
-  const existingNames = new Set(ch.resources.map(r => r.name));
-  toAdd.forEach(def => {
-    if (existingNames.has(def.name)) return;
-    const max = resolveMaxFormula(def.maxFormula, ch);
-    if (max <= 0) return;
-    ch.resources.push({
+  const want = expectedBaseResources(ch);
+  const wantNames = new Set(want.map(w => w.def.name));
+  const dismissed = new Set(ch.dismissedResources || []);
+  // A base tracker covers the subclass copies of the same resource (2014 Cleric domains' Channel Divinity)
+  ch.resources = (ch.resources || []).filter(r =>
+    r.custom || (r._baseClass ? wantNames.has(r.name) : !(r._subclass && wantNames.has(r.name))));
+  const have = new Set(ch.resources.map(r => r.name));
+  want.forEach(({ def, cls }) => {
+    if (have.has(def.name) || dismissed.has(def.name)) return;
+    const r = {
       id: `res_${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
-      name: def.name,
-      type: def.type,
-      current: max,
-      max,
-      maxFormula: def.maxFormula,
-      die: def.die || null,
-      recharge: def.recharge,
-      source: ch.class,
-      desc: def.desc,
-      custom: false,
-      _baseClass: true,
-    });
-    existingNames.add(def.name);
+      name: def.name, type: def.type, maxFormula: def.maxFormula, die: def.die || null,
+      recharge: def.recharge, source: cls, desc: def.desc, custom: false, _baseClass: true, _forClass: cls,
+    };
+    r.max = r.current = resourceMax(r, ch);
+    ch.resources.push(r);
   });
-}
-
-function injectBaseClassResources(charId) {
-  _injectBaseClassResourcesForCh(db.characters[charId]);
-}
-
-// Updates existing base-class resource maxes on level-up and injects newly available ones.
-// Unlike _injectBaseClassResourcesForCh it does NOT reset current values.
-function _syncBaseClassResources(ch) {
-  const factory = BASE_CLASS_RESOURCES[ch.class];
-  if (!factory) return;
-  const defined = factory(ch);
-  const level = ch.level || 1;
-
-  (ch.resources || []).forEach(r => {
-    if (!r._baseClass) return;
-    const def = defined.find(d => d.name === r.name);
-    if (!def) return;
-    const newMax = resolveMaxFormula(def.maxFormula, ch);
-    if (r.max !== newMax) {
-      r.current = Math.min(r.current || 0, newMax);
-      r.max = newMax;
-    }
-    const dieVal = scaledDie(r.name, level);
-    if (dieVal) r.die = dieVal;
-    if (r.name === 'Bardic Inspiration') r.recharge = level >= 5 ? 'short' : 'long';
-  });
-
-  const existing = new Set((ch.resources || []).map(r => r.name));
-  defined.forEach(def => {
-    if (existing.has(def.name)) return;
-    const max = resolveMaxFormula(def.maxFormula, ch);
-    if (max <= 0) return;
-    (ch.resources = ch.resources || []).push({
-      id: `res_${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
-      name: def.name, type: def.type, current: max, max,
-      maxFormula: def.maxFormula, die: def.die || null,
-      recharge: def.recharge, source: ch.class,
-      desc: def.desc, custom: false, _baseClass: true, _forClass: ch.class,
-    });
+  ch.resources.forEach(r => {
+    const max = resourceMax(r, ch);
+    r.current = Math.min(r.current ?? max, max);
+    r.max = max;
+    if (!r.custom) { r.die = resourceDie(r, ch); r.recharge = resourceRecharge(r, ch); }
   });
 }
 
 // ── Subclass System ───────────────────────────────────────────────────────────
-function resolveMaxFormula(formula, ch) {
-  if (typeof formula === 'number') return formula;
-  const abilityMod = s => Math.floor(((ch.abilities?.[s] || 10) - 10) / 2);
-  const lv = ch.level || 1;
-  switch (formula) {
-    case 'cha_mod':    return Math.max(1, abilityMod('cha'));
-    case 'int_mod':    return Math.max(1, abilityMod('int'));
-    case 'wis_mod':    return Math.max(1, abilityMod('wis'));
-    case 'proficiency': return profBonus(lv);
-    case 'level':      return lv;
-    case 'level_div_2': return Math.max(1, Math.floor(lv / 2));
-    case 'level_x5':   return lv * 5;
-    case 'rage_uses':  return lv >= 17 ? 6 : lv >= 12 ? 5 : lv >= 6 ? 4 : lv >= 3 ? 3 : 2;
-    // Cleric: 0 at L1, then 1/2/3 at L2/6/18
-    case 'channel_divinity': return lv >= 18 ? 3 : lv >= 6 ? 2 : lv >= 2 ? 1 : 0;
-    // Monk/Sorcerer: features begin at L2
-    case 'ki_points':       return lv >= 2 ? lv : 0;
-    case 'sorcery_points':  return lv >= 2 ? lv : 0;
-    // Paladin: Channel Divinity starts at L3 (2 uses 2024; L11+ gets 3)
-    case 'paladin_cd':      return lv >= 11 ? 3 : lv >= 3 ? 2 : 0;
-    // Artificer: Infuse Item starts at L2, increases every 4 levels
-    case 'artificer_infuse': return lv >= 18 ? 6 : lv >= 14 ? 5 : lv >= 10 ? 4 : lv >= 6 ? 3 : lv >= 2 ? 2 : 0;
-    // Fighter: Indomitable starts at L9
-    case 'indomitable':     return lv >= 17 ? 3 : lv >= 13 ? 2 : lv >= 9 ? 1 : 0;
-    // Fighter: Second Wind scales (2024 PHB)
-    case 'second_wind':     return lv >= 10 ? 4 : lv >= 4 ? 3 : 2;
-    // Fighter: Action Surge (2 uses at L17)
-    case 'action_surge':    return lv >= 17 ? 2 : 1;
-    default:           return parseInt(formula) || 1;
-  }
-}
-
 function applySubclass(charId, className, subclassName) {
   const ch = db.characters[charId];
   if (!ch) return;
@@ -8023,7 +7861,7 @@ function ch_field(field, value) {
     // Clear base class and subclass resources, reinject for new class
     ch.resources = (ch.resources || []).filter(r => !r._baseClass && !r._subclass);
     ch.featuresList = (ch.featuresList || []).filter(f => !f._subclass);
-    injectBaseClassResources(currentCharId);
+    syncClassResources(ch);
     renderApp();
     refreshPanels();
     setTimeout(() => saveData(db), 0);
@@ -8081,28 +7919,6 @@ function renderClassEditor(ch, idx) {
   </div>`;
 }
 
-function _injectResourcesForClass(ch, className) {
-  const factory = BASE_CLASS_RESOURCES[className];
-  if (!factory) return;
-  if (!ch.resources) ch.resources = [];
-  // Remove old base class resources for this class
-  ch.resources = ch.resources.filter(r => !(r._baseClass === true && r.source === className));
-  const toAdd = factory(ch);
-  const existingNames = new Set(ch.resources.map(r => r.name));
-  toAdd.forEach(def => {
-    if (existingNames.has(def.name)) return;
-    const max = resolveMaxFormula(def.maxFormula, ch);
-    ch.resources.push({
-      id: `res_${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
-      name: def.name, type: def.type, current: max, max,
-      maxFormula: def.maxFormula, die: def.die || null,
-      recharge: def.recharge, source: className,
-      desc: def.desc, custom: false, _baseClass: true, _forClass: className,
-    });
-    existingNames.add(def.name);
-  });
-}
-
 function applySubclassForClass(charId, idx, className, subclassName) {
   const ch = db.characters[charId]; if (!ch) return;
   // Remove old subclass features/resources/spells for this class
@@ -8127,9 +7943,9 @@ function applySubclassForClass(charId, idx, className, subclassName) {
   features.forEach(feat => {
     if (feat.level > level) return;
     ch.featuresList.push({ name: feat.name, desc: feat.description, _subclass: subclassName, _forClass: className });
-    if (feat.resource && !injectedResources.has(feat.resource.name)) {
+    if (feat.resource && !injectedResources.has(feat.resource.name) && !ch.resources.some(r => r.name === feat.resource.name)) {
       injectedResources.add(feat.resource.name);
-      const max = resolveMaxFormula(feat.resource.maxFormula, ch);
+      const max = resourceMax({ maxFormula: feat.resource.maxFormula, _subclass: subclassName, _forClass: className }, ch);
       ch.resources.push({
         id: `res_${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
         name: feat.resource.name,
@@ -8155,7 +7971,7 @@ function chClassField(idx, field, value) {
     ch.classes[idx].class = value;
     ch.classes[idx].subclass = '';
     syncClassFields(ch);
-    _injectResourcesForClass(ch, value);
+    syncClassResources(ch);
     // Clear old primary class proficiencies and prompt for new ones
     if (idx === 0) {
       ch.saveProficiencies = (ch.saveProficiencies || []).filter(s => {
@@ -8171,7 +7987,7 @@ function chClassField(idx, field, value) {
     const otherSum = ch.classes.reduce((s, c, i) => i === idx ? s : s + c.level, 0);
     ch.classes[idx].level = Math.min(newLvl, 20 - otherSum);
     syncClassFields(ch);
-    _syncBaseClassResources(ch);
+    syncClassResources(ch);
   } else if (field === 'subclass') {
     applySubclassForClass(currentCharId, idx, ch.classes[idx].class, value);
     syncClassFields(ch);
@@ -8191,7 +8007,7 @@ function addCharClass() {
   if (ch.level >= 20) return;
   ch.classes.push({ class: 'Fighter', subclass: '', level: 1 });
   syncClassFields(ch);
-  _injectResourcesForClass(ch, 'Fighter');
+  syncClassResources(ch);
   applySpellSlots(ch);
   saveData(db);
   mcEditIdx = ch.classes.length - 1;
@@ -8216,7 +8032,7 @@ function removeCharClass(idx) {
   mcEditIdx = null;
   // Re-inject primary class resources if primary changed
   if (idx === 0) {
-    _injectResourcesForClass(ch, ch.classes[0].class);
+    syncClassResources(ch);
     if (ch.classes[0].subclass) applySubclassForClass(currentCharId, 0, ch.classes[0].class, ch.classes[0].subclass);
   }
   applySpellSlots(ch);
@@ -8245,15 +8061,7 @@ function updateAbility(ability, value) {
   db.characters[currentCharId].abilities[ability] = parseInt(value)||10;
   // Recalculate any ability-score-based resource maxes
   const ch = db.characters[currentCharId];
-  (ch.resources || []).forEach(r => {
-    if (r.maxFormula !== undefined && typeof r.maxFormula === 'string') {
-      const newMax = resolveMaxFormula(r.maxFormula, ch);
-      if (r.max !== newMax) {
-        r.current = Math.min(r.current || 0, newMax);
-        r.max = newMax;
-      }
-    }
-  });
+  syncClassResources(ch);
   saveData(db); renderApp();
 }
 function adjustAbility(ability, delta) {
@@ -9767,7 +9575,7 @@ function wizardFinish() {
   // Set speed from species
   if (wizardData.raceData?.speed) ch.combat.speed = wizardData.raceData.speed;
   db.characters[ch.id] = ch;
-  injectBaseClassResources(ch.id);
+  syncClassResources(ch);
   if (wizardData.subclass) syncSubclassFeatures(ch.id);
   populateClassFeatures(ch.id);
   applySpellSlots(ch);
@@ -9840,7 +9648,7 @@ async function _setupWizardFinish() {
   // Apply class resources, spell slots, share token via the in-memory db
   db = db || { characters: {}, campaigns: [], npcs: {} };
   db.characters[ch.id] = ch;
-  try { injectBaseClassResources(ch.id); } catch (e) { console.warn('[Setup] injectBaseClassResources failed:', e); }
+  try { syncClassResources(ch); } catch (e) { console.warn('[Setup] syncClassResources failed:', e); }
   try { if (wizardData.subclass) syncSubclassFeatures(ch.id); } catch (e) { console.warn('[Setup] syncSubclassFeatures failed:', e); }
   try { populateClassFeatures(ch.id); } catch (e) { console.warn('[Setup] populateClassFeatures failed:', e); }
   try { applySpellSlots(ch); } catch (e) { console.warn('[Setup] applySpellSlots failed:', e); }
