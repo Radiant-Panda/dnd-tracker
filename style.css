@@ -969,6 +969,10 @@ main {
   min-width: 2rem;
   text-align: right;
 }
+.senses-passive-row > span:first-child { font-size: 0.8rem; }
+.senses-special { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-bottom: 0.4rem; }
+.sense-chip { display: inline-flex; align-items: center; gap: 0.2rem; font-size: 0.78rem; color: var(--text);
+  background: rgba(var(--accent-rgb),0.08); border: 1px solid rgba(var(--accent-rgb),0.25); border-radius: 4px; padding: 0.1rem 0.4rem; }
 
 /* Section label — bleeds to panel edges */
 .cs-section-label {
@@ -1747,6 +1751,20 @@ main {
 }
 .eq-item:last-child { border-bottom: none; }
 .eq-item .eq-name { flex: 1; }
+.eq-weight { font-size: 0.7rem; color: var(--text-dim); white-space: nowrap; }
+
+/* Encumbrance */
+.enc-total { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0.2rem 0.5rem; margin-bottom: 0.35rem; }
+.enc-carried { font-size: 1.05rem; font-weight: bold; color: var(--gold); }
+.enc-total .text-dim { font-size: 0.72rem; }
+.enc-status { font-size: 0.75rem; margin-top: 0.35rem; font-weight: 600; }
+.enc-over { color: var(--gold-lt); }
+.enc-immobile { color: var(--red-lt); }
+.enc-breakdown { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem 0.9rem; margin-top: 0.5rem; font-size: 0.78rem; }
+.enc-breakdown label { display: inline-flex; align-items: center; gap: 0.3rem; }
+.enc-breakdown input[type="number"] { width: 3.6rem; padding: 0.1rem 0.25rem; font-size: 0.78rem; }
+.enc-note { font-size: 0.7rem; margin-top: 0.35rem; }
+.enc-unknown { color: var(--gold-lt); }
 .eq-add-row { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
 .eq-add-row input { flex: 1; }
 
