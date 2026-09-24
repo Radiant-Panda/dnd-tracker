@@ -1,10 +1,11 @@
-// Browser regression test — needs the local server (npx serve -l 5173 .) and puppeteer-core:
+// Browser regression test — opens the app from disk; needs puppeteer-core:
 //   cd tests && npm i --no-save puppeteer-core@23 && node class-switch.browser.test.js
 const p=require('puppeteer-core');
+const { launch, openApp } = require('./browser');
 (async()=>{
-const b=await p.launch({executablePath:'C:/Program Files/Google/Chrome/Application/chrome.exe',headless:'new'});
+const b=await launch();
 const pg=await b.newPage();const errs=[];pg.on('pageerror',e=>errs.push(e.message));
-await pg.goto('http://localhost:5173/?t='+Date.now(),{waitUntil:'networkidle2'});await new Promise(r=>setTimeout(r,2000));
+await openApp(pg);
 const results=await pg.evaluate(async()=>{
   saveData=()=>{}; openStartingProfsModal=()=>{}; _showApp();
   const out=[]; const check=(name,cond,detail)=>out.push((cond?'PASS ':'FAIL ')+name+(cond?'':'  → '+JSON.stringify(detail)));
