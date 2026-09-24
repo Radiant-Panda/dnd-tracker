@@ -1,18 +1,45 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // GM: full read/write to their own data
-    match /users/{userId}/{document=**} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+
+    // GM: full access to own data (covers all reads/writes for authenticated owner)
+    match /users/{gmId}/{document=**} {
+      allow read, write: if request.auth != null && request.auth.uid == gmId;
     }
-    // Players can read campaigns and characters they have a token for
+
+    // Player view + setup view: single-document reads of a campaign by known ID.
+    // "get" only — prevents listing all campaigns across users.
     match /users/{gmId}/campaigns/{campaignId} {
-      allow read: if true; // token check happens in app logic
+      allow get: if request.auth != null;
+
+      // Setup view: can only append a character ID to the characters array.
+      // The setupToken must already exist on the document and must not be changed.
+      // No other fields may be modified.
+      allow update: if request.auth != null
+                    && resource.data.setupToken != null
+                    && request.resource.data.setupToken == resource.data.setupToken
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['characters'])
+                    && (resource.data.characters == null
+                        || request.resource.data.characters.hasAll(resource.data.characters));
     }
+
+    // Player view + setup view: single-document reads/writes on characters.
+    // "get" only — prevents listing all characters across users.
     match /users/{gmId}/characters/{charId} {
-      allow read: if true;
-      allow update: if resource.data.shareToken != null
-                    && request.resource.data.shareToken == resource.data.shareToken;
+
+      // Only readable if the GM has explicitly enabled sharing on this character.
+      allow get: if request.auth != null && resource.data.shareToken != null;
+
+      // Setup view: create a new character. Must include a shareToken.
+      allow create: if request.auth != null
+                    && request.resource.data.shareToken != null;
+
+      // Player view: full character update. shareToken and id must not change.
+      allow update: if request.auth != null
+                    && resource.data.shareToken != null
+                    && request.resource.data.shareToken == resource.data.shareToken
+                    && request.resource.data.id == resource.data.id;
     }
+
   }
 }

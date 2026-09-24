@@ -7,7 +7,7 @@ const TOOLS_DATA = [
   {
     "name": "Bagpipes",
     "type": "Musical Instrument",
-    "desc": ""
+    "desc": "A wind instrument with an air reservoir bag and multiple pipes, producing a continuous droning tone beneath the melody. Common in highland and military music."
   },
   {
     "name": "Birdpipes",
@@ -47,22 +47,22 @@ const TOOLS_DATA = [
   {
     "name": "Crystal",
     "type": "Spellcasting Focus",
-    "desc": ""
+    "desc": "An arcane focus — a polished crystal that sorcerers, warlocks, and wizards can use in place of most material components when casting their spells."
   },
   {
     "name": "Drum",
     "type": "Musical Instrument",
-    "desc": ""
+    "desc": "A percussion instrument played by hand or with sticks, used to keep rhythm, send signals, and drive martial or festive music."
   },
   {
     "name": "Dulcimer",
     "type": "Musical Instrument",
-    "desc": ""
+    "desc": "A stringed instrument played by striking the strings with small hammers, producing a bright, shimmering sound."
   },
   {
     "name": "Flute",
     "type": "Musical Instrument",
-    "desc": ""
+    "desc": "A simple woodwind instrument held sideways and played by blowing across an opening, producing a clear, airy melody."
   },
   {
     "name": "Glassblower's Tools",
@@ -82,7 +82,7 @@ const TOOLS_DATA = [
   {
     "name": "Horn",
     "type": "Musical Instrument",
-    "desc": ""
+    "desc": "A brass or animal-horn wind instrument with a bold, carrying tone, used for fanfares, hunting calls, and signals as well as music."
   },
   {
     "name": "Jeweler's Tools",
@@ -102,12 +102,12 @@ const TOOLS_DATA = [
   {
     "name": "Lute",
     "type": "Musical Instrument",
-    "desc": ""
+    "desc": "A pear-shaped stringed instrument with a fretted neck, plucked or strummed. The quintessential bard instrument."
   },
   {
     "name": "Lyre",
     "type": "Musical Instrument",
-    "desc": ""
+    "desc": "A small handheld stringed instrument with strings stretched across a frame, plucked to accompany poetry and song."
   },
   {
     "name": "Mason's Tools",
@@ -117,7 +117,7 @@ const TOOLS_DATA = [
   {
     "name": "Orb",
     "type": "Spellcasting Focus",
-    "desc": ""
+    "desc": "An arcane focus — a sphere of glass or crystal that sorcerers, warlocks, and wizards can use in place of most material components when casting their spells."
   },
   {
     "name": "Painter's Supplies",
@@ -127,7 +127,7 @@ const TOOLS_DATA = [
   {
     "name": "Pan Flute",
     "type": "Musical Instrument",
-    "desc": ""
+    "desc": "A row of pipes of increasing length bound together, played by blowing across the tops. Produces a breathy, pastoral sound."
   },
   {
     "name": "Potter's Tools",
@@ -137,7 +137,7 @@ const TOOLS_DATA = [
   {
     "name": "Rod",
     "type": "Spellcasting Focus",
-    "desc": ""
+    "desc": "An arcane focus — a scepter-like rod of metal, wood, or bone that sorcerers, warlocks, and wizards can use in place of most material components when casting their spells."
   },
   {
     "name": "Shawm",
@@ -157,7 +157,7 @@ const TOOLS_DATA = [
   {
     "name": "Staff",
     "type": "Spellcasting Focus",
-    "desc": ""
+    "desc": "An arcane focus — a full-length staff that can double as a quarterstaff, usable by sorcerers, warlocks, and wizards in place of most material components when casting spells."
   },
   {
     "name": "Tantan",
@@ -182,12 +182,12 @@ const TOOLS_DATA = [
   {
     "name": "Viol",
     "type": "Musical Instrument",
-    "desc": ""
+    "desc": "A bowed stringed instrument held upright or on the lap, with a warm, mellow voice suited to both courtly and tavern music."
   },
   {
     "name": "Wand",
     "type": "Spellcasting Focus",
-    "desc": ""
+    "desc": "An arcane focus — a slender length of wood or metal that sorcerers, warlocks, and wizards can use in place of most material components when casting their spells."
   },
   {
     "name": "Wargong",
@@ -207,7 +207,7 @@ const TOOLS_DATA = [
   {
     "name": "Wooden Staff",
     "type": "Spellcasting Focus",
-    "desc": ""
+    "desc": "A druidic focus — a wooden staff that druids can use in place of most material components when casting their spells. Can double as a quarterstaff."
   },
   {
     "name": "Yarting",
@@ -218,5 +218,55 @@ const TOOLS_DATA = [
     "name": "Zulkoon",
     "type": "Musical Instrument",
     "desc": "A complex pump organ that originated with the zulkirs of Thay, who use it in the casting of their spells. It is considered to have a dramatic, but sinister, sound."
+  },
+  {
+    "name": "Thieves' Tools",
+    "type": "Thieves' Tools",
+    "desc": "Used to pick locks and disarm traps. Includes a small file, lock picks, a small mirror, narrow-bladed scissors, and pliers."
+  },
+  {
+    "name": "Herbalism Kit",
+    "type": "Kit",
+    "desc": "Used to identify plants and prepare herbal remedies. Includes pouches of herbs, clippers, leather gloves, and glass vials."
+  },
+  {
+    "name": "Navigator's Tools",
+    "type": "Navigator's Tools",
+    "desc": "Used to chart a course by sea. Includes a sextant, compass, calipers, ruler, parchment, ink, and quill."
+  },
+  {
+    "name": "Disguise Kit",
+    "type": "Kit",
+    "desc": "Used to create disguises. Includes cosmetics, hair dye, small props, and trinkets."
+  },
+  {
+    "name": "Forgery Kit",
+    "type": "Kit",
+    "desc": "Used to duplicate documents and handwriting. Includes inks, parchment, and quills."
+  },
+  {
+    "name": "Gaming Set",
+    "type": "Gaming Set",
+    "desc": "A set used to play games of chance and skill, such as dice, cards, or board games."
+  },
+  {
+    "name": "Dice Set",
+    "type": "Gaming Set",
+    "desc": "A set of dice used to play games of chance."
+  },
+  {
+    "name": "Dragonchess Set",
+    "type": "Gaming Set",
+    "desc": "A Faerûnian variant of chess played on a three-level board."
+  },
+  {
+    "name": "Playing Card Set",
+    "type": "Gaming Set",
+    "desc": "A standard deck of cards used for games and fortune-telling."
+  },
+  {
+    "name": "Three-Dragon Ante Set",
+    "type": "Gaming Set",
+    "desc": "A popular card game played across Faerûn."
   }
 ];
