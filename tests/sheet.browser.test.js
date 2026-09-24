@@ -175,6 +175,7 @@ const { launch, openApp } = require('./browser');
     check('there is a pastel rose theme', Object.values(THEMES).some(t => t.name === 'Blush'), Object.values(THEMES).map(t => t.name));
     check('the green theme is the earthy Forest', THEMES.emerald.name === 'Forest', THEMES.emerald.name);
     check('there is a Maroon theme', Object.values(THEMES).some(t => t.name === 'Maroon'), Object.values(THEMES).map(t => t.name));
+    check('there is a pastel purple theme', Object.values(THEMES).some(t => t.name === 'Lavender'), Object.values(THEMES).map(t => t.name));
     mk('Fighter', 1);
     const low = [];
     for (const key of Object.keys(THEMES)) {
