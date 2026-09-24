@@ -7548,7 +7548,7 @@ function renderSubclassField(ch) {
 
 // Brings class resource trackers in line with the character's classes and levels: adds newly
 // unlocked ones, drops ones no longer granted, and refreshes stored max/die/recharge.
-// Never refills: current uses are only capped at the new max.
+// Never refills: a higher max adds the new uses, a lower max caps current.
 function syncClassResources(ch) {
   if (!ch) return;
   const want = expectedBaseResources(ch);
@@ -7570,7 +7570,8 @@ function syncClassResources(ch) {
   });
   ch.resources.forEach(r => {
     const max = resourceMax(r, ch);
-    r.current = Math.min(r.current ?? max, max);
+    const gained = typeof r.max === 'number' && max > r.max ? max - r.max : 0;
+    r.current = Math.min((r.current ?? max) + gained, max);
     r.max = max;
     if (!r.custom) { r.die = resourceDie(r, ch); r.recharge = resourceRecharge(r, ch); }
   });

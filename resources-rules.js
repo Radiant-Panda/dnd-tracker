@@ -131,6 +131,15 @@ function resolveMaxFormula(formula, ch, lvl, edition) {
     case 'indomitable':     return lv >= 17 ? 3 : lv >= 13 ? 2 : lv >= 9 ? 1 : 0;
     case 'second_wind':     return is2014 ? 1 : (lv >= 10 ? 4 : lv >= 4 ? 3 : 2);
     case 'action_surge':    return lv >= 17 ? 2 : 1;
+    case 'str_mod':    return Math.max(1, abilityMod('str'));
+    case 'dex_mod':    return Math.max(1, abilityMod('dex'));
+    case 'con_mod':    return Math.max(1, abilityMod('con'));
+    // Battle Master (both editions): 4, +1 at L7 and L15
+    case 'superiority_dice': return lv >= 15 ? 6 : lv >= 7 ? 5 : 4;
+    // Psi Warrior / Soulknife: 2014 = twice proficiency bonus; 2024 = table
+    case 'psionic_dice':
+      if (is2014) return 2 * _resProfBonus(total);
+      return lv >= 17 ? 12 : lv >= 13 ? 10 : lv >= 9 ? 8 : lv >= 5 ? 6 : 4;
     case 'favored_enemy':   return lv >= 17 ? 6 : lv >= 13 ? 5 : lv >= 9 ? 4 : lv >= 5 ? 3 : 2;
     case 'arcanum_6': return lv >= 11 ? 1 : 0;
     case 'arcanum_7': return lv >= 13 ? 1 : 0;
