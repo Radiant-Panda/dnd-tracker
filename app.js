@@ -3616,16 +3616,25 @@ function saveCustomSpells() {
   try { localStorage.setItem(CUSTOM_SPELLS_KEY, JSON.stringify(customSpells)); } catch {}
 }
 
-function getMergedSpells() {
+// Many spells exist in a 2014 and a 2024 version; each character sees their own edition's.
+function _spellEditionFor(ch) {
+  return ((ch || db.characters[currentCharId])?.edition || '2024') === '2014' ? '2014' : '2024';
+}
+function _spellByName(name, ch) {
+  const lc = String(name).toLowerCase(), ed = _spellEditionFor(ch);
+  const matches = (allSpellsDb || []).filter(s => String(s.name).toLowerCase() === lc);
+  return matches.find(s => (s.edition || '2024') === ed) || matches[0] || null;
+}
+
+function getMergedSpells(ch, pool) {
   loadAllSpells(); loadCustomSpells();
-  const api = allSpellsDb || [];
-  // Deduplicate API spells by name (same spell can appear in multiple sourcebooks)
-  const seen = new Set();
-  const deduped = [];
-  for (const sp of api) {
-    if (!seen.has(sp.name)) { seen.add(sp.name); deduped.push(sp); }
+  const ed = _spellEditionFor(ch);
+  const best = new Map();
+  for (const sp of (pool || allSpellsDb || [])) {
+    const cur = best.get(sp.name);
+    if (!cur || ((cur.edition || '2024') !== ed && (sp.edition || '2024') === ed)) best.set(sp.name, sp);
   }
-  return [...deduped, ...customSpells.map(s => ({...s, _custom:true}))];
+  return [...best.values(), ...(pool ? [] : customSpells.map(s => ({...s, _custom:true})))];
 }
 
 async function fetchAllSpells() {
@@ -3633,7 +3642,7 @@ async function fetchAllSpells() {
   spellFetching = true;
   setSpellStatus('✾ Loading spells…');
   try {
-    const res = await fetch('./data/spells.json?v=4');
+    const res = await fetch('./data/spells.json?v=5');
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const all = await res.json();
     allSpellsDb = Array.isArray(all) ? all : [];
@@ -3716,7 +3725,9 @@ function renderSpellTabContent() {
 }
 
 function getFilteredAllSpells(ch) {
-  const merged = getMergedSpells();
+  const merged = spellFilters.source !== 'all'
+    ? getMergedSpells(ch, (allSpellsDb || []).filter(sp => sp.src === spellFilters.source))
+    : getMergedSpells(ch);
   const f = spellFilters;
   return merged.filter(sp => {
     if (f.q && !sp.name.toLowerCase().includes(f.q.toLowerCase()) && !(sp.school||'').toLowerCase().includes(f.q.toLowerCase()) && !(sp.desc||'').toLowerCase().includes(f.q.toLowerCase())) return false;
@@ -3846,12 +3857,14 @@ function renderAllSpellsView(ch) {
   return `${renderFilterBar()}<div id="spell-results">${renderSpellResultsHtml(ch)}</div>`;
 }
 
-function fullSpellData(sp) {
-  // Merge stored spell with full entry from allSpellsDb so desc is never truncated
+function fullSpellData(sp, ch) {
+  // The spell's rules come from the database (in the character's edition); the stored copy
+  // contributes only its own flags (_fromFeat, _miId, free casts…), which start with "_"
   const name = typeof sp === 'object' ? sp.name : sp;
-  const fromDb = (allSpellsDb || []).find(s => s.name === name)
-              || (customSpells || []).find(s => s.name === name);
-  return fromDb ? { ...fromDb, ...(typeof sp === 'object' ? sp : {}), desc: fromDb.desc || (typeof sp === 'object' ? sp.desc : '') } : sp;
+  const fromDb = _spellByName(name, ch) || (customSpells || []).find(s => s.name === name);
+  if (!fromDb) return sp;
+  const own = typeof sp === 'object' ? Object.fromEntries(Object.entries(sp).filter(([k]) => k.startsWith('_'))) : {};
+  return { ...(typeof sp === 'object' ? sp : {}), ...fromDb, ...own };
 }
 
 function groupSpellsByLevel(spells) {
@@ -3872,7 +3885,7 @@ function renderKnownView(ch) {
   const known    = ch.spells.known    || [];
   const prepared = new Set((ch.spells.prepared||[]).map(s=>typeof s==='object'?s.name:s));
   if (known.length === 0) return `<p class="spell-empty" style="padding:1rem 0">No known spells. Add some from All Spells ↑</p>`;
-  const entries = known.map((sp, i) => ({ full: fullSpellData(sp), i }));
+  const entries = known.map((sp, i) => ({ full: fullSpellData(sp, ch), i }));
   const grouped = groupSpellsByLevel(entries);
   return `<div>${grouped.map(({ label, spells }) => `
     <div class="spell-group">
@@ -3915,7 +3928,7 @@ function renderKnownView(ch) {
 function renderPreparedView(ch) {
   const prepared = ch.spells.prepared || [];
   if (prepared.length === 0) return `<p class="spell-empty" style="padding:1rem 0">No prepared spells. Mark spells as Prepared from Known ↑ or All Spells.</p>`;
-  const entries = prepared.map((sp, i) => ({ full: fullSpellData(sp), i }));
+  const entries = prepared.map((sp, i) => ({ full: fullSpellData(sp, ch), i }));
   const grouped = groupSpellsByLevel(entries);
   return `<div>${grouped.map(({ label, spells }) => `
     <div class="spell-group">
@@ -4069,11 +4082,7 @@ function _subclassTargetList(prepareType) {
   return prepareType === 'always_prepared' ? 'prepared' : 'known';
 }
 function _resolveSpellByName(name) {
-  if (typeof allSpellsDb !== 'undefined' && Array.isArray(allSpellsDb)) {
-    const lc = String(name).toLowerCase();
-    return allSpellsDb.find(s => String(s.name).toLowerCase() === lc) || null;
-  }
-  return null;
+  return _spellByName(name);
 }
 function _spellListHasCI(list, name) {
   const lc = String(name).toLowerCase();
@@ -4402,9 +4411,7 @@ function openCastModal(spellName, minLevel) {
 function confirmCastPact(spellName) {
   const ch = db.characters[currentCharId]; if (!ch) return;
   if ((ch.spells.pactSlots || 0) <= 0) { showAlert('No pact slots remaining!'); return; }
-  const allSpells = [...(ch.spells.known||[]), ...(ch.spells.prepared||[])];
-  const sp = allSpells.find(s => (typeof s==='object' ? s.name : s) === spellName && typeof s === 'object');
-  const isConc = sp?.concentration === 'yes';
+  const isConc = fullSpellData(spellName, ch)?.concentration === 'yes';
   const pactLvl = ch.spells.pactSlotLevel || 1;
   const ordinals = ['','1st','2nd','3rd','4th','5th','6th','7th','8th','9th'];
   const docast = () => {
@@ -4427,9 +4434,7 @@ function confirmCastPact(spellName) {
 
 function castCantrip(spellName) {
   const ch = db.characters[currentCharId]; if (!ch) return;
-  const allSpells = [...(ch.spells.known||[]), ...(ch.spells.prepared||[])];
-  const sp = allSpells.find(s => typeof s === 'object' && s.name === spellName);
-  const isConc = sp?.concentration === 'yes';
+  const isConc = fullSpellData(spellName, ch)?.concentration === 'yes';
   const docast = () => {
     const appEl = document.getElementById('app');
     const st = appEl ? appEl.scrollTop : 0;
@@ -4458,9 +4463,7 @@ function confirmCast(spellName, slotLevel) {
   const ch = db.characters[currentCharId]; if (!ch) return;
   if ((ch.spells.slots[slotLevel] || 0) <= 0) { showAlert('No slots at that level!'); return; }
   // Find the spell to check concentration
-  const allSpells = [...(ch.spells.known||[]), ...(ch.spells.prepared||[])];
-  const sp = allSpells.find(s => (typeof s==='object' ? s.name : s) === spellName && typeof s === 'object');
-  const isConc = sp?.concentration === 'yes';
+  const isConc = fullSpellData(spellName, ch)?.concentration === 'yes';
   const docast = () => {
     CharacterStore.useSpellSlot(currentCharId, slotLevel);
     const ordinals = ['','1st','2nd','3rd','4th','5th','6th','7th','8th','9th'];
