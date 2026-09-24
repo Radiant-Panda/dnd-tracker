@@ -104,4 +104,20 @@ test('Artificer uses 2014 rules even on a 2024 character', () => {
   assert.strictEqual(expected(char('2024', [{ class: 'Artificer', level: 6 }]))['Infuse Item'], 3);
 });
 
+test('Superiority and Psionic Energy Dice counts', () => {
+  const sd = { name: 'Superiority Dice', _subclass: 'Battle Master', _forClass: 'Fighter', maxFormula: 'superiority_dice' };
+  assert.strictEqual(R.resourceMax(sd, char('2024', [{ class: 'Fighter', level: 3 }])), 4);
+  assert.strictEqual(R.resourceMax(sd, char('2024', [{ class: 'Fighter', level: 15 }])), 6);
+  const pd = { name: 'Psionic Energy Dice', _subclass: 'Psi Warrior', _forClass: 'Fighter', maxFormula: 'psionic_dice' };
+  assert.strictEqual(R.resourceMax(pd, char('2024', [{ class: 'Fighter', level: 9 }])), 8);
+  assert.strictEqual(R.resourceMax(pd, char('2014', [{ class: 'Fighter', level: 9 }])), 8); // 2 × PB 4
+  assert.strictEqual(R.resourceMax(pd, char('2014', [{ class: 'Fighter', level: 3 }])), 4);
+});
+
+test('ability-based subclass resources (min 1)', () => {
+  const r = { name: 'Unleash Incarnation', _subclass: 'Echo Knight', _forClass: 'Fighter', maxFormula: 'con_mod' };
+  assert.strictEqual(R.resourceMax(r, char('2024', [{ class: 'Fighter', level: 3 }], { con: 16 })), 3);
+  assert.strictEqual(R.resourceMax(r, char('2024', [{ class: 'Fighter', level: 3 }], { con: 8 })), 1);
+});
+
 console.log(`\n${passed} passed`);
