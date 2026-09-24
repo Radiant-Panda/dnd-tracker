@@ -77,25 +77,11 @@ async function signInWithGoogle() {
   }
   try {
     const provider = new firebase.auth.GoogleAuthProvider();
-    const cur = _fireAuth.currentUser;
-    if (cur && cur.isAnonymous) {
-      // Upgrade the anonymous session in place. linkWithPopup keeps the same uid,
-      // so anything already written under it stays reachable after signing in.
-      try {
-        await cur.linkWithPopup(provider);
-      } catch (err) {
-        // Already have a real account? Sign into it instead of failing outright.
-        // Anything created under the anonymous uid stays behind and needs migrating.
-        if (err && (err.code === 'auth/credential-already-in-use'
-                 || err.code === 'auth/email-already-in-use')) {
-          await _fireAuth.signInWithPopup(provider);
-        } else {
-          throw err;
-        }
-      }
-    } else {
-      await _fireAuth.signInWithPopup(provider);
-    }
+    // One pop-up, opened straight from the click. A player or setup link may have left an
+    // anonymous session in this browser; signing in replaces it (anonymous sessions never
+    // hold GM data). Linking first and falling back to a second pop-up got the second one
+    // blocked by the browser (auth/popup-blocked).
+    await _fireAuth.signInWithPopup(provider);
     // onAuthStateChanged will handle the rest
   } catch (e) {
     console.warn('[Auth] Sign-in failed:', e.message);
