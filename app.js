@@ -853,6 +853,17 @@ function migrateCharacter(ch) {
   }
   // Keep class resource trackers in step with classes/levels (never refills uses)
   syncClassResources(ch);
+  // Initiative used to be a stored number that ignored DEX changes. Keep a hand-set value as an
+  // extra bonus over DEX; 0 was the untouched default, so those characters just follow DEX.
+  if (ch.combat.initMisc === undefined) {
+    const init = parseInt(ch.combat.initiative) || 0;
+    ch.combat.initMisc = init === 0 ? 0 : init - mod(ch.abilities?.dex || 10);
+  }
+  ch.combat.initiative = initiativeBonus(ch);
+  // Losing levels can't leave more hit dice spent than the class now has
+  (ch.classes || []).forEach(c => {
+    if ((ch.combat.hitDiceUsed[c.class] || 0) > (c.level || 0)) ch.combat.hitDiceUsed[c.class] = c.level || 0;
+  });
   // Migrate cantrips: move any level_int===0 spells from prepared into known only
   if (ch.spells.prepared && ch.spells.prepared.length) {
     const cantripsPrepared = ch.spells.prepared.filter(s => typeof s === 'object' && s.level_int === 0);
@@ -1349,7 +1360,7 @@ function renderNpcSheet() {
       </div>
     </div>`;
 }
-function npc_field(field, value) { db.npcs[currentNpcId][field] = value; }
+function npc_field(field, value) { db.npcs[currentNpcId][field] = value; _queueSave(); }
 function saveNpcSheet() {
   saveData(db);
   const btn = document.getElementById('npc-save-btn');
@@ -1682,7 +1693,9 @@ function quickAddCombatant(entityId, type) {
   } else {
     const npc=db.npcs[entityId]; name=npc.name; ac=npc.ac||10; maxHP=npc.maxHP||10; hp=npc.hp||10;
   }
-  const rolled = Math.ceil(Math.random()*20);
+  const d20 = Math.ceil(Math.random()*20);
+  const initBonus = type === 'player' ? initiativeBonus(db.characters[entityId]) : 0;
+  const rolled = d20 + initBonus;
 
   // Store state and open modal
   _quickAddState = { charId, name, type, ac, hp, maxHP, rolled };
@@ -1692,8 +1705,8 @@ function quickAddCombatant(entityId, type) {
       <div style="padding: 1rem 0;">
         <div style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">${esc(name)}</div>
         <div class="form-group">
-          <label for="qa-init">Initiative Roll</label>
-          <input type="number" id="qa-init" value="${rolled}" min="1" max="20">
+          <label for="qa-init">Initiative${initBonus ? ` <span class="text-dim" style="font-weight:normal">(d20 ${d20} ${initBonus >= 0 ? '+' : '−'} ${Math.abs(initBonus)})</span>` : ''}</label>
+          <input type="number" id="qa-init" value="${rolled}">
         </div>
         <div class="form-actions">
           <button class="btn" onclick="_closeQuickAdd()">Cancel</button>
@@ -1723,7 +1736,7 @@ function addAllPcsToInitiative() {
   const linked=new Set(init.combatants.filter(c=>c.charId).map(c=>c.charId));
   (campaign.characters||[]).forEach(id => {
     const ch=db.characters[id]; if(!ch||linked.has(id)) return;
-    init.combatants.push({id:uid(),charId:id,name:ch.name,initiative:Math.ceil(Math.random()*20),ac:ch.combat.ac,hp:ch.combat.currentHP,maxHP:ch.combat.maxHP,type:'player',conditions:ch.combat.conditions||[],notes:'',tempHP:ch.combat.tempHP||0});
+    init.combatants.push({id:uid(),charId:id,name:ch.name,initiative:Math.ceil(Math.random()*20)+initiativeBonus(ch),ac:ch.combat.ac,hp:ch.combat.currentHP,maxHP:ch.combat.maxHP,type:'player',conditions:ch.combat.conditions||[],notes:'',tempHP:ch.combat.tempHP||0});
   });
   saveData(db); renderApp();
 }
@@ -1859,8 +1872,15 @@ function rerollCombatantInitiative(i) {
     combatLog(`${cb.name} re-rolled initiative: ${newInitiative}`);
     saveData(db);
     renderApp();
+  } else if (cb.charId && db.characters[cb.charId]) {
+    // Linked character: d20 + their initiative bonus
+    const bonus = initiativeBonus(db.characters[cb.charId]);
+    cb.initiative = roll + bonus;
+    combatLog(`${cb.name} re-rolled initiative: ${cb.initiative} (d20 ${roll} ${bonus >= 0 ? '+' : '−'} ${Math.abs(bonus)})`);
+    saveData(db);
+    renderApp();
   } else {
-    // Player: show toast with d20 result
+    // Unlinked player: show toast with d20 result
     showToast(`<strong>${esc(cb.name)}</strong>: Rolled d20 = <strong>${roll}</strong> — enter manually`);
   }
 }
@@ -2800,6 +2820,10 @@ function skillBonus(ch, skillName, abilityKey, pb) {
   const exp=(ch.skillExpertise||[]).includes(skillName);
   return mod(ch.abilities[abilityKey])+(prof?pb:0)+(exp?pb:0)+(!prof && !exp ? jackOfAllTrades(ch, pb) : 0);
 }
+// Initiative is DEX plus any extra bonus (Alert, items…) kept in combat.initMisc
+function initiativeBonus(ch) {
+  return mod(ch.abilities?.dex || 10) + (parseInt(ch.combat?.initMisc) || 0);
+}
 function passivePerception(ch, pb) {
   return 10 + skillBonus(ch, 'Perception', 'wis', pb);
 }
@@ -3086,13 +3110,33 @@ function renderAbilityScores(ch) {
           <div class="ability-name">${ABILITY_SHORT[a]}</div>
           <div class="stat-value-row">
             <button class="stat-step-btn" onclick="adjustAbility('${a}',-1)">−</button>
-            <input class="ability-score-input" type="number" id="ab-${a}" value="${ch.abilities[a]}" min="1" max="30" oninput="updateAbility('${a}',this.value)">
+            <input class="ability-score-input" type="number" id="ab-${a}" value="${ch.abilities[a]}" min="1" max="30" onchange="updateAbility('${a}',this.value)" onkeydown="if(event.key==='Enter')this.blur()">
             <button class="stat-step-btn" onclick="adjustAbility('${a}',1)">+</button>
           </div>
           <div class="ability-mod-circle" id="mod-${a}">${modStr(ch.abilities[a])}</div>
         </div>`).join('')}
     </div>
   </div>`;
+}
+
+// 2014 exhaustion effects stack: each level adds its own on top of the earlier ones
+const EXHAUSTION_EFFECTS_2014 = [
+  '',
+  'Disadvantage on ability checks',
+  'Speed halved',
+  'Disadvantage on attack rolls and saving throws',
+  'Hit point maximum halved',
+  'Speed reduced to 0',
+  'Dead',
+];
+function exhaustionEffect(ch) {
+  const lvl = ch.exhaustionLevel || 0;
+  if (ch.edition !== '2014') return EXHAUSTION_EFFECTS[lvl] || '';
+  return lvl >= 6 ? 'Dead' : EXHAUSTION_EFFECTS_2014.slice(1, lvl + 1).join(' · ');
+}
+// 2024: every D20 Test (checks, saves, attacks) is reduced by 2 per exhaustion level
+function exhaustionPenalty(ch) {
+  return ch.edition === '2014' ? 0 : 2 * Math.min(5, ch.exhaustionLevel || 0);
 }
 
 const EXHAUSTION_EFFECTS = [
@@ -3107,7 +3151,7 @@ const EXHAUSTION_EFFECTS = [
 
 function renderCoreStats(ch, pb) {
   const exLevel = ch.exhaustionLevel || 0;
-  const exEffect = EXHAUSTION_EFFECTS[exLevel] || '';
+  const exEffect = exhaustionEffect(ch);
   const exPips = [1,2,3,4,5,6].map(n => {
     const filled = n <= exLevel;
     // clicking a filled pip at current level resets to 0; otherwise sets to n
@@ -3142,7 +3186,7 @@ function renderSavingThrows(ch, pb) {
     <ul class="skill-list">
       ${ABILITIES.map(a=>{
         const prof = allProfs.has(a);
-        const total = mod(ch.abilities[a])+(prof?pb:0);
+        const total = mod(ch.abilities[a])+(prof?pb:0)-exhaustionPenalty(ch);
         const grantedBy = classGrants[a] || [];
         const badges = grantedBy.length > 1
           ? grantedBy.map(cls => `<span class="class-save-badge" style="background:${CLASS_BADGE_COLORS[cls]||'#9b6dff'}">${cls.slice(0,3).toUpperCase()}</span>`).join('')
@@ -3168,7 +3212,7 @@ function renderSkillList(ch, pb) {
         const prof = !!entry;
         const exp  = (ch.skillExpertise||[]).includes(s.name);
         const dotClass = exp?'expert':prof?'proficient':'';
-        const total = skillBonus(ch,s.name,s.ability,pb);
+        const total = skillBonus(ch,s.name,s.ability,pb) - exhaustionPenalty(ch);
         const skillSrc = prof ? skillProfSource(entry) : null;
         const badge = skillSrc
           ? (skillSrc === 'background'
@@ -3277,6 +3321,7 @@ function openACCalcModal() {
     const { ac } = calcAC(idx, shield);
     combatField('ac', ac);
     closeModal();
+    saveData(db);
     renderApp();
   };
   // Trigger initial preview render
@@ -3302,28 +3347,23 @@ function renderCombatSection(ch) {
   const hdDisplay = hdClasses.length === 1
     ? hdDisplayParts[0]
     : hdClasses.map((c, i) => `${c.class} ${hdDisplayParts[i]}`).join(' · ');
-  // Determine spell ability for spellcasting classes
-  let spellAbility = null;
-  if (SPELL_ABILITY[ch.class || (ch.classes && ch.classes[0]?.class)]) {
-    spellAbility = SPELL_ABILITY[ch.class || (ch.classes && ch.classes[0]?.class)];
-  } else if (ch.classes) {
-    for (const classData of ch.classes) {
-      if (SPELL_ABILITY[classData.class]) {
-        spellAbility = SPELL_ABILITY[classData.class];
-        break;
-      }
-    }
-  }
-  const spellBoxes = spellAbility ? (() => {
-    const spellMod = mod(ch.abilities[spellAbility] || 10);
+  // Spell DC / attack per casting ability — the same numbers as the Spells panel (incl. item bonus)
+  const spellStats = (() => {
     const pb = profBonus(ch.level || 1);
-    const saveDC = 8 + pb + spellMod;
-    const attackBonus = pb + spellMod;
+    const bonus = { dc: parseInt(ch.spellBonus?.dc) || 0, atk: parseInt(ch.spellBonus?.atk) || 0 };
+    const seen = new Set();
+    return casterEntries(ch).filter(e => e.prog.ability && !seen.has(e.prog.ability) && seen.add(e.prog.ability)).map(e => {
+      const sMod = mod(ch.abilities[e.prog.ability] || 10);
+      return { cls: e.cls, dc: 8 + pb + sMod + bonus.dc, atk: pb + sMod + bonus.atk };
+    });
+  })();
+  const spellBoxes = spellStats.map(st => {
+    const tag = spellStats.length > 1 ? ` · ${esc(st.cls)}` : '';
     return `<div class="cs-combat-duo" style="margin-top:0.6rem;display:grid;grid-template-columns:1fr 1fr;gap:0.6rem">
-      <div class="stat-box"><div class="stat-label">Spell DC</div><div style="text-align:center;font-size:1.3rem;color:var(--gold);font-weight:bold">${saveDC}</div></div>
-      <div class="stat-box"><div class="stat-label">Spell Atk</div><div style="text-align:center;font-size:1.3rem;color:var(--gold);font-weight:bold">${attackBonus >= 0 ? '+' : ''}${attackBonus}</div></div>
+      <div class="stat-box"><div class="stat-label">Spell DC${tag}</div><div style="text-align:center;font-size:1.3rem;color:var(--gold);font-weight:bold">${st.dc}</div></div>
+      <div class="stat-box"><div class="stat-label">Spell Atk${tag}</div><div style="text-align:center;font-size:1.3rem;color:var(--gold);font-weight:bold">${st.atk >= 0 ? '+' : ''}${st.atk}</div></div>
     </div>`;
-  })() : '';
+  }).join('');
   return `<div class="sheet-panel">
     <div class="cs-section-label">Combat</div>
     <div class="cs-combat-trio">
@@ -3342,7 +3382,7 @@ function renderCombatSection(ch) {
         <div class="stat-label">Initiative</div>
         <div class="stat-value-row">
           <button class="stat-step-btn" onclick="adjustCombatStat('initiative',-1)">−</button>
-          <input type="number" class="stat-value-input" value="${ch.combat.initiative}" oninput="combatField('initiative',+this.value)">
+          <input type="number" class="stat-value-input" value="${initiativeBonus(ch)}" oninput="setInitiative(+this.value)" title="DEX modifier ${modStr(ch.abilities.dex || 10)}${ch.combat.initMisc ? `, plus ${ch.combat.initMisc} extra` : ''}">
           <button class="stat-step-btn" onclick="adjustCombatStat('initiative',1)">+</button>
         </div>
       </div>
@@ -7175,6 +7215,7 @@ function removeFeatureByName(name, flag) {
 function updateFeatureField(i, field, value) {
   const ch = db.characters[currentCharId];
   if (ch.featuresList && ch.featuresList[i]) ch.featuresList[i][field] = value;
+  _queueSave();
 }
 function ch_edition(ed) {
   const ch = db.characters[currentCharId]; if (!ch) return;
@@ -7719,7 +7760,7 @@ function renderCharacterSheet() {
         <label>Background</label>
         ${(()=>{
           const ddStyle = 'background:transparent;border:none;border-bottom:1px solid var(--border);border-radius:0;color:var(--text);padding:0.1rem 0;font-size:0.85rem;width:100%';
-          const bgEd = _bgEdition || '2024';
+          const bgEd = _bgEditionFor(ch);
           const bgSourceList = bgEd === '2014' ? (SPECIES_DATA?.backgrounds_2014 || []) : (SPECIES_DATA?.backgrounds_2024 || []);
           const bgList = bgSourceList.map(b => b.name);
           const allBgNames = [...(SPECIES_DATA?.backgrounds_2024||[]), ...(SPECIES_DATA?.backgrounds_2014||[])].map(b => b.name);
@@ -7811,6 +7852,7 @@ function renderCharacterSheet() {
 function changeBackground(newBg) {
   const ch = db.characters[currentCharId];
   if (!ch) return;
+  const bgEd = _bgEditionFor(ch); // the list the picker was showing
   ch.backgroundTools = ch.backgroundTools || [];
 
   // Strip skills the OLD background added (tagged entries + legacy plain strings)
@@ -7846,8 +7888,8 @@ function changeBackground(newBg) {
   ch.background = newBg;
 
   // Look up new background — prefer current edition, fall back to the other
-  const _bgPrimary = _bgEdition === '2014' ? (SPECIES_DATA?.backgrounds_2014||[]) : (SPECIES_DATA?.backgrounds_2024||[]);
-  const _bgSecondary = _bgEdition === '2014' ? (SPECIES_DATA?.backgrounds_2024||[]) : (SPECIES_DATA?.backgrounds_2014||[]);
+  const _bgPrimary = bgEd === '2014' ? (SPECIES_DATA?.backgrounds_2014||[]) : (SPECIES_DATA?.backgrounds_2024||[]);
+  const _bgSecondary = bgEd === '2014' ? (SPECIES_DATA?.backgrounds_2024||[]) : (SPECIES_DATA?.backgrounds_2014||[]);
   const newBgData = _bgPrimary.find(b => b.name === newBg) || _bgSecondary.find(b => b.name === newBg);
   if (newBgData) {
     // Skills — tagged as background source
@@ -7919,6 +7961,7 @@ function changeRace(newRace) {
 function ch_field(field, value) {
   const ch = db.characters[currentCharId];
   ch[field] = value;
+  _queueSave();
   if (field === 'class') {
     ch.subclass = '';
     ch.classes[0].class = value;
@@ -7934,11 +7977,20 @@ function ch_field(field, value) {
 }
 
 let mcEditIdx = null;
-let _bgEdition = '2024'; // '2024' or '2014' — controls background picker source
+// Which background list the picker shows: the one the user picked with the 2024/2014 pills,
+// else the list the current background comes from, else the character's rules edition.
+function _bgEditionFor(ch) {
+  if (ch.bgEdition) return ch.bgEdition;
+  const has = ed => (SPECIES_DATA?.[`backgrounds_${ed}`] || []).some(b => b.name === ch.background);
+  if (has('2014') && !has('2024')) return '2014';
+  if (has('2024') && !has('2014')) return '2024';
+  return ch.edition === '2014' ? '2014' : '2024';
+}
 
 function _setBgEdition(edition) {
-  _bgEdition = edition;
-  renderApp();
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  ch.bgEdition = edition;
+  saveData(db); renderApp();
 }
 
 function toggleClassEditor(idx) {
@@ -8132,8 +8184,22 @@ function removeCharClass(idx) {
   refreshPanels();
 }
 
+// Typed fields save shortly after the last keystroke (and when the page is hidden),
+// so edits survive a reload without pressing Save.
+let _autosaveTimer = null;
+function _queueSave() {
+  clearTimeout(_autosaveTimer);
+  _autosaveTimer = setTimeout(() => { _autosaveTimer = null; saveData(db); }, 400);
+}
+function _flushSave() {
+  if (_autosaveTimer) { clearTimeout(_autosaveTimer); _autosaveTimer = null; saveData(db); }
+}
+window.addEventListener('pagehide', _flushSave);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') _flushSave(); });
+
 function combatField(field, value) {
   db.characters[currentCharId].combat[field] = value;
+  _queueSave();
   if (['maxHP','currentHP'].includes(field)) {
     const ch = db.characters[currentCharId];
     const pct = ch.combat.maxHP>0?Math.round((ch.combat.currentHP/ch.combat.maxHP)*100):100;
@@ -8141,15 +8207,24 @@ function combatField(field, value) {
     if (bar) { bar.style.width=pct+'%'; bar.className='hp-bar '+(pct<=25?'low':pct<=50?'mid':''); }
   }
 }
+// Typing a total keeps the difference from DEX as an extra bonus
+function setInitiative(value) {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  ch.combat.initMisc = (parseInt(value) || 0) - mod(ch.abilities.dex || 10);
+  ch.combat.initiative = initiativeBonus(ch);
+  _queueSave();
+}
 function adjustCombatStat(field, delta) {
   const ch = db.characters[currentCharId];
   if (!ch) return;
+  if (field === 'initiative') { setInitiative(initiativeBonus(ch) + delta); saveData(db); renderApp(); return; }
   ch.combat[field] = (+ch.combat[field] || 0) + delta;
   saveData(db);
   renderApp();
 }
 function updateAbility(ability, value) {
-  db.characters[currentCharId].abilities[ability] = parseInt(value)||10;
+  // Commits on change (blur/Enter), not per keystroke — re-rendering mid-typing turned "15" into 1
+  db.characters[currentCharId].abilities[ability] = Math.max(1, Math.min(30, parseInt(value) || 10));
   // Recalculate any ability-score-based resource maxes
   const ch = db.characters[currentCharId];
   syncClassResources(ch);
@@ -8228,19 +8303,7 @@ function updateDeathSave(type, index, checked) {
   const { successes, failures } = ch.deathSaves;
 
   if (failures >= 3) {
-    ch.combat.currentHP = 0;
-    showToast(`<span style="color:#ef4444">💀 <strong>${esc(ch.name)}</strong> has died — 3 failed death saves.</span>`);
-    // Add Unconscious condition to linked combatant
-    const campaign = db.campaigns.find(c => c.id === currentCampaignId);
-    if (campaign?.initiative?.combatants) {
-      const cb = campaign.initiative.combatants.find(c => c.charId === currentCharId);
-      if (cb) {
-        cb.conditions = cb.conditions || [];
-        if (!cb.conditions.some(c => (typeof c === 'string' ? c : c.name) === 'Unconscious')) {
-          cb.conditions.push('Unconscious');
-        }
-      }
-    }
+    _markDead(ch, '3 failed death saves');
   } else if (successes >= 3) {
     ch.deathSaves = { successes: 0, failures: 0 };
     showToast(`<span style="color:#22c55e">✦ <strong>${esc(ch.name)}</strong> has stabilised — 3 successful death saves.</span>`);
@@ -8248,6 +8311,48 @@ function updateDeathSave(type, index, checked) {
 
   saveData(db);
   renderApp();
+}
+
+function _markDead(ch, reason) {
+  ch.combat.currentHP = 0;
+  ch.deathSaves = { successes: 0, failures: 3 };
+  showToast(`<span style="color:#ef4444">💀 <strong>${esc(ch.name)}</strong> has died — ${reason}.</span>`);
+  // Add Unconscious condition to linked combatant
+  const campaign = db.campaigns.find(c => c.id === currentCampaignId);
+  const cb = campaign?.initiative?.combatants?.find(c => c.charId === ch.id);
+  if (cb) {
+    cb.conditions = cb.conditions || [];
+    if (!cb.conditions.some(c => (typeof c === 'string' ? c : c.name) === 'Unconscious')) cb.conditions.push('Unconscious');
+  }
+}
+
+// Temp HP soaks damage first. At 0 HP any damage is a failed death save; damage that leaves
+// at least your max HP over after dropping you to 0 kills outright.
+function _takeDamage(ch, amount) {
+  let remaining = amount;
+  if (ch.combat.tempHP > 0) {
+    const absorbed = Math.min(ch.combat.tempHP, remaining);
+    ch.combat.tempHP -= absorbed;
+    remaining -= absorbed;
+  }
+  if (remaining <= 0) return;
+  const wasDown = ch.combat.currentHP <= 0;
+  const overflow = remaining - Math.max(0, ch.combat.currentHP);
+  ch.combat.currentHP = Math.max(0, ch.combat.currentHP - remaining);
+  ch.deathSaves = ch.deathSaves || { successes: 0, failures: 0 };
+  if (overflow >= ch.combat.maxHP && ch.combat.maxHP > 0) { _markDead(ch, 'massive damage'); return; }
+  if (wasDown) {
+    ch.deathSaves.failures = Math.min(3, (ch.deathSaves.failures || 0) + 1);
+    if (ch.deathSaves.failures >= 3) _markDead(ch, '3 failed death saves');
+    else showToast(`<strong>${esc(ch.name)}</strong> took damage at 0 HP — a failed death save.`);
+  }
+}
+
+// Regaining any HP from 0 ends dying, so the death saves reset
+function _heal(ch, amount) {
+  if (amount <= 0) return;
+  if (ch.combat.currentHP <= 0) ch.deathSaves = { successes: 0, failures: 0 };
+  ch.combat.currentHP = Math.min(ch.combat.maxHP, ch.combat.currentHP + amount);
 }
 
 function updateHPDisplay() {
@@ -8277,13 +8382,7 @@ function applyDamage() {
   const amount = parseInt(document.getElementById('dmg-amount')?.value) || 0;
   if (amount <= 0) { closeModal(); return; }
   const ch = db.characters[currentCharId]; if (!ch) return;
-  let remaining = amount;
-  if (ch.combat.tempHP > 0) {
-    const absorbed = Math.min(ch.combat.tempHP, remaining);
-    ch.combat.tempHP -= absorbed;
-    remaining -= absorbed;
-  }
-  ch.combat.currentHP = Math.max(0, ch.combat.currentHP - remaining);
+  _takeDamage(ch, amount);
   closeModal(); saveData(db); renderApp();
   _flashHPDamage();
 }
@@ -8293,13 +8392,7 @@ function applyDamageInline() {
   const amount = parseInt(input?.value) || 0;
   if (amount <= 0) return;
   const ch = db.characters[currentCharId]; if (!ch) return;
-  let remaining = amount;
-  if (ch.combat.tempHP > 0) {
-    const absorbed = Math.min(ch.combat.tempHP, remaining);
-    ch.combat.tempHP -= absorbed;
-    remaining -= absorbed;
-  }
-  ch.combat.currentHP = Math.max(0, ch.combat.currentHP - remaining);
+  _takeDamage(ch, amount);
   saveData(db); renderApp();
   _flashHPDamage();
 }
@@ -8309,7 +8402,7 @@ function applyHealInline() {
   const amount = parseInt(input?.value) || 0;
   if (amount <= 0) return;
   const ch = db.characters[currentCharId]; if (!ch) return;
-  ch.combat.currentHP = Math.min(ch.combat.maxHP, ch.combat.currentHP + amount);
+  _heal(ch, amount);
   saveData(db); renderApp();
   _flashHPHeal();
 }
@@ -8328,7 +8421,7 @@ function applyHeal() {
   const amount = parseInt(document.getElementById('heal-amount')?.value) || 0;
   if (amount <= 0) { closeModal(); return; }
   const ch = db.characters[currentCharId]; if (!ch) return;
-  ch.combat.currentHP = Math.min(ch.combat.maxHP, ch.combat.currentHP + amount);
+  _heal(ch, amount);
   closeModal(); saveData(db); renderApp();
   _flashHPHeal();
 }
@@ -8362,10 +8455,10 @@ function doLongRest() {
   const ch = db.characters[currentCharId]; if (!ch) return;
   ch.combat.currentHP = ch.combat.maxHP;
   ch.combat.tempHP = 0;
-  // Restore half hit dice per class (minimum 1 total)
+  // Hit dice: 2024 restores all of them, 2014 half your total (minimum 1)
   const hdClasses = (ch.classes && ch.classes.length > 0) ? ch.classes : [{ class: ch.class || 'Fighter', level: ch.level || 1 }];
   const hdTotal = hdClasses.reduce((s, c) => s + (c.level || 0), 0);
-  const totalRestore = Math.max(1, Math.floor(hdTotal / 2));
+  const totalRestore = ch.edition === '2014' ? Math.max(1, Math.floor(hdTotal / 2)) : hdTotal;
   if (typeof ch.combat.hitDiceUsed !== 'object' || ch.combat.hitDiceUsed === null) ch.combat.hitDiceUsed = {};
   let leftToRestore = totalRestore;
   for (const cls of hdClasses) {
@@ -8385,6 +8478,8 @@ function doLongRest() {
   if (ch.spells?.pactSlotsMax) ch.spells.pactSlots = ch.spells.pactSlotsMax;
   // Reset death saves
   ch.deathSaves = { successes: 0, failures: 0 };
+  // A long rest removes one level of exhaustion (both editions)
+  ch.exhaustionLevel = Math.max(0, (ch.exhaustionLevel || 0) - 1);
   // Clear concentration
   ch.activeConcentration = null;
   // Clear concentration warnings on any initiative combatant linked to this character
@@ -8543,9 +8638,7 @@ function removeAttack(i) { db.characters[currentCharId].attacks.splice(i,1); sav
 function updateAttack(i, field, value) {
   const ch = db.characters[currentCharId];
   if (ch.attacks[i]) ch.attacks[i][field] = value;
-  // Debounce save: clear existing timer and set new one
-  if (window._attackSaveTimer) clearTimeout(window._attackSaveTimer);
-  window._attackSaveTimer = setTimeout(() => { saveData(db); }, 500);
+  _queueSave();
 }
 function autoCalcAttackBonus(i, weaponType) {
   const ch = db.characters[currentCharId];
@@ -8753,9 +8846,10 @@ function rollAttack(i) {
   if (!atk) return;
   const d20 = Math.floor(Math.random() * 20) + 1;
   const bonusNum = parseInt(atk.bonus) || 0;
-  const total = d20 + bonusNum;
+  const exPen = exhaustionPenalty(ch);
+  const total = d20 + bonusNum - exPen;
   const bonusStr = bonusNum >= 0 ? `+ ${bonusNum}` : `\u2212 ${Math.abs(bonusNum)}`;
-  const totalDisplay = `d20(${d20}) ${bonusStr} = <strong>${total}</strong>`;
+  const totalDisplay = `d20(${d20}) ${bonusStr}${exPen ? ` \u2212 ${exPen} (exhaustion)` : ''} = <strong>${total}</strong>`;
   let html;
   let duration = 5000;
   if (d20 === 20) {
@@ -8800,6 +8894,7 @@ function updateCurrency(coin, value) {
   const ch = db.characters[currentCharId];
   ch.currency = ch.currency||{cp:0,sp:0,ep:0,gp:0,pp:0};
   ch.currency[coin] = Math.max(0, parseInt(value)||0);
+  _queueSave();
 }
 function addEquipment() {
   const input = document.getElementById('eq-input'); const val=input.value.trim(); if(!val) return;
@@ -8807,7 +8902,15 @@ function addEquipment() {
   db.characters[currentCharId].equipment.push(val); input.value='';
   saveData(db); renderApp();
 }
-function removeEquipment(i) { db.characters[currentCharId].equipment.splice(i,1); saveData(db); renderApp(); }
+function removeEquipment(i) {
+  const ch = db.characters[currentCharId];
+  const [removed] = ch.equipment.splice(i, 1);
+  // Giving up the last copy of an attuned item ends the attunement
+  const name = typeof removed === 'object' ? removed?.name : removed;
+  if (name && !ch.equipment.some(e => (typeof e === 'object' ? e?.name : e) === name))
+    ch.attunedItems = (ch.attunedItems || []).filter(n => n !== name);
+  saveData(db); renderApp();
+}
 function addSpell() {
   const input = document.getElementById('spell-input'); const val=input.value.trim(); if(!val) return;
   db.characters[currentCharId].spells.known = db.characters[currentCharId].spells.known||[];
@@ -9706,8 +9809,7 @@ async function _setupWizardFinish() {
   }
   ch.combat.maxHP = wizardData.maxHP;
   ch.combat.currentHP = wizardData.maxHP;
-  const dexMod = Math.floor(((wizardData.abilities.dex || 10) - 10) / 2);
-  ch.combat.initiative = dexMod;
+  ch.combat.initMisc = 0; // initiative follows DEX (after species bonuses)
   ch.proficiencyBonus = profBonus(wizardData.level);
   if (wizardData.subclass && ch.classes && ch.classes[0]) {
     ch.classes[0].subclass = wizardData.subclass;
