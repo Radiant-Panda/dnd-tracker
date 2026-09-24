@@ -47,6 +47,24 @@ const p = require('puppeteer-core');
     removeSpellEntry('known', ch.spells.known.findIndex(s => s.name === 'Shield'));
     check('removing a known spell unprepares it', !ch.spells.prepared.some(s => s.name === 'Shield'), ch.spells.prepared);
 
+    // B2: each edition sees its own version of a spell
+    ch = mk('Cleric', 1, '2014');
+    ch.spells.known.push({ name: 'Cure Wounds', level_int: 1, school: 'Abjuration' }); // stored while shown as 2024
+    let cw = fullSpellData(ch.spells.known.at(-1), ch);
+    check('2014 character gets 2014 Cure Wounds (Evocation, 1d8)', cw.school === 'Evocation' && /1d8/.test(cw.desc), { school: cw.school, desc: cw.desc.slice(0, 80) });
+    ch = mk('Cleric', 1, '2024');
+    cw = fullSpellData('Cure Wounds', ch);
+    check('2024 character gets 2024 Cure Wounds (Abjuration, 2d8)', cw.school === 'Abjuration' && /2d8/.test(cw.desc), { school: cw.school });
+    const names = getMergedSpells(ch).map(s => s.name);
+    check('one copy of each spell in the list', names.length === new Set(names).size, names.length);
+    spellFilters = { q: '', level: 'all', school: 'all', cls: 'all', source: 'phb2014', conc: false, ritual: false };
+    const phb14 = getFilteredAllSpells(ch);
+    check('PHB 2014 filter shows the 2014 book, even for a 2024 character', phb14.length > 300 && phb14.every(s => s.edition === '2014'), phb14.length);
+    spellFilters.source = 'all';
+    ch.spells.known.push({ name: 'Cure Wounds', level_int: 1, _fromFeat: 'Magic Initiate', _miId: 'x' });
+    cw = fullSpellData(ch.spells.known.at(-1), ch);
+    check('stored flags survive the lookup', cw._fromFeat === 'Magic Initiate' && cw._miId === 'x', cw);
+
     // B8: custom spell level label
     customSpells = [];
     document.body.insertAdjacentHTML('beforeend', '<div id="cspt"><input id="csp-name" value="Zap"><input id="csp-level" value="2"><select id="csp-school"><option>Evocation</option></select></div>');

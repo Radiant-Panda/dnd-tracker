@@ -65,6 +65,57 @@ function resolveCopy(entry, pool) {
   return merged;
 }
 
+// ── Spell field conversion (5etools → spells.json shape) ──
+const SCHOOL = { A: 'Abjuration', C: 'Conjuration', D: 'Divination', E: 'Enchantment', V: 'Evocation', I: 'Illusion', N: 'Necromancy', T: 'Transmutation' };
+const ord = n => n + (n === 1 ? 'st' : n === 2 ? 'nd' : n === 3 ? 'rd' : 'th');
+const plural = (n, unit) => `${n} ${unit}${n === 1 ? '' : 's'}`;
+const time = t => {
+  const unit = { action: 'action', bonus: 'bonus action', reaction: 'reaction' }[t.unit] || t.unit;
+  return ['action', 'bonus action', 'reaction'].includes(unit) ? `${t.number} ${unit}` : plural(t.number, unit);
+};
+const range = r => {
+  const d = r.distance || {};
+  if (r.type === 'point') {
+    if (d.type === 'self') return 'Self';
+    if (d.type === 'touch') return 'Touch';
+    if (d.type === 'sight') return 'Sight';
+    if (d.type === 'unlimited') return 'Unlimited';
+    if (d.type === 'feet') return `${d.amount} ft.`;
+    if (d.type === 'miles') return plural(d.amount, 'mile');
+  }
+  if (r.type === 'special') return 'Special';
+  if (d.amount) return `Self (${d.amount}-${d.type === 'miles' ? 'mile' : 'foot'} ${r.type === 'radius' ? 'radius' : r.type})`;
+  return 'Special';
+};
+const components = c => [c.v && 'V', c.s && 'S', c.r && 'R',
+  c.m && `M (${stripTags(typeof c.m === 'string' ? c.m : c.m.text)})`].filter(Boolean).join(', ');
+const duration = ds => ds.map(d => {
+  if (d.type === 'instant') return 'Instantaneous';
+  if (d.type === 'permanent') return (d.ends || []).includes('trigger') ? 'Until dispelled or triggered' : 'Until dispelled';
+  if (d.type === 'special') return 'Special';
+  const len = plural(d.duration.amount, d.duration.type);
+  return d.concentration ? `Concentration, up to ${len}` : len;
+}).join(' or ');
+function toAppSpell(sp, source, classes) {
+  return {
+    name: sp.name,
+    level_int: sp.level,
+    level: sp.level === 0 ? 'Cantrip' : `${ord(sp.level)}-level`,
+    school: SCHOOL[sp.school] || sp.school,
+    casting_time: (sp.time || []).map(time).join(' or '),
+    range: range(sp.range || {}),
+    components: components(sp.components || {}),
+    duration: duration(sp.duration || []),
+    concentration: (sp.duration || []).some(d => d.concentration) ? 'yes' : 'no',
+    ritual: sp.meta && sp.meta.ritual ? 'yes' : 'no',
+    desc: entriesToRulesText([...(sp.entries || []), ...(sp.entriesHigherLevel || [])]),
+    source: bookName(source),
+    book: bookName(source),
+    dnd_class: [...classes].sort().join(', '),
+    src: source.toLowerCase(),
+  };
+}
+
 // ── Spells ──
 if (want('spells')) {
   const file = path.join(__dirname, 'spells.json');
@@ -72,36 +123,6 @@ if (want('spells')) {
   const have = new Set(spells.map(s => norm(s.name)));
   const lookup = J('generated/gendata-spell-source-lookup.json');
   const classLists = J('spells/sources.json'); // class lists for spells whose book adds them (FTD, BMT…)
-  const SCHOOL = { A: 'Abjuration', C: 'Conjuration', D: 'Divination', E: 'Enchantment', V: 'Evocation', I: 'Illusion', N: 'Necromancy', T: 'Transmutation' };
-  const ord = n => n + (n === 1 ? 'st' : n === 2 ? 'nd' : n === 3 ? 'rd' : 'th');
-  const plural = (n, unit) => `${n} ${unit}${n === 1 ? '' : 's'}`;
-  const time = t => {
-    const unit = { action: 'action', bonus: 'bonus action', reaction: 'reaction' }[t.unit] || t.unit;
-    return ['action', 'bonus action', 'reaction'].includes(unit) ? `${t.number} ${unit}` : plural(t.number, unit);
-  };
-  const range = r => {
-    const d = r.distance || {};
-    if (r.type === 'point') {
-      if (d.type === 'self') return 'Self';
-      if (d.type === 'touch') return 'Touch';
-      if (d.type === 'sight') return 'Sight';
-      if (d.type === 'unlimited') return 'Unlimited';
-      if (d.type === 'feet') return `${d.amount} ft.`;
-      if (d.type === 'miles') return plural(d.amount, 'mile');
-    }
-    if (r.type === 'special') return 'Special';
-    if (d.amount) return `Self (${d.amount}-${d.type === 'miles' ? 'mile' : 'foot'} ${r.type === 'radius' ? 'radius' : r.type})`;
-    return 'Special';
-  };
-  const components = c => [c.v && 'V', c.s && 'S', c.r && 'R',
-    c.m && `M (${stripTags(typeof c.m === 'string' ? c.m : c.m.text)})`].filter(Boolean).join(', ');
-  const duration = ds => ds.map(d => {
-    if (d.type === 'instant') return 'Instantaneous';
-    if (d.type === 'permanent') return (d.ends || []).includes('trigger') ? 'Until dispelled or triggered' : 'Until dispelled';
-    if (d.type === 'special') return 'Special';
-    const len = plural(d.duration.amount, d.duration.type);
-    return d.concentration ? `Concentration, up to ${len}` : len;
-  }).join(' or ');
   const index = J('spells/index.json');
   for (const [source, f] of Object.entries(index)) {
     for (const raw of J('spells/' + f).spell) {
@@ -113,27 +134,46 @@ if (want('spells')) {
       for (const bySrc of Object.values(lookup[source.toLowerCase()]?.[sp.name.toLowerCase()]?.class || {})) Object.keys(bySrc).forEach(c => classes.add(c));
       const listed = classLists[source]?.[sp.name] || {};
       [...(listed.class || []), ...(listed.classVariant || [])].forEach(c => classes.add(c.name));
-      spells.push({
-        name: sp.name,
-        level_int: sp.level,
-        level: sp.level === 0 ? 'Cantrip' : `${ord(sp.level)}-level`,
-        school: SCHOOL[sp.school] || sp.school,
-        casting_time: (sp.time || []).map(time).join(' or '),
-        range: range(sp.range || {}),
-        components: components(sp.components || {}),
-        duration: duration(sp.duration || []),
-        concentration: (sp.duration || []).some(d => d.concentration) ? 'yes' : 'no',
-        ritual: sp.meta && sp.meta.ritual ? 'yes' : 'no',
-        desc: entriesToRulesText([...(sp.entries || []), ...(sp.entriesHigherLevel || [])]),
-        source: bookName(source),
-        book: bookName(source),
-        dnd_class: [...classes].sort().join(', '),
-        src: source.toLowerCase(),
-      });
+      spells.push(toAppSpell(sp, source, classes));
       have.add(norm(sp.name));
       note(added, 'spells', `${sp.name} [${source}]`);
     }
   }
+  if (!dry) fs.writeFileSync(file, JSON.stringify(spells, null, 2), 'utf8');
+}
+
+// ── 2014 versions of spells the 2024 PHB reprinted ──
+// spells.json kept one copy per name (the 2024 one); 2014 characters need the 2014 wording.
+// Every spell gets `edition` so the app can show each character its own version.
+if (want('spells2014')) {
+  const file = path.join(__dirname, 'spells.json');
+  const spells = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const SRC_2024 = new Set(['phb2024', 'xphb', 'efa', 'frhof', 'abh', 'lfl', 'xdmg']);
+  const lookup = J('generated/gendata-spell-source-lookup.json');
+  const index = J('spells/index.json');
+  const byName = {};
+  for (const [source, f] of Object.entries(index)) {
+    if (source === 'XPHB' || !isOfficial(source) || (BOOK[source]?.published || '') >= '2024-09-17') continue;
+    for (const sp of J('spells/' + f).spell) if (!byName[norm(sp.name)]) byName[norm(sp.name)] = { sp, source };
+  }
+  for (const s of spells) s.edition = SRC_2024.has(s.src) ? '2024' : '2014';
+  const have2014 = new Set(spells.filter(s => s.edition === '2014').map(s => norm(s.name)));
+  const additions = [];
+  for (const s of spells) {
+    if (s.edition !== '2024' || have2014.has(norm(s.name))) continue;
+    const found = byName[norm(s.name)];
+    if (!found) continue;
+    const { sp, source } = found;
+    const classes = new Set();
+    // 2014 class lists only (skip the 2024 PHB and later books)
+    for (const [bySrc, cls] of Object.entries(lookup[source.toLowerCase()]?.[sp.name.toLowerCase()]?.class || {}))
+      if (!['XPHB', 'EFA'].includes(bySrc)) Object.keys(cls).forEach(c => classes.add(c));
+    const entry = toAppSpell(sp, source, classes.size ? classes : s.dnd_class.split(', '));
+    additions.push({ ...entry, src: source === 'PHB' ? 'phb2014' : entry.src, edition: '2014' });
+    have2014.add(norm(s.name));
+    note(added, 'spells (2014 versions)', `${s.name} [${source}]`);
+  }
+  spells.push(...additions);
   if (!dry) fs.writeFileSync(file, JSON.stringify(spells, null, 2), 'utf8');
 }
 
