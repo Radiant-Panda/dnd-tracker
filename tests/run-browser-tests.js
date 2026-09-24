@@ -5,7 +5,7 @@ const path = require('path');
 
 const tests = process.argv.slice(2).length ? process.argv.slice(2)
   : ['class-switch.browser.test.js', 'features.browser.test.js', 'rules-text.browser.test.js', 'books.browser.test.js',
-     'spells.browser.test.js', 'proficiencies.browser.test.js'];
+     'spells.browser.test.js', 'proficiencies.browser.test.js', 'sheet.browser.test.js'];
 
 let failed = 0;
 for (const t of tests) {
