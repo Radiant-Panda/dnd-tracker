@@ -3067,7 +3067,6 @@ function renderCoreStats(ch, pb) {
   return `<div class="sheet-panel" style="margin-top:0.6rem">
     <div class="cs-section-label">Core Stats</div>
     <div class="cs-core-row"><span>Proficiency Bonus</span><span class="text-gold cs-core-val">+${pb}</span></div>
-    <div class="cs-core-row"><span>Passive Perception</span><span class="text-gold cs-core-val">${passivePerception(ch,pb)}</span></div>
     <div class="cs-core-row"><span>Inspiration</span>
       <button class="cs-inspiration-toggle ${ch.inspiration?'active':''}" onclick="toggleInspiration()" title="Inspiration">&#9733;</button>
     </div>
@@ -3402,6 +3401,8 @@ function renderAttacksSection(ch) {
 }
 
 function renderEquipmentCurrency(ch) {
+  const eqWeight = item => { const w = entryWeight(item, ch.edition === '2014' ? '2014' : '2024').weight;
+    return w ? `<span class="eq-weight">${+w.toFixed(2)} lb</span>` : ''; };
   const eqRows = (ch.equipment||[]).map((item, i) => {
     if (item && typeof item === 'object' && item._magic) {
       const color = MAGIC_RARITY_COLORS[item.rarity] || '#9ca3af';
@@ -3410,13 +3411,14 @@ function renderEquipmentCurrency(ch) {
       return `<li class="eq-item eq-item-magic">
         <span class="eq-magic-dot" style="background:${color}" title="${esc(MAGIC_RARITY_LABELS[item.rarity]||item.rarity)}"></span>
         <span class="eq-name">${esc(item.name)}${attuneTxt}</span>
+        ${eqWeight(item)}
         ${descBtn}
         <button class="btn btn-icon btn-danger" onclick="removeEquipment(${i})">&times;</button>
         ${item.desc ? `<div id="eqdesc-${i}" style="display:none;width:100%;font-size:0.75rem;color:var(--text-dim);padding:0.25rem 0 0.1rem;border-top:1px solid var(--border);margin-top:0.2rem">${esc(item.desc)}</div>` : ''}
       </li>`;
     }
     const label = typeof item === 'object' ? (item.name || '?') : item;
-    return `<li class="eq-item"><span class="eq-name">${esc(label)}</span><button class="btn btn-icon btn-danger" onclick="removeEquipment(${i})">&times;</button></li>`;
+    return `<li class="eq-item"><span class="eq-name">${esc(label)}</span>${eqWeight(item)}<button class="btn btn-icon btn-danger" onclick="removeEquipment(${i})">&times;</button></li>`;
   }).join('');
   return `<div class="sheet-panel" style="margin-top:0.6rem">
     <div class="cs-section-label">Equipment</div>
@@ -7000,18 +7002,44 @@ function renderNotesSection(ch) {
 // ── Sheet Tab System ─────────────────────────────────────────────────────────
 
 
-function renderEncumbrance(ch, maxCarry) {
-  const totalWeight = (ch.carryWeight || 0);
-  const pct = maxCarry > 0 ? Math.min(100, Math.round((totalWeight / maxCarry) * 100)) : 0;
-  const barClass = pct >= 100 ? 'low' : pct >= 66 ? 'mid' : '';
-  return `<div class="sheet-panel" style="margin-top:0.6rem">
+function renderEncumbrance(ch) {
+  const w = carriedWeight(ch), cap = carryCapacity(ch), status = encumbranceStatus(w.total, cap);
+  const pct = cap.carry > 0 ? Math.min(100, Math.round((w.total / cap.carry) * 100)) : 0;
+  const barClass = status.level !== 'ok' ? 'low' : pct >= 66 ? 'mid' : '';
+  const lb = n => `${+n.toFixed(2)} lb`;
+  const str = parseInt(ch.abilities?.str) || 10;
+  return `<div class="sheet-panel enc-panel" id="encumbrance-panel" style="margin-top:0.6rem">
     <div class="cs-section-label">Encumbrance</div>
-    <div class="flex gap-2" style="align-items:center;margin-bottom:0.4rem">
-      <input type="number" min="0" value="${totalWeight}" oninput="ch_field('carryWeight',+this.value)" style="width:60px;text-align:center;background:transparent;border:none;border-bottom:1px solid var(--border);color:var(--gold);font-weight:bold;font-size:1rem" title="Current carry weight">
-      <span class="text-dim" style="font-size:0.8rem">/ ${maxCarry} lbs (STR ${ch.abilities?.str || 10} &times; 15)</span>
-    </div>
+    <div class="enc-total"><span class="enc-carried">${+w.total.toFixed(2)} / ${cap.carry} lb</span>
+      <span class="text-dim">carry limit (STR ${str} × 15${cap.powerful ? ' × 2, Powerful Build' : ''})</span></div>
     <div class="hp-bar-wrap"><div class="hp-bar ${barClass}" style="width:${pct}%"></div></div>
+    ${status.text ? `<div class="enc-status enc-${status.level}">${esc(status.text)}</div>` : ''}
+    <div class="enc-breakdown">
+      <span>Items ${lb(w.items)}</span>
+      <span>Coins ${lb(w.coins)}</span>
+      <label title="Anything the sheet can't weigh: loot, mounts' packs, homebrew items">Other
+        <input type="number" min="0" step="0.5" value="${w.other}" oninput="setCarryOther(this.value)"> lb</label>
+    </div>
+    <div class="enc-note text-dim">Drag, lift or push up to ${cap.push} lb (Speed 5 ft above ${cap.carry} lb).</div>
+    ${w.unknown.length ? `<div class="enc-note enc-unknown">No weight known for: ${w.unknown.map(esc).join(', ')} — add them under Other.</div>` : ''}
   </div>`;
+}
+// Redraws just this panel, so typing coins or Other keeps focus in the input
+function _refreshEncumbrance() {
+  const ch = db.characters[currentCharId], el = document.getElementById('encumbrance-panel');
+  if (ch && el) el.outerHTML = renderEncumbrance(ch);
+}
+function setCarryOther(value) {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  ch.carryWeight = Math.max(0, parseFloat(value) || 0);
+  _queueSave();
+  const el = document.getElementById('encumbrance-panel'); if (!el) return;
+  // Swap in the new total, bar and status but keep the input being typed in
+  const next = document.createElement('div'); next.innerHTML = renderEncumbrance(ch);
+  el.querySelector('.enc-total').replaceWith(next.querySelector('.enc-total'));
+  el.querySelector('.hp-bar-wrap').replaceWith(next.querySelector('.hp-bar-wrap'));
+  el.querySelector('.enc-status')?.remove();
+  const status = next.querySelector('.enc-status'); if (status) el.querySelector('.hp-bar-wrap').after(status);
 }
 
 
@@ -7097,18 +7125,19 @@ function renderDefensesSection(ch) {
 }
 
 function renderSensesSection(ch, pb) {
-  const passPerc = 10 + skillBonus(ch, 'Perception',   'wis', pb);
-  const passInv  = 10 + skillBonus(ch, 'Investigation','int', pb);
-  const passIns  = 10 + skillBonus(ch, 'Insight',      'wis', pb);
+  const passive = (skill, ab) => 10 + skillBonus(ch, skill, ab, pb);
+  const senses = detectSenses(ch);
   return `<div class="sheet-panel" style="margin-top:0.6rem">
     <div class="cs-section-label">Senses</div>
     <div class="senses-passive-grid">
-      <div class="senses-passive-row"><span class="cs-field-label">Passive Perception</span><span class="senses-val">${passPerc}</span></div>
-      <div class="senses-passive-row"><span class="cs-field-label">Passive Investigation</span><span class="senses-val">${passInv}</span></div>
-      <div class="senses-passive-row"><span class="cs-field-label">Passive Insight</span><span class="senses-val">${passIns}</span></div>
+      <div class="senses-passive-row"><span>Passive Perception</span><span class="senses-val">${passivePerception(ch, pb)}</span></div>
+      <div class="senses-passive-row"><span>Passive Investigation</span><span class="senses-val">${passive('Investigation', 'int')}</span></div>
+      <div class="senses-passive-row"><span>Passive Insight</span><span class="senses-val">${passive('Insight', 'wis')}</span></div>
     </div>
-    <div class="cs-field-label" style="margin:0.6rem 0 0.2rem">Other Senses</div>
-    <textarea class="sheet-textarea" rows="2" placeholder="Darkvision 60 ft., Tremorsense 30 ft...." oninput="ch_field('otherSenses',this.value)">${esc(ch.otherSenses || '')}</textarea>
+    <div class="senses-special">${senses.length
+      ? senses.map(s => `<span class="sense-chip">${s.sense} ${s.range} ft<span class="prof-chip-src">${esc(s.source)}</span></span>`).join('')
+      : '<span class="feature-empty">No special senses.</span>'}</div>
+    <textarea class="sheet-textarea" rows="2" placeholder="Other senses — from items, spells…" oninput="ch_field('otherSenses',this.value)">${esc(ch.otherSenses || '')}</textarea>
   </div>`;
 }
 
@@ -7632,6 +7661,7 @@ function renderCharacterSheet() {
         ${renderCoreStats(ch, pb)}
         ${renderSavingThrows(ch, pb)}
         ${renderSkillList(ch, pb)}
+        ${renderSensesSection(ch, pb)}
       </div>
       <div class="cs-col-mid">
         ${renderCombatSection(ch)}
@@ -7640,6 +7670,7 @@ function renderCharacterSheet() {
         ${renderAttacksSection(ch)}
         <div class="floral-divider">✾ ✿ ✾</div>
         ${renderEquipmentCurrency(ch)}
+        ${renderEncumbrance(ch)}
         ${renderSpellsSection(ch)}
       </div>
       <div class="cs-col-right">
@@ -8666,6 +8697,7 @@ function updateCurrency(coin, value) {
   ch.currency = ch.currency||{cp:0,sp:0,ep:0,gp:0,pp:0};
   ch.currency[coin] = Math.max(0, parseInt(value)||0);
   _queueSave();
+  _refreshEncumbrance();
 }
 function addEquipment() {
   const input = document.getElementById('eq-input'); const val=input.value.trim(); if(!val) return;

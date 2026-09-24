@@ -131,6 +131,41 @@ const { launch, openApp } = require('./browser');
     check('used hit dice are capped at the new level', ch.combat.hitDiceUsed.Fighter === 2, ch.combat.hitDiceUsed);
   });
 
+  // 12. Senses panel
+  await pg.evaluate(async () => {
+    const panel = label => [...document.querySelectorAll('.sheet-panel')].find(el => el.querySelector('.cs-section-label')?.textContent.trim() === label);
+    let ch = mk('Fighter', 1); ch.abilities.wis = 14; ch.abilities.int = 12; ch.skillProficiencies = ['Perception']; changeRace('2024|Elf');
+    const senses = panel('Senses');
+    check('the sheet has a Senses panel', !!senses, null);
+    const txt = (senses?.textContent || '').replace(/\s+/g, ' ');
+    check('Senses shows passive Perception, Investigation and Insight', /Passive Perception\s*14/.test(txt) && /Passive Investigation\s*11/.test(txt) && /Passive Insight\s*12/.test(txt), txt);
+    check('Senses shows darkvision from the species', /Darkvision 60 ft/.test(txt) && /Elf/.test(txt), txt);
+    check('Core Stats no longer repeats passive Perception', !/Passive Perception/.test(panel('Core Stats')?.textContent || ''), panel('Core Stats')?.textContent);
+    saveData(db); type(senses.querySelector('textarea'), 'Tremorsense 10 ft (boots)'); await sleep(900);
+    check('other senses notes are saved', stored(ch.id).otherSenses === 'Tremorsense 10 ft (boots)', stored(ch.id).otherSenses);
+    ch = mk('Fighter', 1); changeRace('2024|Human');
+    check('no special senses reads as none', /No special senses/.test(panel('Senses')?.textContent || ''), panel('Senses')?.textContent);
+
+    // 13. Encumbrance panel
+    ch = mk('Fighter', 1); ch.abilities.str = 10; ch.equipment = ['Longsword', '20 arrows', 'Lucky pebble']; ch.currency = { cp: 0, sp: 0, ep: 0, gp: 100, pp: 0 }; renderApp();
+    const enc = () => (panel('Encumbrance')?.textContent || '').replace(/\s+/g, ' ');
+    check('the sheet has an Encumbrance panel', !!panel('Encumbrance'), null);
+    check('it adds items and coins against STR × 15', /\b6 \/ 150 lb/.test(enc()), enc());
+    check('items with no known weight are named', /Lucky pebble/.test(enc()), enc());
+    check('drag/lift/push limit is shown', /300 lb/.test(enc()), enc());
+    const eqWeights = [...document.querySelectorAll('.eq-item .eq-weight')].map(e => e.textContent.trim());
+    check('equipment rows show their weight', eqWeights.includes('3 lb') && eqWeights.includes('1 lb'), eqWeights);
+    const gp = document.querySelectorAll('.currency-cell input')[3]; gp.focus(); type(gp, '600');
+    check('typing coins updates the total straight away', /\b16 \/ 150 lb/.test(enc()), enc());
+    check('…without losing focus', document.activeElement === gp, document.activeElement?.outerHTML?.slice(0, 80));
+    const other = panel('Encumbrance').querySelector('input'); other.focus(); type(other, '10');
+    check('the Other amount adds to the total', /\b26 \/ 150 lb/.test(enc()) && document.activeElement === other, enc());
+    ch.abilities.str = 3; ch.equipment = ['Chain Mail']; ch.currency = {}; ch.carryWeight = 0; renderApp();
+    check('over capacity (55 lb vs 45) says so', /Over capacity/.test(enc()), enc());
+    ch.abilities.str = 1; renderApp();
+    check('past the drag limit (55 lb vs 30) is too heavy to move', /Too heavy to move/.test(enc()), enc());
+  });
+
   const out = await pg.evaluate(() => out);
   out.forEach(l => console.log(l));
   if (errs.length) console.log('PAGE ERRORS:', errs);
