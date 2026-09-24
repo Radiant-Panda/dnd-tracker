@@ -3696,7 +3696,7 @@ async function fetchAllSpells() {
   spellFetching = true;
   setSpellStatus('✾ Loading spells…');
   try {
-    const res = await fetch('./data/spells.json?v=3');
+    const res = await fetch('./data/spells.json?v=4');
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const all = await res.json();
     allSpellsDb = Array.isArray(all) ? all : [];
@@ -3817,6 +3817,11 @@ function renderFilterBar() {
     {val:'tce',label:"Tasha's (TCE)"},
     {val:'egw',label:"Explorer's Guide (EGW)"},
   ];
+  // Every other book in the spell data, alphabetically
+  const knownSrc = new Set(sources.map(s => s.val));
+  const extra = new Map();
+  (allSpellsDb || []).forEach(sp => { if (sp.src && !knownSrc.has(sp.src)) extra.set(sp.src, sp.book || sp.src); });
+  [...extra].sort((a, b) => a[1].localeCompare(b[1])).forEach(([val, label]) => sources.push({ val, label }));
   return `<div class="spell-filter-bar">
     <div class="spell-search-wrap">
       <span class="spell-search-icon">✾</span>
@@ -3876,7 +3881,7 @@ function renderSpellResultsHtml(ch) {
           const lvlLabel = sp.level_int === 0 ? 'Cantrip' : sp.level || '';
           const inK = known.has(sp.name);
           const inP = prepared.has(sp.name);
-          const srcInfo = _SPELL_SRC_DISPLAY[sp.source] || {abbr:'?',color:'#7b6d8d'};
+          const srcInfo = _SPELL_SRC_DISPLAY[sp.source] || {abbr:(sp.src||'?').toUpperCase(),color:'#7b6d8d'};
           const safeData = encodeURIComponent(JSON.stringify({name:sp.name,level_int:sp.level_int||0,school:sp.school||'',casting_time:sp.casting_time||'',range:sp.range||'',components:sp.components||'',concentration:sp.concentration||'no',ritual:sp.ritual||'no',dnd_class:sp.dnd_class||'',_custom:sp._custom||false}));
           return `<div class="spell-browser-row">
             <div class="spell-browser-left">
