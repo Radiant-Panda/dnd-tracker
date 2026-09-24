@@ -4181,3 +4181,9 @@ header::after {
 .sf-res-row .feat-res-mini { margin-left: 0; }
 .levelup-feat-desc { flex-basis: 100%; }
 .rt-table td.rt-long { text-align: left; }
+
+/* Priced material component tag and spell item bonus */
+.spell-tag.cost { color: #f59e0b; border: 1px solid rgba(245,158,11,0.45); font-weight: 600; white-space: nowrap; }
+.spell-bonus-row { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; font-size: 0.7rem; color: var(--text-dim); margin: 0.35rem 0 0.5rem; }
+.spell-bonus-row label { display: inline-flex; align-items: center; gap: 0.25rem; }
+.spell-bonus-row input { width: 3.2rem; padding: 0.1rem 0.25rem; font-size: 0.75rem; }
