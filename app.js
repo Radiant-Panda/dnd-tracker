@@ -1188,21 +1188,58 @@ function deleteCharacter(id) {
 }
 
 // ── NPC Manager ───────────────────────────────────────────────────────────────
+let _npcSearch = '', _npcDisp = '', _npcGroup = '';
+function _npcName(npc) { return (npc?.name || '').trim() || 'Unnamed NPC'; }
 function renderNpcCards(campaign) {
   const npcs = (campaign.npcs||[]).map(id => db.npcs[id]).filter(Boolean);
   if (npcs.length === 0) return `<div class="empty-frame"><div class="empty-frame-header">✦ ───── ✾ ───── ✦</div><div class="empty"><div class="empty-icon empty-icon-themed"><svg viewBox="0 0 24 24" width="3rem" height="3rem" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="7" r="4"/><path d="M12 14c-6.075 0-9 2.686-9 4v1h18v-1c0-1.314-2.925-4-9-4z"/></svg></div><p>No NPCs yet.</p></div></div>`;
-  return `<div class="card-grid">${npcs.map(npc => `
-    <div class="card" onclick="showNpc('${npc.id}')">
-      <div class="badge">${esc(npc.role||'NPC')}</div>
-      <div class="card-title">${esc(npc.name||'Unnamed')}</div>
-      <div class="card-sub">${esc(npc.race||'')}${npc.location?' &bull; '+esc(npc.location):''}</div>
-      ${npc.disposition?`<div class="mt-1"><span class="condition-tag" style="background:${dispositionColor(npc.disposition)}">${esc(npc.disposition)}</span></div>`:''}
+  return `<div class="npc-toolbar">
+      <input type="search" id="npc-search" placeholder="Search name, role or location…" value="${esc(_npcSearch)}" oninput="setNpcSearch(this.value)">
+      <div class="npc-disp-filters">${['', 'Friendly', 'Neutral', 'Hostile', 'Unknown'].map(d =>
+        `<button class="btn btn-sm${_npcDisp === d ? ' btn-primary' : ''}" onclick="setNpcDispositionFilter('${d}')">${d || 'All'}</button>`).join('')}</div>
+      <select id="npc-group" onchange="setNpcGroupBy(this.value)">
+        <option value=""${!_npcGroup ? ' selected' : ''}>No grouping</option>
+        <option value="location"${_npcGroup === 'location' ? ' selected' : ''}>Group by location</option>
+        <option value="disposition"${_npcGroup === 'disposition' ? ' selected' : ''}>Group by disposition</option>
+      </select>
+    </div>
+    <div id="npc-grid">${_npcGridHtml(npcs)}</div>`;
+}
+function _npcGridHtml(npcs) {
+  const q = _npcSearch.trim().toLowerCase();
+  const shown = npcs.filter(n => (!_npcDisp || n.disposition === _npcDisp)
+    && (!q || [n.name, n.role, n.location, n.race].some(v => (v || '').toLowerCase().includes(q))));
+  if (!shown.length) return `<p class="text-dim">No NPCs match.</p>`;
+  if (!_npcGroup) return `<div class="card-grid">${shown.map(_npcCardHtml).join('')}</div>`;
+  const key = n => (_npcGroup === 'location' ? n.location : n.disposition) || (_npcGroup === 'location' ? 'No location' : 'Unknown');
+  const groups = {};
+  shown.forEach(n => (groups[key(n)] = groups[key(n)] || []).push(n));
+  return Object.keys(groups).sort((a, b) => a.localeCompare(b)).map(k => `<div class="npc-group">
+      <div class="npc-group-heading">${esc(k)} <span class="spell-count">${groups[k].length}</span></div>
+      <div class="card-grid">${groups[k].map(_npcCardHtml).join('')}</div>
+    </div>`).join('');
+}
+function _npcCardHtml(npc) {
+  const sub = [npc.role, npc.race, npc.location].filter(Boolean).map(esc).join(' &bull; ');
+  return `<div class="card" onclick="showNpc('${npc.id}')">
+      <div class="card-title npc-card-title">${esc(_npcName(npc))}</div>
+      ${sub ? `<div class="card-sub">${sub}</div>` : ''}
+      ${npc.statBlock ? `<div class="card-sub npc-card-stats">⚔ ${esc(npc.statSource || 'Stat block')} &middot; AC ${npc.ac ?? 10} &middot; HP ${npc.hp ?? 0}/${npc.maxHP ?? 0}</div>` : ''}
+      ${npc.disposition ? `<div class="npc-card-disp"><span class="npc-disposition npc-disp-${esc(npc.disposition.toLowerCase())}">${esc(npc.disposition)}</span></div>` : ''}
       <div class="card-actions" onclick="event.stopPropagation()">
         <button class="btn btn-sm" onclick="showNpc('${npc.id}')">Open</button>
         <button class="btn btn-sm btn-danger" onclick="deleteNpc('${npc.id}')">Delete</button>
       </div>
-    </div>`).join('')}</div>`;
+    </div>`;
 }
+// Search redraws only the grid so the search box keeps focus
+function setNpcSearch(v) {
+  _npcSearch = v;
+  const c = getCampaign(), grid = document.getElementById('npc-grid');
+  if (c && grid) grid.innerHTML = _npcGridHtml((c.npcs || []).map(id => db.npcs[id]).filter(Boolean));
+}
+function setNpcDispositionFilter(d) { _npcDisp = d; renderApp(); }
+function setNpcGroupBy(g) { _npcGroup = g; renderApp(); }
 function dispositionColor(d) { return ({Friendly:'#2d5a2d',Neutral:'#4a3d1a',Hostile:'#5a1a1a',Unknown:'#1a2d4a'})[d]||'#2c1f0e'; }
 function openNewNpcModal() {
   openModal(`<h2>Add NPC</h2>
@@ -1316,7 +1353,7 @@ function renderNpcSheet() {
   if (!npc) return '<p>NPC not found.</p>';
   return `
     <div class="section-header">
-      <div><h2>${esc(npc.name||'Unnamed NPC')}</h2><div class="text-dim" style="font-size:0.85rem">${esc(npc.role||'NPC')} &bull; ${esc(npc.race||'')} &bull; ${esc(npc.location||'Unknown location')}</div></div>
+      <div><h2>${esc(_npcName(npc))}</h2><div class="text-dim" style="font-size:0.85rem">${[npc.role || 'NPC', npc.race, npc.location || 'Unknown location'].filter(Boolean).map(esc).join(' &bull; ')}</div></div>
       <button id="npc-save-btn" class="btn btn-primary btn-sm" onclick="saveNpcSheet()">Save</button>
     </div>
     <div class="sheet-grid">
@@ -1331,13 +1368,16 @@ function renderNpcSheet() {
             <select onchange="npc_field('disposition',this.value)">${['Friendly','Neutral','Hostile','Unknown'].map(d=>`<option${npc.disposition===d?' selected':''}>${d}</option>`).join('')}</select>
           </div>
         </div>
-        <div class="sheet-panel" style="margin-top:0.8rem">
+        <div class="sheet-panel npc-combat-stats" style="margin-top:0.8rem">
           <div class="panel-title">Combat Stats</div>
           <div class="form-row">
-            <div class="form-group"><label>AC</label><input type="number" value="${npc.ac||10}" oninput="npc_field('ac',+this.value)"></div>
-            <div class="form-group"><label>Max HP</label><input type="number" value="${npc.maxHP||10}" oninput="npc_field('maxHP',+this.value)"></div>
-            <div class="form-group"><label>Current HP</label><input type="number" value="${npc.hp||10}" oninput="npc_field('hp',+this.value)"></div>
+            <div class="form-group"><label>AC</label><input type="number" data-field="ac" value="${npc.ac ?? 10}" oninput="npc_field('ac',+this.value)"></div>
+            <div class="form-group"><label>Max HP</label><input type="number" data-field="maxHP" value="${npc.maxHP ?? 10}" oninput="npc_field('maxHP',+this.value)"></div>
+            <div class="form-group"><label>Current HP</label><input type="number" data-field="hp" value="${npc.hp ?? 10}" oninput="npc_field('hp',+this.value)"></div>
           </div>
+          ${npc.statBlock
+            ? `<div class="text-dim" style="font-size:0.8rem">Initiative ${_npcInitBonus(npc) >= 0 ? '+' : ''}${_npcInitBonus(npc)} (DEX, from the stat block)</div>`
+            : `<div class="form-group"><label>Initiative bonus</label><input type="number" data-field="initBonus" value="${npc.initBonus ?? 0}" oninput="npc_field('initBonus',+this.value)"></div>`}
         </div>
       </div>
       <div>
@@ -1346,9 +1386,40 @@ function renderNpcSheet() {
           return `<div class="sheet-panel" style="margin-bottom:0.8rem"><div class="panel-title">${label}</div><textarea class="sheet-textarea" rows="3" oninput="npc_field('${field}',this.value)" placeholder="${ph}">${esc(npc[field])}</textarea></div>`;
         }).join('')}
       </div>
-    </div>`;
+    </div>
+        <div class="sheet-panel npc-stat-block" style="margin-top:0.8rem">
+          <div class="panel-title">Stat Block</div>
+          ${npc.statBlock ? `
+            <div class="npc-sb-source">${esc(npc.statSource || 'Custom')}</div>
+            <div class="npc-sb-body">${renderCombatantStatBlock(npc.statBlock, null, { quickBar: false })}</div>
+            <div class="flex gap-1" style="margin-top:0.6rem">
+              <button class="btn btn-sm" onclick="openNpcStatBlockPicker('${npc.id}')">Change</button>
+              <button class="btn btn-sm btn-danger" onclick="removeNpcStatBlock('${npc.id}')">Remove</button>
+            </div>`
+          : `<p class="text-dim" style="font-size:0.82rem;margin:0 0 0.6rem">Give ${esc(_npcName(npc))} a monster's stats (e.g. Bandit Captain, Mage, Noble) to fill in AC, HP and actions for combat.</p>
+            <button class="btn btn-sm" onclick="openNpcStatBlockPicker('${npc.id}')">Choose stat block</button>`}
+        </div>`;
 }
 function npc_field(field, value) { db.npcs[currentNpcId][field] = value; _queueSave(); }
+// Initiative bonus: DEX from the stat block, else the number set on the NPC's page
+function _npcInitBonus(npc) {
+  if (!npc) return 0;
+  return npc.statBlock ? mod(npc.statBlock.dexterity || 10) : (parseInt(npc.initBonus) || 0);
+}
+async function openNpcStatBlockPicker(npcId) { await openMonsterSearchModal(npcId); }
+function _applyMonsterToNpc(npcId, m) {
+  const npc = db.npcs[npcId]; if (!npc || !m) return;
+  const { statBlock, legendaryMax } = _statBlockFromMonster(m);
+  npc.statBlock = statBlock; npc.statSource = m.name; npc.legendaryMax = legendaryMax;
+  npc.ac = m.ac || npc.ac; npc.maxHP = m.hp || npc.maxHP; npc.hp = npc.maxHP; npc.tempHP = 0;
+  _monsterPickNpcId = null;
+  saveData(db); closeModal(); renderApp();
+}
+function removeNpcStatBlock(npcId) {
+  const npc = db.npcs[npcId]; if (!npc) return;
+  delete npc.statBlock; delete npc.statSource; delete npc.legendaryMax;
+  saveData(db); renderApp();
+}
 function saveNpcSheet() {
   saveData(db);
   const btn = document.getElementById('npc-save-btn');
@@ -1531,9 +1602,15 @@ function getInitiative() { const c=getCampaign(); if(!c.initiative) c.initiative
 function _syncLinkedCombatants(init) {
   (init?.combatants || []).forEach(cb => {
     const ch = cb.charId && db.characters[cb.charId];
-    if (!ch?.combat) return;
-    cb.hp = ch.combat.currentHP; cb.tempHP = ch.combat.tempHP || 0; cb.maxHP = ch.combat.maxHP; cb.ac = ch.combat.ac;
+    if (ch?.combat) { cb.hp = ch.combat.currentHP; cb.tempHP = ch.combat.tempHP || 0; cb.maxHP = ch.combat.maxHP; cb.ac = ch.combat.ac; return; }
+    const npc = cb.npcId && db.npcs[cb.npcId];
+    if (npc) { cb.hp = npc.hp ?? cb.hp; cb.maxHP = npc.maxHP ?? cb.maxHP; cb.ac = npc.ac ?? cb.ac; cb.tempHP = npc.tempHP || 0; }
   });
+}
+// After the tracker changes a linked NPC's HP, write it back to the NPC
+function _pushToNpc(cb) {
+  const npc = cb?.npcId && db.npcs[cb.npcId];
+  if (npc) { npc.hp = cb.hp; npc.tempHP = cb.tempHP || 0; }
 }
 // Monsters and NPCs at 0 HP are out of the fight; characters at 0 HP still take turns (death saves)
 function _isDefeated(cb) { return !cb.charId && cb.type !== 'player' && cb.maxHP > 0 && cb.hp <= 0; }
@@ -1686,7 +1763,7 @@ function openAddCombatantModal() {
     ${pcs.length>0||npcs.length>0?`<hr class="divider"><div class="panel-title" style="margin-bottom:0.5rem">Quick Add from Campaign</div>
     <div class="flex gap-1 flex-wrap">
       ${pcs.map(ch=>`<button class="btn btn-sm" onclick="quickAddCombatant('${ch.id}','player')">${esc(ch.name)}</button>`).join('')}
-      ${npcs.map(n=>`<button class="btn btn-sm" onclick="quickAddCombatant('${n.id}','npc')">${esc(n.name)}</button>`).join('')}
+      ${npcs.map(n=>`<button class="btn btn-sm" onclick="quickAddCombatant('${n.id}','npc')">${esc(_npcName(n))}</button>`).join('')}
     </div>`:''}
     <div class="form-actions"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="addCombatant()">Add</button></div>`);
   document.getElementById('cb-name').focus();
@@ -1707,14 +1784,14 @@ function quickAddCombatant(entityId, type) {
     name=ch.name; ac=ch.combat.ac; maxHP=ch.combat.maxHP; hp=ch.combat.currentHP;
     charId=entityId;
   } else {
-    const npc=db.npcs[entityId]; name=npc.name; ac=npc.ac||10; maxHP=npc.maxHP||10; hp=npc.hp||10;
+    const npc=db.npcs[entityId]; name=_npcName(npc); ac=npc.ac ?? 10; maxHP=npc.maxHP ?? 10; hp=npc.hp ?? maxHP;
   }
   const d20 = Math.ceil(Math.random()*20);
-  const initBonus = type === 'player' ? initiativeBonus(db.characters[entityId]) : 0;
+  const initBonus = type === 'player' ? initiativeBonus(db.characters[entityId]) : type === 'npc' ? _npcInitBonus(db.npcs[entityId]) : 0;
   const rolled = d20 + initBonus;
 
   // Store state and open modal
-  _quickAddState = { charId, name, type, ac, hp, maxHP, rolled };
+  _quickAddState = { charId, npcId: type === 'npc' ? entityId : null, name, type, ac, hp, maxHP, rolled };
   openModal(`
     <div class="panel surface2">
       <div class="panel-title">Add to Initiative</div>
@@ -1736,9 +1813,18 @@ function quickAddCombatant(entityId, type) {
 function _confirmQuickAdd() {
   if (!_quickAddState) return;
   const initiative = parseInt(document.getElementById('qa-init').value) || _quickAddState.rolled;
-  const { charId, name, type, ac, hp, maxHP } = _quickAddState;
-
-  _insertCombatant(getInitiative(), { id:uid(), charId, name, initiative, ac, hp, maxHP, type, conditions:[], notes:'', tempHP:0 });
+  const { charId, npcId, type, ac, hp, maxHP } = _quickAddState;
+  const init = getInitiative();
+  const name = _uniqueCombatantName(init, _quickAddState.name);
+  const cb = { id:uid(), charId, name, initiative, ac, hp, maxHP, type, conditions:[], notes:'', tempHP:0 };
+  const npc = npcId && db.npcs[npcId];
+  if (npc) {
+    // The first copy is the NPC itself; extra copies ("Guard 2") keep their own HP
+    if (!init.combatants.some(c => c.npcId === npcId)) { cb.npcId = npcId; cb.tempHP = npc.tempHP || 0; }
+    if (npc.statBlock) cb.statBlock = JSON.parse(JSON.stringify(npc.statBlock));
+    if (npc.legendaryMax) { cb.legendaryMax = npc.legendaryMax; cb.legendaryUsed = 0; }
+  }
+  _insertCombatant(init, cb);
   combatLog(`${name} added to combat (init ${initiative})`);
   _quickAddState = null;
   saveData(db); closeModal(); renderApp();
@@ -1900,6 +1986,12 @@ function rerollCombatantInitiative(i) {
     combatLog(`${cb.name} re-rolled initiative: ${newInitiative}`);
     saveData(db);
     renderApp();
+  } else if (cb.npcId && db.npcs[cb.npcId]) {
+    const bonus = _npcInitBonus(db.npcs[cb.npcId]);
+    cb.initiative = roll + bonus;
+    combatLog(`${cb.name} re-rolled initiative: ${cb.initiative} (d20 ${roll} ${bonus >= 0 ? '+' : '−'} ${Math.abs(bonus)})`);
+    saveData(db);
+    renderApp();
   } else if (cb.charId && db.characters[cb.charId]) {
     // Linked character: d20 + their initiative bonus
     const bonus = initiativeBonus(db.characters[cb.charId]);
@@ -1943,6 +2035,7 @@ function _damageCombatant(i, amt) {
     let remaining = amt;
     if (cb.tempHP > 0) { const absorbed = Math.min(cb.tempHP, remaining); cb.tempHP -= absorbed; remaining -= absorbed; }
     cb.hp = Math.max(0, cb.hp - remaining);
+    _pushToNpc(cb);
   }
   _syncLinkedCombatants(init);
   combatLog(`${cb.name} took ${amt} damage (HP ${oldHP}→${cb.hp})${_isDefeated(cb) ? ' — defeated' : ''}`);
@@ -1958,7 +2051,7 @@ function healCombatant(i,amt) {
   const oldHP = cb.hp;
   const ch = cb.charId && db.characters[cb.charId];
   if (ch) _heal(ch, amt);
-  else cb.hp = Math.min(cb.maxHP, cb.hp + amt);
+  else { cb.hp = Math.min(cb.maxHP, cb.hp + amt); _pushToNpc(cb); }
   _syncLinkedCombatants(init);
   combatLog(`${cb.name} healed ${amt} HP (HP ${oldHP}→${cb.hp})`);
   saveData(db); renderApp();
@@ -2266,8 +2359,11 @@ const MONSTER_BOOK_COLORS = {
   VER:'#e87070', QIS:'#7b9dd4', PHB24:'#c084fc', XMM:'#c084fc',
 };
 
-async function openMonsterSearchModal() {
-  openModal(`<h2>&#128269; Monster Search</h2>
+let _monsterPickNpcId = null;   // set when choosing a stat block for an NPC
+async function openMonsterSearchModal(pickForNpcId = null) {
+  _monsterPickNpcId = pickForNpcId && db.npcs[pickForNpcId] ? pickForNpcId : null;
+  const title = _monsterPickNpcId ? `Choose a stat block for ${esc(_npcName(db.npcs[_monsterPickNpcId]))}` : '&#128269; Monster Search';
+  openModal(`<h2>${title}</h2>
     <div class="flex gap-1" style="margin-bottom:0.5rem">
       <input type="text" id="monster-query" placeholder="Search monsters..." style="flex:1" oninput="searchMonsters()">
     </div>
@@ -2432,17 +2528,13 @@ function renderMonsterStatBlock(m) {
       <div class="sb-body">${body}</div>
     </div>
     <div class="sb-footer">
-      <button class="btn btn-primary" style="width:100%" onclick="addMonsterToCombat(_pendingMonster)">+ Add to Initiative</button>
+      ${_monsterPickNpcId && db.npcs[_monsterPickNpcId]
+        ? `<button class="btn btn-primary" style="width:100%" onclick="_applyMonsterToNpc(_monsterPickNpcId, _pendingMonster)">Use for ${esc(_npcName(db.npcs[_monsterPickNpcId]))}</button>`
+        : `<button class="btn btn-primary" style="width:100%" onclick="addMonsterToCombat(_pendingMonster)">+ Add to Initiative</button>`}
     </div>`;
 }
 
-function addMonsterToCombat(m) {
-  const init = getInitiative();
-  const dexMod = Math.floor(((m.dex || m.dexterity || 10) - 10) / 2);
-  const initiative = Math.ceil(Math.random() * 20) + dexMod;
-  const ac = m.ac || 10;
-  const hp = m.hp || 10;
-
+function _statBlockFromMonster(m) {
   const statBlock = {
     size: m.size || '', type: m.type || '', alignment: m.alignment || '',
     hit_points_roll: m.hp_formula || '',
@@ -2464,11 +2556,22 @@ function addMonsterToCombat(m) {
     reactions: m.reactions || [],
     legendary_actions: m.legendary_actions || [],
   };
-
-  // A second Goblin becomes "Goblin 2", a third "Goblin 3"
-  const base = m.name, numbered = new RegExp('^' + base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' \\d+$');
+  return { statBlock, legendaryMax: m.legendary_count || 0 };
+}
+// A second Goblin becomes "Goblin 2", a third "Goblin 3"
+function _uniqueCombatantName(init, base) {
+  const numbered = new RegExp('^' + base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' \\d+$');
   const same = init.combatants.filter(c => c.name === base || numbered.test(c.name)).length;
-  const name = same ? `${base} ${same + 1}` : base;
+  return same ? `${base} ${same + 1}` : base;
+}
+function addMonsterToCombat(m) {
+  const init = getInitiative();
+  const dexMod = Math.floor(((m.dex || m.dexterity || 10) - 10) / 2);
+  const initiative = Math.ceil(Math.random() * 20) + dexMod;
+  const ac = m.ac || 10;
+  const hp = m.hp || 10;
+  const { statBlock } = _statBlockFromMonster(m);
+  const name = _uniqueCombatantName(init, m.name);
   const combatant = {
     id: uid(), name, initiative, ac, hp, maxHP: hp,
     type: 'monster', conditions: [], statBlock, notes: '', tempHP: 0
@@ -2560,7 +2663,7 @@ function rollActionDamage(btnEl, diceStr) {
   setTimeout(() => resultEl.classList.remove('dice-flash'), 400);
 }
 
-function renderCombatantStatBlock(sb, combatantIdx) {
+function renderCombatantStatBlock(sb, combatantIdx, opts = {}) {
   const abilityMod = s => { const mod=Math.floor((s-10)/2); return (mod>=0?'+':'')+mod; };
 
   // Quick-reference action buttons
@@ -2571,7 +2674,7 @@ function renderCombatantStatBlock(sb, combatantIdx) {
   (sb.legendary_actions||[]).forEach((a,j) => allActions.push({...a, idx:j, type:'legendary'}));
 
   let html = '';
-  if (allActions.length) {
+  if (allActions.length && opts.quickBar !== false) {
     html += `<div class="action-quick-bar">`;
     allActions.forEach(a => {
       const atk = parseAttackInfo(a.desc||'');
@@ -2698,6 +2801,7 @@ const CharacterStore = {
     if (!cb) return;
     cb.hp = Math.max(0, Math.min(newHP, cb.maxHP));
     cb.tempHP = Math.max(0, newTempHP || 0);
+    _pushToNpc(cb);
     if (cb.type === 'player' && cb.charId) {
       const ch = db.characters[cb.charId];
       if (ch) {

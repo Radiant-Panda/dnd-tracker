@@ -159,6 +159,27 @@ main {
   word-wrap: break-word;
 }
 .card-sub { font-size: 0.82rem; color: var(--text-dim); }
+/* NPCs: search / filter bar, readable disposition tags, groups */
+.npc-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; margin-bottom: 1rem; }
+.npc-toolbar input[type="search"] { flex: 1 1 220px; min-width: 0; background: var(--surface2); border: 1px solid var(--border);
+  border-radius: var(--radius); color: var(--text); font-family: inherit; font-size: 0.9rem; padding: 0.45rem 0.6rem; }
+.npc-toolbar input[type="search"]:focus { outline: none; border-color: var(--gold); }
+.npc-toolbar select { width: auto; }
+.npc-disp-filters { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.npc-group { display: grid; gap: 0.5rem; margin-bottom: 1.1rem; }
+.npc-group-heading { font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--gold); }
+.card-title.npc-card-title { padding-right: 0; }
+.npc-card-disp { margin-top: 0.5rem; }
+.npc-card-stats { margin-top: 0.2rem; }
+.npc-disposition { display: inline-block; font-size: 0.72rem; padding: 0.2rem 0.6rem; border-radius: 99px; color: #f1edf5; }
+.npc-disp-friendly { background: #2d5a2d; }
+.npc-disp-neutral { background: #5a4a1a; }
+.npc-disp-hostile { background: #6a1f1f; }
+.npc-disp-unknown { background: #1f3452; }
+.npc-sb-source { font-weight: bold; color: var(--gold-lt); margin-bottom: 0.4rem; }
+.npc-sb-body { font-size: 0.85rem; line-height: 1.5; max-width: 80ch; }
+.npc-sb-body .ability-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); max-width: 520px; }
+@media (max-width: 560px) { .npc-sb-body .ability-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 .card-actions {
   display: flex;
   gap: 0.4rem;
