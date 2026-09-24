@@ -944,7 +944,6 @@ let currentView = 'campaigns';
 let currentCampaignId = null;
 let currentCharId = null;
 let currentNpcId = null;
-let currentTab = 'core'; // still used by campaign tabs
 let monsterCache = null;
 let charPanelOpen = false;
 let _combatLogOpen = false;
@@ -1173,17 +1172,6 @@ function renderCharacterCards(campaign) {
 }
 
 function openNewCharModal() { openCharWizard(); }
-function createCharacter() {
-  const name = document.getElementById('ch-name').value.trim();
-  const level = parseInt(document.getElementById('ch-level').value)||1;
-  const ch = newCharacter(name, document.getElementById('ch-race').value.trim(), document.getElementById('ch-class').value, level);
-  db.characters[ch.id] = ch;
-  syncClassResources(ch);
-  applySpellSlots(ch);
-  const campaign = db.campaigns.find(c => c.id === currentCampaignId);
-  (campaign.characters = campaign.characters||[]).push(ch.id);
-  saveData(db); closeModal(); renderApp();
-}
 function deleteCharacter(id) {
   showConfirm('Delete this character?', () => {
     const ch = db.characters[id];
@@ -2314,26 +2302,6 @@ async function loadMonsterStat(idx) {
 
 let _pendingMonster = null;
 
-function parseDescEntries(text) {
-  if (!text) return [];
-  // Split on "Name: desc" where Name is a capitalised phrase preceded by period+space or start of string
-  const re = /(?:^|\.\s+)([A-Z][A-Za-z ,()'-]+?):\s*/g;
-  const entries = [];
-  let match, lastEnd = 0, foundFirst = false;
-  while ((match = re.exec(text)) !== null) {
-    if (foundFirst) {
-      // close out previous entry desc
-      entries[entries.length - 1].desc = text.slice(lastEnd, match.index).replace(/\.\s*$/, '').trim();
-    }
-    entries.push({ name: match[1].trim(), desc: '' });
-    lastEnd = re.lastIndex;
-    foundFirst = true;
-  }
-  if (foundFirst) {
-    entries[entries.length - 1].desc = text.slice(lastEnd).trim();
-  }
-  return entries;
-}
 
 function renderMonsterStatBlock(m) {
   _pendingMonster = m;
@@ -2613,16 +2581,6 @@ function newCharacter(name, race, cls, level) {
 
 // ── CharacterStore — central state manager ────────────────────────────────────
 const CharacterStore = {
-  /** Get a character by ID */
-  get(id) { return db.characters[id] || null; },
-
-  /** Get the active character for the current campaign */
-  getActive() {
-    const c = db.campaigns.find(c => c.id === currentCampaignId);
-    if (!c || !c.activeCharId) return null;
-    return db.characters[c.activeCharId] || null;
-  },
-
   /** Mark a character as the active one for its campaign */
   setActive(charId) {
     const c = db.campaigns.find(c => c.id === currentCampaignId);
@@ -2633,28 +2591,6 @@ const CharacterStore = {
   getAllForCampaign(campaignId) {
     const c = db.campaigns.find(c => c.id === campaignId);
     return (c?.characters || []).map(id => db.characters[id]).filter(Boolean);
-  },
-
-  /** Shallow-patch top-level fields on a character and save */
-  update(id, patch) {
-    if (!db.characters[id]) return;
-    Object.assign(db.characters[id], patch);
-    saveData(db);
-  },
-
-  /** Update current HP on the character record, then sync to any initiative
-   *  combatant that is linked to this character via charId */
-  updateCombatHP(charId, newHP) {
-    const ch = db.characters[charId];
-    if (!ch) return;
-    ch.combat.currentHP = Math.max(0, Math.min(newHP, ch.combat.maxHP));
-    // Sync to linked initiative combatant if present
-    const campaign = db.campaigns.find(c => c.id === currentCampaignId);
-    if (campaign?.initiative) {
-      const cb = campaign.initiative.combatants.find(cb => cb.charId === charId);
-      if (cb) { cb.hp = ch.combat.currentHP; cb.maxHP = ch.combat.maxHP; }
-    }
-    saveData(db);
   },
 
   /** Update a combatant's HP in the initiative tracker and sync back to character
@@ -2689,34 +2625,6 @@ const CharacterStore = {
     const ch = db.characters[charId];
     if (!ch) return;
     if ((ch.spells.pactSlots || 0) > 0) { ch.spells.pactSlots--; saveData(db); }
-  },
-
-  /** Increment a spell slot (current), ceiling = slotsMax */
-  restoreSpellSlot(charId, level) {
-    const ch = db.characters[charId];
-    if (!ch) return;
-    const cur = ch.spells.slots[level] || 0;
-    const max = ch.spells.slotsMax[level] || 0;
-    if (cur < max) { ch.spells.slots[level] = cur + 1; saveData(db); }
-  },
-
-  /** Long rest: restore HP, spell slots, clear temp HP + death saves */
-  longRest(charId) {
-    const ch = db.characters[charId];
-    if (!ch) return;
-    ch.combat.currentHP = ch.combat.maxHP;
-    ch.combat.tempHP    = 0;
-    ch.deathSaves       = { successes:0, failures:0 };
-    ch.inspiration      = false;
-    ch.spells.slots     = { ...ch.spells.slotsMax };
-    this.updateCombatHP(charId, ch.combat.currentHP);
-    saveData(db);
-  },
-
-  /** Proficiency bonus derived from level */
-  profBonus(charId) {
-    const ch = db.characters[charId];
-    return ch ? profBonus(ch.level) : 2;
   }
 };
 function profBonus(level) { return Math.ceil(level/4)+1; }
@@ -2770,8 +2678,6 @@ const CLASS_BADGE_COLORS = {
 
 // Returns the skill name from a skillProficiencies entry (string or {name,_class} object)
 function skillProfName(entry) { return typeof entry === 'object' ? entry.name : entry; }
-// Returns the source class from an entry, or null
-function skillProfClass(entry) { return typeof entry === 'object' ? (entry._class || null) : null; }
 // Returns 'background', the class name, or null for a skillProficiencies entry
 function skillProfSource(entry) {
   if (typeof entry !== 'object' || !entry) return null;
@@ -3627,7 +3533,6 @@ const SCHOOL_COLORS = {
 const SPELL_ALL_KEY    = 'dnd_spells_local_v1';
 const CUSTOM_SPELLS_KEY = 'dnd_custom_spells_v1';
 
-const _SPELL_SRC_FILTER = { "Player's Handbook (2024)":'phb2024', "Xanathar's Guide to Everything":'xge', "Tasha's Cauldron of Everything":'tce', "Explorer's Guide to Wildemount":'egw', "Free Basic Rules (2024)":'basic2024', "Free Basic Rules (2014)":'basic2014', "Player's Handbook":'phb2014' };
 const _SPELL_SRC_DISPLAY = { "Player's Handbook (2024)":{abbr:'PHB24',color:'#c084fc'}, "Xanathar's Guide to Everything":{abbr:'XGE',color:'#3b82f6'}, "Tasha's Cauldron of Everything":{abbr:'TCE',color:'#14b8a6'}, "Explorer's Guide to Wildemount":{abbr:'EGW',color:'#f59e0b'}, "Free Basic Rules (2024)":{abbr:'BR24',color:'#9b6dff'}, "Free Basic Rules (2014)":{abbr:'BR14',color:'#9b6dff'}, "Player's Handbook":{abbr:'PHB14',color:'#6d7b9b'} };
 
 let allSpellsDb   = null; // sorted master list from API
@@ -4897,13 +4802,6 @@ function toggleSpellBubble(level, index) {
   _popSpellSlot(level, index);
 }
 
-function updateSpellSlotMax(level, value) {
-  const ch = db.characters[currentCharId]; if (!ch) return;
-  ch.spells.slotsMax = ch.spells.slotsMax || {};
-  ch.spells.slotsMax[level] = Math.max(0, parseInt(value) || 0);
-  if ((ch.spells.slots[level] || 0) > ch.spells.slotsMax[level]) ch.spells.slots[level] = ch.spells.slotsMax[level];
-  saveData(db); renderApp();
-}
 
 function slotMaxAdj(level, delta) {
   const ch = db.characters[currentCharId]; if (!ch) return;
@@ -7101,14 +6999,6 @@ function renderNotesSection(ch) {
 
 // ── Sheet Tab System ─────────────────────────────────────────────────────────
 
-function renderInventoryTab(ch) {
-  const strScore = ch.abilities?.str || 10;
-  const maxCarry = strScore * 15;
-  const items = ch.equipment || [];
-  const encumbrance = renderEncumbrance(ch, maxCarry);
-  return `${renderEquipmentCurrency(ch)}
-    ${encumbrance}`;
-}
 
 function renderEncumbrance(ch, maxCarry) {
   const totalWeight = (ch.carryWeight || 0);
@@ -7124,49 +7014,8 @@ function renderEncumbrance(ch, maxCarry) {
   </div>`;
 }
 
-function renderFeaturesTab(ch) {
-  const features = ch.featuresList || [];
-  const featureCards = features.length ? features.map((f, i) => `
-    <div class="feature-card">
-      <div class="feature-card-header" onclick="toggleFeatureDesc('feature-desc-${i}')">
-        <span class="feature-card-name">${esc(f.name)}</span>
-        <span class="feature-card-toggle">&#9662;</span>
-      </div>
-      <div class="feature-card-body hidden" id="feature-desc-${i}">
-        <textarea class="sheet-textarea" rows="3" placeholder="Description..." oninput="updateFeatureField(${i},'desc',this.value)">${esc(f.desc || '')}</textarea>
-      </div>
-    </div>`).join('') : '';
 
-  return `<div class="sheet-panel">
-    <div class="cs-section-label">Features &amp; Traits</div>
-    ${featureCards}
-    <div class="flex gap-1" style="margin-top:0.5rem">
-      <input type="text" id="feature-name-input" placeholder="Feature name..." style="flex:1" onkeydown="if(event.key==='Enter')addFeature()">
-      <button class="btn btn-sm" onclick="addFeature()">+ Add</button>
-    </div>
-    <div style="margin-top:0.8rem">
-      <div class="cs-field-label" style="margin-bottom:0.2rem;color:var(--text-dim)">Legacy (freeform)</div>
-      <textarea class="sheet-textarea" rows="4" placeholder="Class features, racial traits, feats..." oninput="ch_field('features',this.value)">${esc(ch.features || '')}</textarea>
-    </div>
-  </div>
-  ${renderProficienciesLanguages(ch)}`;
-}
 
-function renderNotesTab(ch) {
-  const log = (ch.sessionLog || []).slice(0, 20);
-  const logHtml = log.length ? `
-    <div class="sheet-panel" style="margin-top:0.6rem">
-      <div class="cs-section-label">Session Log</div>
-      ${log.map(e => `<div class="spell-log-entry">${esc(e.text)}<span class="spell-log-ts">${new Date(e.ts).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</span></div>`).join('')}
-    </div>` : '';
-  return `<div class="sheet-panel">
-    <div class="cs-section-label">Notes</div>
-    <textarea class="sheet-textarea" rows="14" placeholder="Session notes, quest logs, NPC info..." oninput="ch_field('notes',this.value)">${esc(ch.notes || '')}</textarea>
-  </div>
-  ${logHtml}`;
-}
-
-function toggleFeatureDesc(id) { document.getElementById(id)?.classList.toggle('hidden'); }
 function addFeatureInline() {
   const ch = db.characters[currentCharId]; if (!ch) return;
   ch.featuresList = ch.featuresList || [];
@@ -7177,15 +7026,6 @@ function addFeatureInline() {
     const inputs = document.querySelectorAll('.feature-name-input');
     if (inputs.length) inputs[inputs.length - 1].focus();
   }, 50);
-}
-function addFeature() {
-  const input = document.getElementById('feature-name-input');
-  const val = input?.value?.trim(); if (!val) return;
-  const ch = db.characters[currentCharId];
-  ch.featuresList = ch.featuresList || [];
-  ch.featuresList.push({ name: val, desc: '' });
-  input.value = '';
-  saveData(db); renderApp();
 }
 function removeFeature(i) {
   const ch = db.characters[currentCharId];
@@ -7587,41 +7427,6 @@ function syncSubclassFeatures(charId, notify = true) {
   _syncSubclassFeaturesFor(db.characters[charId], notify);
 }
 
-function renderSubclassField(ch) {
-  const cls = ch.class || '';
-  const subclasses = (typeof SUBCLASS_DATA !== 'undefined' && SUBCLASS_DATA[cls])
-    ? Object.keys(SUBCLASS_DATA[cls]) : [];
-  const current = ch.subclass || '';
-  const sourceLabel = current && SUBCLASS_DATA?.[cls]?.[current]?.source
-    ? `<span class="subclass-source-badge">${SUBCLASS_DATA[cls][current].source}</span>` : '';
-
-  if (!subclasses.length) {
-    return `<input type="text" value="${esc(current)}" placeholder="Subclass..."
-      oninput="ch_field('subclass',this.value)" onblur="saveData(db)">`;
-  }
-
-  const currentInList = subclasses.includes(current);
-  function editionSuffix(subclassName) {
-    const src = SUBCLASS_DATA?.[cls]?.[subclassName]?.source || '';
-    if (src.includes('2024')) return ' (2024)';
-    if (src.includes('2014') || src === 'PHB') return ' (2014)';
-    if (src) return ` (${src})`;
-    return '';
-  }
-  let opts = `<option value="">Choose subclass...</option>`;
-  if (current && !currentInList) {
-    opts += `<option value="${esc(current)}" selected>${esc(current)}</option>`;
-  }
-  opts += subclasses.map(s => `<option value="${esc(s)}"${current===s?' selected':''}>${esc(s)}${editionSuffix(s)}</option>`).join('');
-
-  return `<div class="subclass-wrap">
-    <select onchange="applySubclass('${ch.id}','${esc(cls)}',this.value)"
-      style="flex:1;font-size:0.85rem;padding:0.1rem 0;background:transparent;border:none;border-bottom:1px solid var(--border);border-radius:0;color:var(--text)">
-      ${opts}
-    </select>
-    ${sourceLabel}
-  </div>`;
-}
 
 // ── Base Class Resources ──────────────────────────────────────────────────────
 // Rules (formulas, BASE_CLASS_RESOURCES, resourceMax/Die/Recharge) live in resources-rules.js.
@@ -8368,24 +8173,7 @@ function updateHPDisplay() {
   saveData(db);
 }
 
-function openDamagePrompt() {
-  openModal(`<h2>&#8722; Take Damage</h2>
-    <div class="form-group"><label>Damage Amount</label><input type="number" id="dmg-amount" min="1" value="1" autofocus></div>
-    <div class="form-actions">
-      <button class="btn" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-danger" onclick="applyDamage()">Apply Damage</button>
-    </div>`);
-  setTimeout(() => document.getElementById('dmg-amount')?.focus(), 50);
-}
 
-function applyDamage() {
-  const amount = parseInt(document.getElementById('dmg-amount')?.value) || 0;
-  if (amount <= 0) { closeModal(); return; }
-  const ch = db.characters[currentCharId]; if (!ch) return;
-  _takeDamage(ch, amount);
-  closeModal(); saveData(db); renderApp();
-  _flashHPDamage();
-}
 
 function applyDamageInline() {
   const input = document.getElementById('dmg-inline');
@@ -8407,24 +8195,7 @@ function applyHealInline() {
   _flashHPHeal();
 }
 
-function openHealPrompt() {
-  openModal(`<h2>+ Heal</h2>
-    <div class="form-group"><label>Heal Amount</label><input type="number" id="heal-amount" min="1" value="1" autofocus></div>
-    <div class="form-actions">
-      <button class="btn" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-primary" onclick="applyHeal()">Apply Healing</button>
-    </div>`);
-  setTimeout(() => document.getElementById('heal-amount')?.focus(), 50);
-}
 
-function applyHeal() {
-  const amount = parseInt(document.getElementById('heal-amount')?.value) || 0;
-  if (amount <= 0) { closeModal(); return; }
-  const ch = db.characters[currentCharId]; if (!ch) return;
-  _heal(ch, amount);
-  closeModal(); saveData(db); renderApp();
-  _flashHPHeal();
-}
 
 function adjustTempHP(delta) {
   const ch = db.characters[currentCharId]; if (!ch) return;
@@ -8910,17 +8681,6 @@ function removeEquipment(i) {
   if (name && !ch.equipment.some(e => (typeof e === 'object' ? e?.name : e) === name))
     ch.attunedItems = (ch.attunedItems || []).filter(n => n !== name);
   saveData(db); renderApp();
-}
-function addSpell() {
-  const input = document.getElementById('spell-input'); const val=input.value.trim(); if(!val) return;
-  db.characters[currentCharId].spells.known = db.characters[currentCharId].spells.known||[];
-  db.characters[currentCharId].spells.known.push(val); input.value='';
-  saveData(db); renderApp();
-}
-function removeSpell(i) { db.characters[currentCharId].spells.known.splice(i,1); saveData(db); renderApp(); }
-function updateSpellSlot(level, value) {
-  db.characters[currentCharId].spells.slots = db.characters[currentCharId].spells.slots||{};
-  db.characters[currentCharId].spells.slots[level] = value;
 }
 function saveCharSheet() {
   saveData(db);
