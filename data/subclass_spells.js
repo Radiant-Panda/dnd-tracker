@@ -9,6 +9,7 @@
  */
 
 const SUBCLASS_SPELL_LISTS = {
+  "Knowledge Domain (2024)": {"class":"Cleric","prepareType":"always_prepared","note":"Always prepared — Heroes of the Frontier version","spells":{"3":["Command","Comprehend Languages","Detect Magic","Detect Thoughts","Identify","Mind Spike"],"5":["Dispel Magic","Nondetection","Tongues"],"7":["Arcane Eye","Banishment","Confusion"],"9":["Legend Lore","Scrying","Synaptic Static"]}},
 
   // ── CLERIC DOMAINS ─────────────────────────────────────────────────────────
 

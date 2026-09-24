@@ -309,6 +309,86 @@ if (want('backgrounds')) {
   save();
 }
 
+// ── Species (new group SPECIES_DATA.species_more; each entry records its ruleset) ──
+if (want('species')) {
+  const { data, save } = loadData('species_backgrounds.js', 'SPECIES_DATA');
+  data.species_more = data.species_more || [];
+  const pool = J('races.json').race;
+  const have = new Set([...data.species_2024, ...data.races_2014, ...data.races_mpmm, ...data.species_more]
+    .map(s => norm(s.name) + '|' + (s.edition || '')));
+  const haveName = new Set([...data.species_2024, ...data.races_2014, ...data.races_mpmm].map(s => norm(s.name)));
+  const SIZES = { T: 'Tiny', S: 'Small', M: 'Medium', L: 'Large' };
+  for (const raw of pool) {
+    if (!isOfficial(raw.source)) { note(skipped, 'species (not official)', `${raw.name} [${raw.source}]`); continue; }
+    if ((raw.traitTags || []).includes('NPC Race')) { note(skipped, 'species (DMG monster options)', `${raw.name} [${raw.source}]`); continue; }
+    // 2024 rules: tagged by 5etools, or published after the 2024 Player's Handbook (Lorwyn, Astarion's Book of Hungers)
+    const edition = raw.edition === 'one' || (BOOK[raw.source]?.published || '') >= '2024-09-17' ? '2024' : '2014';
+    // Skip names the app has already, unless this is the other edition's version (Warforged 2014 vs 2024)
+    if (haveName.has(norm(raw.name)) || have.has(norm(raw.name) + '|' + edition)) continue;
+    const sp = resolveCopy(raw, pool);
+    if (!sp) { note(skipped, 'species (unresolved copy)', `${raw.name} [${raw.source}]`); continue; }
+    const traits = [];
+    (function collect(entries) {
+      for (const e of entries || []) {
+        if (!e || typeof e !== 'object') continue;
+        if (e.name && e.entries) traits.push({ name: stripTags(e.name).replace(/\.$/, ''), desc: entriesToRulesText(e.entries) });
+        else if (e.entries) collect(e.entries);
+      }
+    })(sp.entries);
+    const entry = {
+      name: sp.name, source: bookName(sp.source), edition,
+      size: (sp.size || ['M']).map(s => SIZES[s] || s).join('/'),
+      speed: typeof sp.speed === 'number' ? sp.speed : (sp.speed?.walk || 30),
+      traits,
+    };
+    const fixed = ((sp.ability || [])[0]) || null;
+    // Fixed bonuses and a choice can come together (Warforged: +2 CON, then +1 to another)
+    const fixedPart = fixed ? Object.fromEntries(Object.entries(fixed).filter(([k]) => ABBR[k])) : {};
+    if (Object.keys(fixedPart).length) entry.abilityBonuses = fixedPart;
+    if (fixed && fixed.choose) entry.abilityNote = `Choose +${fixed.choose.amount || 1} to ${fixed.choose.count || 1} of ${fixed.choose.from.map(a => ABBR[a]).join(', ')}`;
+    else if (!fixed && sp.lineage) entry.abilityNote = 'Choose +2 to one ability and +1 to another (any)';
+    data.species_more.push(entry);
+    have.add(norm(sp.name) + '|' + edition);
+    note(added, 'species', `${sp.name} [${sp.source}] (${edition})`);
+  }
+  data.species_more.sort((a, b) => a.name.localeCompare(b.name));
+  save();
+}
+
+// ── Subclasses the app lacks: official subclasses whose name it already uses for another edition ──
+// The 2024 reprint gets a "(2024)" key, matching the subclass spell lists' convention.
+if (want('subclasses')) {
+  const { data, save } = loadData('subclasses.js', 'SUBCLASS_DATA');
+  // subclass_spells.js also holds SUBCLASS_TABLES, so new lists are inserted as text, not rewritten
+  const listsFile = path.join(__dirname, 'subclass_spells.js');
+  let listsSrc = fs.readFileSync(listsFile, 'utf8');
+  const lists = new Function(listsSrc + ';return SUBCLASS_SPELL_LISTS')();
+  const NEW = [{ cls: 'Cleric', short: 'Knowledge', source: 'FRHoF', key: 'Knowledge Domain (2024)', label: 'Heroes of the Frontier' }];
+  for (const n of NEW) {
+    if (data[n.cls][n.key]) continue;
+    const d = J(`class/class-${n.cls.toLowerCase()}.json`);
+    const sc = d.subclass.find(s => s.shortName === n.short && s.source === n.source);
+    const feats = d.subclassFeature.filter(f => f.subclassShortName === n.short && f.subclassSource === n.source && f.className === n.cls);
+    data[n.cls][n.key] = {
+      name: n.key, source: n.label,
+      features: feats.sort((a, b) => a.level - b.level).map(f => ({
+        name: f.name, level: f.level, description: entriesToRulesText(f.entries || [], { resolveRef: () => null }),
+      })),
+    };
+    const prepared = (sc.additionalSpells || [])[0]?.prepared;
+    if (prepared && !lists[n.key]) {
+      const list = { class: n.cls, prepareType: 'always_prepared', note: `Always prepared — ${n.label} version`,
+        spells: Object.fromEntries(Object.entries(prepared).map(([lvl, sps]) => [lvl, sps.map(x => title(x.split('|')[0]))])) };
+      const marker = 'const SUBCLASS_SPELL_LISTS = {';
+      assert(listsSrc.includes(marker), 'SUBCLASS_SPELL_LISTS not found');
+      listsSrc = listsSrc.replace(marker, marker + '\n  ' + JSON.stringify(n.key) + ': ' + JSON.stringify(list) + ',');
+    }
+    note(added, 'subclasses', `${n.cls}: ${n.key} (${feats.length} features)`);
+  }
+  save();
+  if (!dry) fs.writeFileSync(listsFile, listsSrc, 'utf8');
+}
+
 for (const [k, v] of Object.entries(added)) console.log(`\nADDED ${k} (${v.length}):\n  ${v.join('\n  ')}`);
 for (const [k, v] of Object.entries(skipped)) console.log(`\nSKIPPED ${k} (${v.length}): ${v.slice(0, 30).join(', ')}${v.length > 30 ? ', …' : ''}`);
 if (dry) console.log('\n(dry run — nothing written)');
