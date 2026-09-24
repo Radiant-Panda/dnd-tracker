@@ -1735,7 +1735,7 @@ function _checkConcentration(i, dmg) {
   if (!cb) return;
   const spell = _getConcentrationSpell(cb);
   if (!spell || dmg <= 0) return;
-  const dc = Math.max(10, Math.floor(dmg / 2));
+  const dc = Math.min(30, Math.max(10, Math.floor(dmg / 2)));
   cb._concCheck = { dc, spell, dmg };
   saveData(db);
   combatLog(`${cb.name}: Concentration check DC ${dc} (${spell})`);
@@ -3533,130 +3533,58 @@ const SPELL_ABILITY = {
   Sorcerer:'cha', Warlock:'cha', Wizard:'int', Artificer:'int',
   'Blood Hunter':'int'
 };
-// ── Spellcasting Tables ──────────────────────────────────────────────────────
-const CASTER_TYPE = {
-  Bard:'full',Cleric:'full',Druid:'full',Sorcerer:'full',Wizard:'full',
-  Paladin:'half',Ranger:'half',Artificer:'artificer',Warlock:'pact'
-};
-const THIRD_CASTER_SUBCLASSES = { Fighter:['Eldritch Knight'], Rogue:['Arcane Trickster'] };
-// index 0 unused; index 1..20 = slots per spell level [1st..9th]
-const FULL_CASTER_SLOTS = [null,
-  [2,0,0,0,0,0,0,0,0],[3,0,0,0,0,0,0,0,0],[4,2,0,0,0,0,0,0,0],[4,3,0,0,0,0,0,0,0],
-  [4,3,2,0,0,0,0,0,0],[4,3,3,0,0,0,0,0,0],[4,3,3,1,0,0,0,0,0],[4,3,3,2,0,0,0,0,0],
-  [4,3,3,3,1,0,0,0,0],[4,3,3,3,2,0,0,0,0],[4,3,3,3,2,1,0,0,0],[4,3,3,3,2,1,0,0,0],
-  [4,3,3,3,2,1,1,0,0],[4,3,3,3,2,1,1,0,0],[4,3,3,3,2,1,1,1,0],[4,3,3,3,2,1,1,1,0],
-  [4,3,3,3,2,1,1,1,1],[4,3,3,3,3,1,1,1,1],[4,3,3,3,3,2,1,1,1],[4,3,3,3,3,2,2,1,1]
-];
-const HALF_CASTER_SLOTS = [null,
-  [0,0,0,0,0,0,0,0,0],[2,0,0,0,0,0,0,0,0],[3,0,0,0,0,0,0,0,0],[3,0,0,0,0,0,0,0,0],
-  [4,2,0,0,0,0,0,0,0],[4,2,0,0,0,0,0,0,0],[4,3,0,0,0,0,0,0,0],[4,3,0,0,0,0,0,0,0],
-  [4,3,2,0,0,0,0,0,0],[4,3,2,0,0,0,0,0,0],[4,3,3,0,0,0,0,0,0],[4,3,3,0,0,0,0,0,0],
-  [4,3,3,1,0,0,0,0,0],[4,3,3,1,0,0,0,0,0],[4,3,3,2,0,0,0,0,0],[4,3,3,2,0,0,0,0,0],
-  [4,3,3,3,1,0,0,0,0],[4,3,3,3,1,0,0,0,0],[4,3,3,3,2,0,0,0,0],[4,3,3,3,2,0,0,0,0]
-];
-const THIRD_CASTER_SLOTS = [null,
-  [0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[2,0,0,0,0,0,0,0,0],[3,0,0,0,0,0,0,0,0],
-  [3,0,0,0,0,0,0,0,0],[3,0,0,0,0,0,0,0,0],[4,2,0,0,0,0,0,0,0],[4,2,0,0,0,0,0,0,0],
-  [4,2,0,0,0,0,0,0,0],[4,2,0,0,0,0,0,0,0],[4,3,0,0,0,0,0,0,0],[4,3,0,0,0,0,0,0,0],
-  [4,3,2,0,0,0,0,0,0],[4,3,2,0,0,0,0,0,0],[4,3,2,0,0,0,0,0,0],[4,3,2,0,0,0,0,0,0],
-  [4,3,3,0,0,0,0,0,0],[4,3,3,0,0,0,0,0,0],[4,3,3,1,0,0,0,0,0],[4,3,3,1,0,0,0,0,0]
-];
-const ARTIFICER_SLOTS = [null,
-  [2,0,0,0,0,0,0,0,0],[2,0,0,0,0,0,0,0,0],[3,0,0,0,0,0,0,0,0],[3,0,0,0,0,0,0,0,0],
-  [4,2,0,0,0,0,0,0,0],[4,2,0,0,0,0,0,0,0],[4,3,0,0,0,0,0,0,0],[4,3,0,0,0,0,0,0,0],
-  [4,3,2,0,0,0,0,0,0],[4,3,2,0,0,0,0,0,0],[4,3,3,0,0,0,0,0,0],[4,3,3,0,0,0,0,0,0],
-  [4,3,3,1,0,0,0,0,0],[4,3,3,1,0,0,0,0,0],[4,3,3,2,0,0,0,0,0],[4,3,3,2,0,0,0,0,0],
-  [4,3,3,3,1,0,0,0,0],[4,3,3,3,1,0,0,0,0],[4,3,3,3,2,0,0,0,0],[4,3,3,3,2,0,0,0,0]
-];
-// Pact Magic: { slots, level } per warlock level
-const PACT_MAGIC_TABLE = [null,
-  {slots:1,level:1},{slots:2,level:1},{slots:2,level:2},{slots:2,level:2},
-  {slots:2,level:3},{slots:2,level:3},{slots:2,level:4},{slots:2,level:4},
-  {slots:2,level:5},{slots:2,level:5},{slots:3,level:5},{slots:3,level:5},
-  {slots:3,level:5},{slots:3,level:5},{slots:3,level:5},{slots:3,level:5},
-  {slots:4,level:5},{slots:4,level:5},{slots:4,level:5},{slots:4,level:5}
-];
-const PREPARED_SPELL_LIMIT = {
-  Wizard: (level, intMod) => level + intMod,
-  Cleric: (level, wisMod) => level + wisMod,
-  Druid: (level, wisMod) => level + wisMod,
-  Paladin: (level, chaMod) => Math.max(1, Math.floor(level/2) + chaMod),
-  Artificer: (level, intMod) => Math.max(1, Math.ceil(level/2) + intMod)
-};
-const CANTRIPS_KNOWN = {
-  Bard:              [0,2,2,2,3,3,3,3,3,3,4,4,4,4,4,4,4,4,4,4],
-  Cleric:            [0,3,3,3,3,3,3,3,3,3,4,4,4,4,4,4,4,4,4,4],
-  Druid:             [0,2,2,2,3,3,3,3,3,3,4,4,4,4,4,4,4,4,4,4],
-  Sorcerer:          [0,4,4,4,5,5,5,5,5,5,6,6,6,6,6,6,6,6,6,6],
-  Warlock:           [0,2,2,2,3,3,3,3,3,3,4,4,4,4,4,4,4,4,4,4],
-  Wizard:            [0,3,3,3,4,4,4,4,4,4,5,5,5,5,5,5,5,5,5,5],
-  Artificer:         [0,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2],
-  'Eldritch Knight': [0,0,0,2,2,2,2,2,2,2,3,3,3,3,3,3,3,3,3,3],
-  'Arcane Trickster':[0,0,0,2,2,2,2,2,2,2,3,3,3,3,3,3,3,3,3,3],
-};
-
-function _classCasterType(entry) {
-  const ct = CASTER_TYPE[entry.class];
-  if (ct) return ct;
-  const subs = THIRD_CASTER_SUBCLASSES[entry.class];
-  if (subs && subs.includes(entry.subclass)) return 'third';
-  return null;
-}
+// ── Spellcasting ─────────────────────────────────────────────────────────────
+// Slot tables, cantrip/prepared/known progressions: spellcasting-rules.js + data/spellcasting_data.js
 
 function calculateSpellSlots(ch) {
-  const classes = ch.classes || [];
-  const result = { slotsMax:{1:0,2:0,3:0,4:0,5:0,6:0,7:0,8:0,9:0}, pactSlots:0, pactSlotLevel:0, hasWarlock:false };
-  // Pact Magic (Warlock)
-  const warlock = classes.find(c => c.class === 'Warlock');
-  if (warlock) {
-    result.hasWarlock = true;
-    const pm = PACT_MAGIC_TABLE[Math.min(warlock.level||1, 20)];
-    if (pm) { result.pactSlots = pm.slots; result.pactSlotLevel = pm.level; }
-  }
-  // Gather non-Warlock caster classes
-  const casters = [];
-  for (const c of classes) {
-    const ct = _classCasterType(c);
-    if (ct && ct !== 'pact') casters.push({ ...c, casterType: ct });
-  }
-  let table;
-  if (casters.length === 0) {
-    return result; // no regular slots
-  } else if (casters.length === 1) {
-    // Single-class: use class-specific table
-    const c = casters[0], lvl = Math.min(c.level||1, 20);
-    if (c.casterType === 'full') table = FULL_CASTER_SLOTS[lvl];
-    else if (c.casterType === 'half') table = HALF_CASTER_SLOTS[lvl];
-    else if (c.casterType === 'third') table = THIRD_CASTER_SLOTS[lvl];
-    else if (c.casterType === 'artificer') table = ARTIFICER_SLOTS[lvl];
-  } else {
-    // Multiclass: sum effective caster levels
-    let effectiveLevel = 0;
-    for (const c of casters) {
-      const lvl = c.level || 1;
-      if (c.casterType === 'full') effectiveLevel += lvl;
-      else if (c.casterType === 'half') effectiveLevel += (lvl >= 2 ? Math.floor(lvl / 2) : 0);
-      else if (c.casterType === 'third') effectiveLevel += (lvl >= 3 ? Math.floor(lvl / 3) : 0);
-      else if (c.casterType === 'artificer') effectiveLevel += Math.ceil(lvl / 2);
-    }
-    effectiveLevel = Math.min(effectiveLevel, 20);
-    table = effectiveLevel > 0 ? FULL_CASTER_SLOTS[effectiveLevel] : null;
-  }
-  if (table) {
-    for (let i = 0; i < 9; i++) result.slotsMax[i+1] = table[i] || 0;
-  }
-  return result;
+  const r = spellSlotMaxes(ch);
+  return { slotsMax: r.slots, pactSlots: r.pactSlots, pactSlotLevel: r.pactLevel, hasWarlock: r.hasPact };
 }
 
+// New maxes from the rules. Slots gained (a new character, a level-up) arrive ready to use;
+// slots lost are removed from what's left.
 function applySpellSlots(ch) {
+  if (typeof SPELLCASTING_DATA === 'undefined') return; // never zero slots out before the rules load
   const calc = calculateSpellSlots(ch);
+  const adjust = (cur, oldMax, newMax) => Math.max(0, Math.min(newMax, (cur || 0) + Math.max(0, newMax - (oldMax || 0))));
   for (let lvl = 1; lvl <= 9; lvl++) {
-    ch.spells.slotsMax[lvl] = calc.slotsMax[lvl] || 0;
-    if ((ch.spells.slots[lvl]||0) > ch.spells.slotsMax[lvl]) ch.spells.slots[lvl] = ch.spells.slotsMax[lvl];
+    const newMax = calc.slotsMax[lvl] || 0;
+    ch.spells.slots[lvl] = adjust(ch.spells.slots[lvl], ch.spells.slotsMax[lvl], newMax);
+    ch.spells.slotsMax[lvl] = newMax;
   }
-  ch.spells.pactSlotsMax = calc.hasWarlock ? calc.pactSlots : 0;
+  const pactMax = calc.hasWarlock ? calc.pactSlots : 0;
+  ch.spells.pactSlots = adjust(ch.spells.pactSlots, ch.spells.pactSlotsMax, pactMax);
+  ch.spells.pactSlotsMax = pactMax;
   ch.spells.pactSlotLevel = calc.hasWarlock ? calc.pactSlotLevel : 0;
-  if ((ch.spells.pactSlots||0) > ch.spells.pactSlotsMax) ch.spells.pactSlots = ch.spells.pactSlotsMax;
+}
+
+// Leveled spells that count against a spells-known limit (not feat spells or subclass-granted ones)
+function _knownSpellCount(ch) {
+  const granted = new Set();
+  _charSubclasses(ch).forEach(sub => {
+    const data = _sslDataFor(ch, sub);
+    if (!data || data.prepareType === 'expanded_list') return;
+    (function collect(v) {
+      if (typeof v === 'string') granted.add(v.toLowerCase());
+      else if (v && typeof v === 'object') Object.values(v).forEach(collect);
+    })(data.spells || data.levels || {});
+  });
+  return (ch.spells.known || []).filter(sp => typeof sp === 'object' && sp.level_int > 0 && !sp._fromFeat
+    && !granted.has(String(sp.name).toLowerCase())).length;
+}
+
+// "7/11" style summaries for the tab badges; null when the character has no such limit
+function _preparedSummary(ch) {
+  const limits = preparedLimits(ch);
+  if (!limits.length) return null;
+  const apNames = _getAlwaysPreparedNames(ch);
+  const count = (ch.spells.prepared || []).filter(sp => !apNames.has(String(typeof sp === 'object' ? sp.name : sp).toLowerCase())).length;
+  return { count, limit: limits.reduce((sum, p) => sum + p.limit, 0), parts: limits };
+}
+function _knownSummary(ch) {
+  const limits = knownLimits(ch);
+  if (!limits.length) return null;
+  return { count: _knownSpellCount(ch), limit: limits.reduce((sum, p) => sum + p.limit, 0), parts: limits };
 }
 
 const SCHOOL_COLORS = {
@@ -3777,23 +3705,12 @@ function renderSpellTabContent() {
     const tab = btn.dataset.tab;
     const badge = btn.querySelector('.spell-count');
     if (!badge) return;
-    if (tab === 'known')    badge.textContent = (ch.spells.known    || []).length;
-    if (tab === 'prepared') {
-      const apNames = _getAlwaysPreparedNames(ch);
-      const prepared = (ch.spells.prepared || []).filter(sp => !apNames.has(String(typeof sp === 'object' ? sp.name : sp).toLowerCase())).length;
-      // Calculate prepared spell limit if applicable
-      const classesWithLimit = (ch.classes||[]).filter(c => PREPARED_SPELL_LIMIT[c.class]);
-      if (classesWithLimit.length > 0) {
-        const limit = classesWithLimit.reduce((sum, c) => {
-          const ab = SPELL_ABILITY[c.class];
-          const abilityMod = mod(ch.abilities[ab]);
-          return sum + PREPARED_SPELL_LIMIT[c.class](c.level, abilityMod);
-        }, 0);
-        badge.textContent = `${prepared}/${limit}`;
-        badge.style.color = prepared > limit ? 'var(--red-lt)' : '';
-      } else {
-        badge.textContent = prepared;
-      }
+    const summary = tab === 'known' ? _knownSummary(ch) : tab === 'prepared' ? _preparedSummary(ch) : null;
+    if (tab === 'known' && !summary) badge.textContent = (ch.spells.known || []).length;
+    if (tab === 'prepared' && !summary) badge.textContent = (ch.spells.prepared || []).length;
+    if (summary) {
+      badge.textContent = `${summary.count}/${summary.limit}`;
+      badge.style.color = summary.count > summary.limit ? 'var(--red-lt)' : '';
     }
   });
 }
@@ -4065,10 +3982,8 @@ function spellAddFromEncoded(listType, encoded) {
     if (!alreadyKnown) {
       const max = _cantripMax(ch);
       if (max !== null && _cantripCount(ch) >= max) {
-        const cls = (ch.classes||[]).find(c => CANTRIPS_KNOWN[c.subclass] || CANTRIPS_KNOWN[c.class]);
-        const clsName = cls ? cls.class : (ch.class || 'this class');
-        const clsLevel = cls ? cls.level : (ch.level || 1);
-        showToast(`Cantrip limit reached (${max} cantrips for ${clsName} level ${clsLevel})`);
+        const who = casterEntries(ch).filter(e => e.prog.cantrips).map(e => `${e.cls} ${e.level}`).join(' + ') || (ch.class || 'this class');
+        showToast(`Cantrip limit reached (${max} cantrips for ${who})`);
         return;
       }
     }
@@ -4618,7 +4533,8 @@ function saveCustomSpell(editIdx) {
     concentration: document.getElementById('csp-conc')?.checked ? 'yes' : 'no',
     ritual: document.getElementById('csp-ritual')?.checked ? 'yes' : 'no',
     desc: document.getElementById('csp-desc')?.value.trim(),
-    level: document.getElementById('csp-level')?.value === '0' ? 'cantrip' : `${document.getElementById('csp-level')?.value}th-level`,
+    level: (() => { const n = parseInt(document.getElementById('csp-level')?.value) || 0;
+      return n === 0 ? 'Cantrip' : `${n}${n === 1 ? 'st' : n === 2 ? 'nd' : n === 3 ? 'rd' : 'th'}-level`; })(),
   };
   if (editIdx != null) customSpells[editIdx] = sp; else customSpells.push(sp);
   saveCustomSpells();
@@ -4639,12 +4555,7 @@ function _cantripCount(ch) {
 }
 
 function _cantripMax(ch) {
-  let total = 0, found = false;
-  for (const c of (ch.classes||[])) {
-    const tbl = CANTRIPS_KNOWN[c.subclass] || CANTRIPS_KNOWN[c.class];
-    if (tbl) { found = true; total += tbl[Math.min(c.level, tbl.length - 1)] || 0; }
-  }
-  return found ? total : null;
+  return cantripMax(ch);
 }
 
 function renderSpellsSection(ch) {
@@ -4653,61 +4564,36 @@ function renderSpellsSection(ch) {
   const apNames  = _getAlwaysPreparedNames(ch);
   const prepared = (ch.spells.prepared || []).filter(sp => !apNames.has(String(typeof sp === 'object' ? sp.name : sp).toLowerCase())).length;
 
-  // Determine if any class is a spellcaster
-  const isSpellcaster = (ch.classes||[]).some(c => {
-    const ct = CASTER_TYPE[c.class];
-    if (ct) return true;
-    const subs = THIRD_CASTER_SUBCLASSES[c.class];
-    return subs && subs.includes(c.subclass);
-  });
+  const casters = casterEntries(ch);
+  const isSpellcaster = casters.length > 0;
+  const prepSummary = _preparedSummary(ch);
+  const knownSummary = _knownSummary(ch);
+  const limitText = (summary, verb) => {
+    if (!summary) return '';
+    const detail = summary.parts.map(p => p.how === 'formula'
+      ? `${p.cls} ${p.level}: half/full level ${p.mod >= 0 ? '+' : ''}${p.mod} ${p.ability.toUpperCase()} = ${p.limit}`.replace('half/full level', p.divisor === 2 ? 'half level' : 'level')
+      : `${p.cls} ${p.level}: ${p.limit}`).join(', ');
+    return `${verb} up to ${summary.limit} spells (${detail})`;
+  };
+  const prepareLimitFormula = [limitText(prepSummary, 'Prepare'), limitText(knownSummary, 'Know')].filter(Boolean).join(' · ');
 
-  // Calculate prepared spell limit for applicable classes
-  let preparedLimit = null;
-  let prepareLimitFormula = '';
-  const classesWithLimit = (ch.classes||[]).filter(c => PREPARED_SPELL_LIMIT[c.class]);
-  if (classesWithLimit.length > 0) {
-    const parts = classesWithLimit.map(c => {
-      const ab = SPELL_ABILITY[c.class];
-      const abilityMod = mod(ch.abilities[ab]);
-      const limit = PREPARED_SPELL_LIMIT[c.class](c.level, abilityMod);
-      const abilityLabel = ABILITY_SHORT[ab].toUpperCase();
-      const modStr = abilityMod >= 0 ? `+${abilityMod}` : `${abilityMod}`;
-      return { cls: c.class, level: c.level, abilityLabel, modStr, limit };
-    });
-    preparedLimit = parts.reduce((sum, p) => sum + p.limit, 0);
-    if (parts.length === 1) {
-      const p = parts[0];
-      prepareLimitFormula = `Prepare up to ${preparedLimit} spells (${p.cls} ${p.level} +${p.abilityLabel} ${p.modStr})`;
-    } else {
-      const contributions = parts.map(p => `${p.cls} ${p.level} +${p.abilityLabel} ${p.modStr} = ${p.limit}`).join(', ');
-      prepareLimitFormula = `${contributions} → Prepare up to ${preparedLimit} spells`;
-    }
-  }
-
-  // Build per-class spellcasting stat rows
+  // Per-class spellcasting stat rows (one per casting ability)
   let headerStats = '';
   if (isSpellcaster) {
     const seen = new Set();
-    const statRows = (ch.classes||[]).map(c => {
-      const ab = SPELL_ABILITY[c.class];
+    headerStats = casters.map(e => {
+      const ab = e.prog.ability;
       if (!ab || seen.has(ab)) return '';
-      // For third-casters, only show if subclass matches
-      const ct = _classCasterType(c);
-      if (!ct) return '';
       seen.add(ab);
       const sMod = mod(ch.abilities[ab]);
       const dc = 8 + pb + sMod;
       const atk = pb + sMod;
-      // Only show the combined prepare formula once — under the last class that has a limit
-      const isLastWithLimit = PREPARED_SPELL_LIMIT[c.class] && c === classesWithLimit[classesWithLimit.length - 1];
-      const limitNote = isLastWithLimit ? `<div style="font-size:0.7rem;color:var(--text-dim);margin-top:0.3rem">${prepareLimitFormula}</div>` : '';
       return `<div class="spell-stat-row">
-        <div class="spell-stat-box"><div class="spell-stat-label">${esc(c.class)}</div><div class="spell-stat-val">${ABILITY_SHORT[ab]}</div></div>
+        <div class="spell-stat-box"><div class="spell-stat-label">${esc(e.cls)}</div><div class="spell-stat-val">${ABILITY_SHORT[ab]}</div></div>
         <div class="spell-stat-box"><div class="spell-stat-label">Spell Save DC</div><div class="spell-stat-val">${dc}</div></div>
         <div class="spell-stat-box"><div class="spell-stat-label">Spell Attack</div><div class="spell-stat-val">${atk>=0?'+':''}${atk}</div></div>
-      </div>${limitNote}`;
-    }).filter(Boolean);
-    headerStats = statRows.join('');
+      </div>`;
+    }).join('') + (prepareLimitFormula ? `<div style="font-size:0.7rem;color:var(--text-dim);margin-top:0.3rem">${esc(prepareLimitFormula)}</div>` : '');
   } else {
     headerStats = `<p class="text-dim" style="font-size:0.82rem;margin-bottom:0.8rem">${esc(ch.class)} does not use spellcasting.</p>`;
   }
@@ -4775,8 +4661,8 @@ function renderSpellsSection(ch) {
     ${pactHtml}
     <div class="spell-tabs">
       <button class="spell-tab${spellViewTab==='all'?' active':''}" data-tab="all" onclick="switchSpellTab('all')">✿ All Spells</button>
-      <button class="spell-tab${spellViewTab==='known'?' active':''}" data-tab="known" onclick="switchSpellTab('known')">Known <span class="spell-count">${known}</span></button>
-      <button class="spell-tab${spellViewTab==='prepared'?' active':''}" data-tab="prepared" onclick="switchSpellTab('prepared')">Prepared <span class="spell-count" style="${preparedLimit && prepared > preparedLimit ? 'color:var(--red-lt)' : ''}">${prepared}${preparedLimit ? `/${preparedLimit}` : ''}</span></button>
+      <button class="spell-tab${spellViewTab==='known'?' active':''}" data-tab="known" onclick="switchSpellTab('known')">Known <span class="spell-count" style="${knownSummary && knownSummary.count > knownSummary.limit ? 'color:var(--red-lt)' : ''}">${knownSummary ? `${knownSummary.count}/${knownSummary.limit}` : known}</span></button>
+      <button class="spell-tab${spellViewTab==='prepared'?' active':''}" data-tab="prepared" onclick="switchSpellTab('prepared')">Prepared <span class="spell-count" style="${prepSummary && prepSummary.count > prepSummary.limit ? 'color:var(--red-lt)' : ''}">${prepSummary ? `${prepSummary.count}/${prepSummary.limit}` : prepared}</span></button>
     </div>
     <div id="spell-tab-content"></div>
   </div>`;
@@ -4814,6 +4700,11 @@ function removeSpellEntry(listType, idx) {
   const sp = (ch.spells[listType] || [])[idx];
   const isCantrip = typeof sp === 'object' && sp.level_int === 0;
   ch.spells[listType].splice(idx, 1);
+  // A spell you no longer know can't stay prepared
+  if (listType === 'known' && sp) {
+    const name = typeof sp === 'object' ? sp.name : sp;
+    ch.spells.prepared = (ch.spells.prepared || []).filter(p => (typeof p === 'object' ? p.name : p) !== name);
+  }
 
   if (isCantrip) {
     // Surgical update for cantrip removal
