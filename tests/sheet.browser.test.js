@@ -166,6 +166,44 @@ const { launch, openApp } = require('./browser');
     check('past the drag limit (55 lb vs 30) is too heavy to move', /Too heavy to move/.test(enc()), enc());
   });
 
+  // 14. Themes: pastel Sapphire and Rose Gold exist; text on accent-coloured pills is readable in every theme
+  await pg.evaluate(() => {
+    const rgb = c => (c.match(/\d+(\.\d+)?/g) || []).slice(0, 3).map(Number);
+    const lum = c => { const [r, g, b] = rgb(c).map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+    const contrast = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+    check('there is a pastel blue theme', Object.values(THEMES).some(t => t.name === 'Powder Blue'), Object.values(THEMES).map(t => t.name));
+    check('there is a pastel rose theme', Object.values(THEMES).some(t => t.name === 'Blush'), Object.values(THEMES).map(t => t.name));
+    check('the green theme is the earthy Forest', THEMES.emerald.name === 'Forest', THEMES.emerald.name);
+    mk('Fighter', 1);
+    const low = [];
+    for (const key of Object.keys(THEMES)) {
+      applyTheme(key); renderApp();
+      const pill = [...document.querySelectorAll('.mc-total button')].find(b => b.textContent === '2024');
+      const cs = getComputedStyle(pill);
+      const c = contrast(cs.color, cs.backgroundColor);
+      if (c < 4.5) low.push(`${key} ${c.toFixed(1)}`);
+    }
+    check('edition pill text is readable in every theme (4.5:1)', low.length === 0, low);
+
+    // Page pieces that used to stay purple follow the theme; Arcane looks exactly as before
+    const look = () => ({
+      header: getComputedStyle(document.querySelector('.cs-header')).backgroundImage,
+      portrait: getComputedStyle(document.querySelector('.portrait-frame')).backgroundImage,
+      glow: getComputedStyle(document.body).backgroundImage.slice(0, 120),
+      dim: getComputedStyle(document.documentElement).getPropertyValue('--text-dim').trim(),
+    });
+    applyTheme('arcane'); renderApp(); const arcane = look();
+    check('Arcane keeps its header, portrait, glow and dim text', /rgb\(31, 31, 38\)/.test(arcane.header) && /rgb\(30, 19, 50\)/.test(arcane.portrait) && /124, 79, 212/.test(arcane.glow) && arcane.dim === '#857fa8', arcane);
+    applyTheme('emerald'); renderApp(); const forest = look();
+    check('Forest header uses its own surfaces', /rgb\(25, 31, 23\)/.test(forest.header), forest.header);
+    check('Forest portrait frame is not purple', !/rgb\(30, 19, 50\)|rgb\(61, 34, 96\)/.test(forest.portrait), forest.portrait);
+    check('Forest background glow is not purple', !/124, 79, 212|232, 121, 249/.test(forest.glow), forest.glow);
+    check('Forest dim text is not purple', forest.dim !== '#857fa8', forest.dim);
+    const pillBg = getComputedStyle(document.querySelector('.mc-pill')).backgroundColor;
+    check('Forest class pills are not purple', !/30, 19, 50/.test(pillBg), pillBg);
+    applyTheme('arcane');
+  });
+
   const out = await pg.evaluate(() => out);
   out.forEach(l => console.log(l));
   if (errs.length) console.log('PAGE ERRORS:', errs);

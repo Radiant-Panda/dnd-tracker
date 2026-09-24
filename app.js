@@ -7688,8 +7688,8 @@ function renderCharacterSheet() {
           ${(()=>{
             const pillBase = 'padding:1px 7px;font-size:0.65rem;border-radius:10px;cursor:pointer;border:1px solid var(--border);transition:background 0.15s,color 0.15s;';
             const ed = ch.edition || '2024';
-            const p24 = pillBase + (ed==='2024' ? 'background:var(--accent);color:#fff;' : 'background:transparent;color:var(--muted);');
-            const p14 = pillBase + (ed==='2014' ? 'background:var(--accent);color:#fff;' : 'background:transparent;color:var(--muted);');
+            const p24 = pillBase + (ed==='2024' ? 'background:var(--accent);color:var(--on-accent);' : 'background:transparent;color:var(--muted);');
+            const p14 = pillBase + (ed==='2014' ? 'background:var(--accent);color:var(--on-accent);' : 'background:transparent;color:var(--muted);');
             return `<span style="margin-left:auto;display:inline-flex;gap:4px;align-items:center" title="Which edition's class features this character uses">
               <span style="font-size:0.6rem;color:var(--text-dim)">Rules</span>
               <button style="${p24}" onclick="ch_edition('2024')">2024</button>
@@ -7710,8 +7710,8 @@ function renderCharacterSheet() {
           const bgOpts = bgList.map(n => `<option${ch.background===n?' selected':''}>${esc(n)}</option>`).join('');
           const customOpt = customBg ? `<option value="${esc(customBg)}" selected>${esc(customBg)}</option>` : '';
           const pillBase = 'padding:1px 7px;font-size:0.65rem;border-radius:10px;cursor:pointer;border:1px solid var(--border);transition:background 0.15s,color 0.15s;';
-          const pill2024 = pillBase + (bgEd==='2024' ? 'background:var(--accent);color:#fff;' : 'background:transparent;color:var(--muted);');
-          const pill2014 = pillBase + (bgEd==='2014' ? 'background:var(--accent);color:#fff;' : 'background:transparent;color:var(--muted);');
+          const pill2024 = pillBase + (bgEd==='2024' ? 'background:var(--accent);color:var(--on-accent);' : 'background:transparent;color:var(--muted);');
+          const pill2014 = pillBase + (bgEd==='2014' ? 'background:var(--accent);color:var(--on-accent);' : 'background:transparent;color:var(--muted);');
           return `<div style="display:flex;gap:4px;margin-bottom:3px">
             <button style="${pill2024}" onclick="_setBgEdition('2024')">2024</button>
             <button style="${pill2014}" onclick="_setBgEdition('2014')">2014</button>
@@ -8653,7 +8653,7 @@ function updateWeaponResults() {
           style="display:flex;align-items:center;gap:0.4rem;flex-wrap:wrap;
                  padding:0.3rem 0.5rem;border-radius:5px;cursor:pointer;
                  border:1px solid var(--border);margin-bottom:0.25rem">
-        <span style="font-size:0.82rem;font-weight:600;min-width:110px">${esc(w.name)}${w._monkBadge ? '<span style="font-size:0.55rem;background:var(--accent);color:#fff;padding:0.1rem 0.3rem;border-radius:2px;margin-left:0.3rem">Monk</span>' : ''}</span>
+        <span style="font-size:0.82rem;font-weight:600;min-width:110px">${esc(w.name)}${w._monkBadge ? '<span style="font-size:0.55rem;background:var(--accent);color:var(--on-accent);padding:0.1rem 0.3rem;border-radius:2px;margin-left:0.3rem">Monk</span>' : ''}</span>
         <span style="font-size:0.82rem;color:#f59e0b;font-weight:600">${esc(dice)}</span>
         <span style="font-size:0.72rem;color:var(--text-dim)">${esc(dmgType)}</span>
         ${rangeTxt}
@@ -9977,12 +9977,16 @@ const THEMES = {
     accent: '#9b6dff', accentRGB: '155,109,255', gold: '#c084fc', goldLt: '#d8b4fe',
     bg: '#0f0a1a', surface: '#1f1f26', surface2: '#26262f',
     hpGradient: 'linear-gradient(90deg, #ec4899, #9b6dff)',
+    // The original hand-picked tints; other themes derive theirs from bg + accent
+    glow1RGB: '124,79,212', glow2RGB: '232,121,249', tintBg: '#1e1332', tintRGB: '30,19,50', tint2RGB: '50,30,80',
+    portraitBg: 'linear-gradient(135deg, #1e1332 0%, #2a1a42 40%, #3d2260 100%)', textDim: '#857fa8',
   },
+  // Key stays 'emerald' so anyone who picked the green theme keeps it
   emerald: {
-    name: 'Emerald',
-    accent: '#4ade80', accentRGB: '74,222,128', gold: '#86efac', goldLt: '#bbf7d0',
-    bg: '#0a1a0f', surface: '#0f2415', surface2: '#163020',
-    hpGradient: 'linear-gradient(90deg, #fde047, #4ade80)',
+    name: 'Forest',
+    accent: '#8fb07a', accentRGB: '143,176,122', gold: '#c3cf9f', goldLt: '#dde5c4',
+    bg: '#10140f', surface: '#191f17', surface2: '#212a1e',
+    hpGradient: 'linear-gradient(90deg, #c9a45c, #8fb07a)', textDim: '#8e9a82',
   },
   crimson: {
     name: 'Crimson',
@@ -9996,11 +10000,23 @@ const THEMES = {
     bg: '#0a0f1a', surface: '#101525', surface2: '#161e30',
     hpGradient: 'linear-gradient(90deg, #22d3ee, #60a5fa)',
   },
+  'powder-blue': {
+    name: 'Powder Blue',
+    accent: '#a7c7e7', accentRGB: '167,199,231', gold: '#c6dbf1', goldLt: '#e1ecf8',
+    bg: '#0e1219', surface: '#161c26', surface2: '#1e2531',
+    hpGradient: 'linear-gradient(90deg, #c8b6e2, #a7c7e7)', textDim: '#8b98ad',
+  },
   'rose-gold': {
     name: 'Rose Gold',
     accent: '#f472b6', accentRGB: '244,114,182', gold: '#fbcfe8', goldLt: '#fce7f3',
     bg: '#1a0d14', surface: '#251018', surface2: '#30141e',
     hpGradient: 'linear-gradient(90deg, #fcd34d, #f472b6)',
+  },
+  blush: {
+    name: 'Blush',
+    accent: '#efb5c6', accentRGB: '239,181,198', gold: '#f5d0db', goldLt: '#fae6ec',
+    bg: '#171115', surface: '#22191e', surface2: '#2b2027',
+    hpGradient: 'linear-gradient(90deg, #f5c9a8, #efb5c6)', textDim: '#a88f99',
   },
 };
 
@@ -10037,6 +10053,13 @@ function _lighten(hex, amt) {
   return `rgb(${lr},${lg},${lb})`;
 }
 
+// Blend hex a toward hex b by t (0–1) → "rgb(r,g,b)"
+function _mix(a, b, t) {
+  const A = _hexToRgb(a), B = _hexToRgb(b);
+  const m = k => Math.round(A[k] + (B[k] - A[k]) * t);
+  return `rgb(${m('r')},${m('g')},${m('b')})`;
+}
+
 // Lighten a gold by slight amount for --gold-lt (a paler variant)
 function _paler(hex, amt) {
   return _lighten(hex, amt);
@@ -10053,6 +10076,8 @@ function applyTheme(themeKey) {
   root.style.setProperty('--accent',      theme.accent);
   root.style.setProperty('--accent-rgb',  accentRGB);
   root.style.setProperty('--accent-dim',  _hexToRgba(theme.accent, 0.6));
+  // Text drawn on the accent colour: the dark background reads well on every accent
+  root.style.setProperty('--on-accent',   theme.onAccent || theme.bg);
   root.style.setProperty('--gold',        theme.gold);
   root.style.setProperty('--gold-lt',     goldLt);
   root.style.setProperty('--bg',          theme.bg);
@@ -10060,6 +10085,14 @@ function applyTheme(themeKey) {
   root.style.setProperty('--surface2',    surface2);
   root.style.setProperty('--border',      _hexToRgba(theme.accent, 0.25));
   root.style.setProperty('--hp-gradient', theme.hpGradient || 'linear-gradient(90deg, #ec4899, #9b6dff)');
+  // Page glow, portrait frame, badge backgrounds and dim text follow the theme
+  root.style.setProperty('--glow1-rgb',   theme.glow1RGB || accentRGB);
+  root.style.setProperty('--glow2-rgb',   theme.glow2RGB || accentRGB);
+  root.style.setProperty('--tint-bg',     theme.tintBg || _mix(theme.bg, theme.accent, 0.12));
+  root.style.setProperty('--tint-rgb',    theme.tintRGB || _mix(theme.bg, theme.accent, 0.12).slice(4, -1));
+  root.style.setProperty('--tint2-rgb',   theme.tint2RGB || _mix(theme.bg, theme.accent, 0.24).slice(4, -1));
+  root.style.setProperty('--portrait-bg', theme.portraitBg || `linear-gradient(135deg, ${_mix(theme.bg, theme.accent, 0.1)} 0%, ${_mix(theme.bg, theme.accent, 0.18)} 40%, ${_mix(theme.bg, theme.accent, 0.3)} 100%)`);
+  root.style.setProperty('--text-dim',    theme.textDim || '#857fa8');
   // Also update body backgroundColor for the hard-coded base
   document.body.style.backgroundColor = theme.bg;
   try { localStorage.setItem(THEME_STORAGE_KEY, themeKey); } catch (e) {}
