@@ -3696,7 +3696,7 @@ async function fetchAllSpells() {
   spellFetching = true;
   setSpellStatus('✾ Loading spells…');
   try {
-    const res = await fetch('./data/spells.json?v=2');
+    const res = await fetch('./data/spells.json?v=3');
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const all = await res.json();
     allSpellsDb = Array.isArray(all) ? all : [];
@@ -3897,7 +3897,7 @@ function renderSpellResultsHtml(ch) {
               <button class="btn btn-sm${inK?' btn-primary':''}" onclick="spellAddFromEncoded('known','${safeData}')">${inK?'✓ Known':'Learn'}</button>`}
             </div>
           </div>
-          <div class="spell-desc hidden" id="sd-all-${esc(sp.name).replace(/\s/g,'-')}" style="margin:0 0 0.3rem 0.5rem;border-top:none;padding-top:0.2rem">${esc(sp.desc||'No description.')}</div>`;
+          <div class="spell-desc rules-text hidden" id="sd-all-${esc(sp.name).replace(/\s/g,'-')}" style="margin:0 0 0.3rem 0.5rem;border-top:none;padding-top:0.2rem">${renderRulesText(sp.desc) || 'No description.'}</div>`;
         }).join('')}
     </div>
     ${remaining > 0 ? `<button class="btn btn-sm" style="width:100%;margin-top:0.5rem" onclick="spellShowCount+=100;updateSpellResults()">Show more (${remaining} remaining)</button>` : ''}`;
@@ -3975,7 +3975,7 @@ function renderKnownView(ch) {
             </div>
           </div>
           ${isObj&&(sp.casting_time||sp.range||sp.components)?`<div class="spell-meta">${[sp.casting_time,sp.range,sp.components].filter(Boolean).map(esc).join(' · ')}</div>`:''}
-          ${isObj?`<div class="spell-desc hidden" id="${id}">${esc(sp.desc||'No description available.')}</div>`:''}
+          ${isObj?`<div class="spell-desc rules-text hidden" id="${id}">${renderRulesText(sp.desc) || 'No description available.'}</div>`:''}
         </div>`;
       }).join('')}
     </div>`).join('')}</div>`;
@@ -4010,7 +4010,7 @@ function renderPreparedView(ch) {
             </div>
           </div>
           ${isObj&&(sp.casting_time||sp.range||sp.components)?`<div class="spell-meta">${[sp.casting_time,sp.range,sp.components].filter(Boolean).map(esc).join(' · ')}</div>`:''}
-          ${isObj?`<div class="spell-desc hidden" id="${id}">${esc(sp.desc||'No description available.')}</div>`:''}
+          ${isObj?`<div class="spell-desc rules-text hidden" id="${id}">${renderRulesText(sp.desc) || 'No description available.'}</div>`:''}
         </div>`;
       }).join('')}
     </div>`).join('')}</div>`;

@@ -57,7 +57,7 @@ function _rtTable(lines, ctx) {
   }
   return `<div class="rt-table-wrap"><table class="rt-table">${caption ? `<caption>${_rtInline(_rtEsc(caption))}</caption>` : ''}
     <thead><tr>${(head || []).map(h => `<th>${_rtInline(_rtEsc(h))}</th>`).join('')}</tr></thead>
-    <tbody>${body.map((r, i) => `<tr${i === youIdx ? ' class="rt-you"' : ''}>${r.map(c => `<td>${_rtInline(_rtEsc(c))}</td>`).join('')}</tr>`).join('')}</tbody>
+    <tbody>${body.map((r, i) => `<tr${i === youIdx ? ' class="rt-you"' : ''}>${r.map(c => `<td${c.length > 24 ? ' class="rt-long"' : ''}>${_rtInline(_rtEsc(c))}</td>`).join('')}</tr>`).join('')}</tbody>
   </table></div>`;
 }
 

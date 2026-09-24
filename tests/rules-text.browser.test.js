@@ -67,6 +67,22 @@ const shots = process.argv[2];
   });
   check('existing characters get the formatted text', r.sub && r.feat, r);
 
+  // Spells: known-spell cards render structured text (tables, run-in higher-level note)
+  id = await setup('Wizard', 5);
+  r = await pg.evaluate(async () => {
+    await fetchAllSpells();
+    const ch = db.characters[currentCharId];
+    ch.spells.known.push({ name: 'Confusion', level_int: 4 }, { name: 'Fireball', level_int: 3 });
+    const html = renderKnownView(ch);
+    const div = document.createElement('div'); div.innerHTML = html;
+    const text = div.textContent;
+    return { table: !!div.querySelector('.spell-desc .rt-table'), runin: [...div.querySelectorAll('.spell-desc .rt-runin')].map(e => e.textContent),
+      fireballFix: text.includes('increases by 1d6 for each spell slot level above 3'), junk: /\[Area of Effect\]/.test(text) };
+  });
+  check('Confusion shows its behavior table', r.table, r);
+  check('higher-level casting is a run-in heading', r.runin.includes('Using a Higher-Level Spell Slot.'), r);
+  check('Fireball text corrected and cleaned up', r.fireballFix && !r.junk, r);
+
   // Phone width: nothing scrolls sideways
   await pg.setViewport({ width: 400, height: 900 });
   r = await pg.evaluate(() => { renderApp(); return document.documentElement.scrollWidth; });
