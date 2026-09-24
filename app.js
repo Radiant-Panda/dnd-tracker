@@ -3916,18 +3916,25 @@ function renderKnownView(ch) {
 
 function renderPreparedView(ch) {
   const prepared = ch.spells.prepared || [];
-  if (prepared.length === 0) return `<p class="spell-empty" style="padding:1rem 0">No prepared spells. Mark spells as Prepared from Known ↑ or All Spells.</p>`;
-  const entries = prepared.map((sp, i) => ({ full: fullSpellData(sp, ch), i }));
+  // Known cantrips are listed too so they can be cast from here; they aren't prepared,
+  // so they don't count toward the limit and are removed from the Known tab instead
+  const prepNames = new Set(prepared.map(sp => typeof sp === 'object' ? sp.name : sp));
+  const cantrips = (ch.spells.known || []).map((sp, i) => ({ full: fullSpellData(sp, ch), i, cantrip: true }))
+    .filter(e => typeof e.full === 'object' && e.full.level_int === 0 && !prepNames.has(e.full.name));
+  if (prepared.length === 0 && cantrips.length === 0) return `<p class="spell-empty" style="padding:1rem 0">No prepared spells. Mark spells as Prepared from Known ↑ or All Spells.</p>`;
+  const entries = [...cantrips, ...prepared.map((sp, i) => ({ full: fullSpellData(sp, ch), i }))];
   const grouped = groupSpellsByLevel(entries);
+  const empty = prepared.length === 0 ? `<p class="spell-empty" style="padding:0.5rem 0">No prepared spells yet. Mark spells as Prepared from Known ↑ or All Spells.</p>` : '';
   return `<div>${grouped.map(({ label, spells }) => `
     <div class="spell-group">
       <div class="spell-group-heading">${label} <span class="spell-count">${spells.length}</span></div>
-      ${spells.map(({ full: sp, i }) => {
+      ${spells.map(({ full: sp, i, cantrip }) => {
         const isObj = typeof sp === 'object';
         const name = isObj ? sp.name : sp;
         const sc = SCHOOL_COLORS[isObj?sp.school:''] || '#7b6d8d';
         const lvlLabel = isObj ? (sp.level_int===0?'Cantrip':sp.level_int?`Lv ${sp.level_int}`:'') : '';
-        const id = `sd-prep-${i}`;
+        const id = cantrip ? `sd-prepc-${i}` : `sd-prep-${i}`;
+        const castAction = cantrip ? `openCastModal('${jsStr(name)}',0)` : `castPreparedByIdx(${i})`;
         return `<div class="spell-card" style="border-left-color:${sc}">
           <div class="spell-card-top">
             <div class="spell-card-left">
@@ -3938,16 +3945,16 @@ function renderPreparedView(ch) {
               ${isObj?_costTag(sp):''}
             </div>
             <div class="spell-card-right">
-              <button class="btn btn-sm btn-primary btn-cast" onclick="spellCastFx(this);castPreparedByIdx(${i})">Cast</button>
+              <button class="btn btn-sm btn-primary btn-cast" onclick="spellCastFx(this);${castAction}">Cast</button>
               <button class="btn btn-sm" onclick="toggleSpellCard('${id}',this)" title="Toggle description">▾</button>
-              <button class="btn btn-icon btn-danger" onclick="removeSpellEntry('prepared',${i})">&times;</button>
+              ${cantrip ? '' : `<button class="btn btn-icon btn-danger" onclick="removeSpellEntry('prepared',${i})">&times;</button>`}
             </div>
           </div>
           ${isObj&&(sp.casting_time||sp.range||sp.components)?`<div class="spell-meta">${[sp.casting_time,sp.range,sp.components].filter(Boolean).map(esc).join(' · ')}</div>`:''}
           ${isObj?`<div class="spell-desc rules-text hidden" id="${id}">${renderRulesText(sp.desc, _spellTextCtx(sp, ch)) || 'No description available.'}</div>`:''}
         </div>`;
       }).join('')}
-    </div>`).join('')}</div>`;
+    </div>`).join('')}${empty}</div>`;
 }
 
 function _updateCantripCountDisplay() {

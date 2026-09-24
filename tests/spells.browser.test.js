@@ -97,6 +97,21 @@ const { launch, openApp } = require('./browser');
     spellViewTab = 'known'; renderApp(); await wait();
     check('2024 Wizard must prepare before casting', !knownCard('Sleep')?.querySelector('.btn-cast'), null);
 
+    // Cantrips appear on Prepared (to cast from there) without counting as prepared
+    ch.spells.known.push({ name: 'Fire Bolt', level_int: 0 });
+    ch.spells.prepared.push({ name: 'Sleep', level_int: 1 });
+    spellViewTab = 'prepared'; renderApp(); await wait();
+    check('known cantrips show on the Prepared tab', !!knownCard('Fire Bolt'), [...document.querySelectorAll('#spell-tab-content .spell-name')].map(e => e.textContent));
+    check('…with a Cast button', !!knownCard('Fire Bolt')?.querySelector('.btn-cast'), null);
+    check('…and no remove button (they are managed on Known)', !knownCard('Fire Bolt')?.querySelector('.btn-danger'), null);
+    check('cantrips do not count toward the prepared badge', badge('prepared') === '1/6', badge('prepared'));
+    check('cantrips are not added to the prepared list', !ch.spells.prepared.some(s => s.name === 'Fire Bolt'), ch.spells.prepared);
+    let castName = null; const realCast = castCantrip; castCantrip = n => { castName = n; };
+    knownCard('Fire Bolt').querySelector('.btn-cast').click(); castCantrip = realCast;
+    check('casting a cantrip from Prepared casts it', castName === 'Fire Bolt', castName);
+    ch.spells.prepared = []; renderApp(); await wait();
+    check('with only cantrips, Prepared still lists them', !!knownCard('Fire Bolt'), document.querySelector('#spell-tab-content')?.textContent.slice(0, 120));
+
     // Cast window: ritual + upcasting
     ch = mk('Wizard', 5, '2024');
     openCastModal('Detect Magic', 1);
