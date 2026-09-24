@@ -799,6 +799,12 @@ function migrateCharacter(ch) {
   if (!ch.classes) {
     ch.classes = [{ class: ch.class || 'Fighter', subclass: ch.subclass || '', level: ch.level || 1 }];
   }
+  // v6: the sheet-header subclass dropdown used to write only ch.subclass, leaving
+  // classes[0].subclass empty and subclass features untagged (so class switches couldn't remove them)
+  if (ch.subclass && ch.classes[0] && !ch.classes[0].subclass) ch.classes[0].subclass = ch.subclass;
+  const _classForSub = sub => (ch.classes.find(c => c.subclass === sub) || ch.classes[0] || {}).class;
+  (ch.featuresList || []).forEach(f => { if (f._subclass && !f._forClass) f._forClass = _classForSub(f._subclass); });
+  (ch.resources || []).forEach(r => { if (r._subclass && !r._forClass) r._forClass = _classForSub(r._subclass); });
   // v5: proficiency source tracking — one-time migration
   if (!ch._profMigrationApplied) {
     const _migClass = ch.classes[0]?.class || 'Fighter';
@@ -4154,6 +4160,23 @@ function _sslDataFor(ch, sub) {
   return lists[sub] || null;
 }
 
+// Removes the spells a subclass list adds. Matched by name because these spells were never
+// tagged when stored; spells granted by a feat are kept even if the name matches.
+function _removeSubclassSpells(ch, sub) {
+  const data = _sslDataFor(ch, sub);
+  if (!data || !ch.spells) return;
+  const names = new Set();
+  (function collect(v) {
+    if (typeof v === 'string') names.add(v.toLowerCase());
+    else if (Array.isArray(v)) v.forEach(collect);
+    else if (v && typeof v === 'object') Object.values(v).forEach(collect);
+  })(data.spells || data.levels || {});
+  const keep = s => (typeof s === 'object' && (s._fromFeat || s._sfId)) ||
+    !names.has(String(typeof s === 'object' ? s.name : s).toLowerCase());
+  ch.spells.known = (ch.spells.known || []).filter(keep);
+  ch.spells.prepared = (ch.spells.prepared || []).filter(keep);
+}
+
 function _getAlwaysPreparedNames(ch) {
   const names = new Set();
   const lists = _getSubclassSpellLists();
@@ -7435,7 +7458,7 @@ function syncSubclassFeatures(charId) {
   (subclassData.features || []).forEach(feat => {
     if (feat.level <= level && !existingNames.has(feat.name)) {
       ch.featuresList = ch.featuresList || [];
-      ch.featuresList.push({ name: feat.name, desc: feat.description, _subclass: subclassName });
+      ch.featuresList.push({ name: feat.name, desc: feat.description, _subclass: subclassName, _forClass: cls });
       unlocked.push({ name: feat.name, resource: feat.resource });
     }
   });
@@ -7482,6 +7505,7 @@ function syncSubclassFeatures(charId) {
       desc: '',
       custom: false,
       _subclass: subclassName,
+      _forClass: cls,
     });
   });
 
@@ -7729,72 +7753,12 @@ function applySubclass(charId, className, subclassName) {
     subWrap.appendChild(spinner);
   }
 
-  // Remove features/resources injected by previous subclass
-  ch.featuresList = (ch.featuresList || []).filter(f => !f._subclass);
-  ch.resources = (ch.resources || []).filter(r => !r._subclass);
-
-  ch.subclass = subclassName;
-
   const removeSpinner = () => { if (spinner && spinner.parentNode) spinner.parentNode.removeChild(spinner); };
 
-  if (!subclassName) {
-    renderApp(); refreshPanels();
-    setTimeout(() => saveData(db), 0);
-    return;
-  }
-
-  const subclassData = (typeof SUBCLASS_DATA !== 'undefined') &&
-    SUBCLASS_DATA[className] && SUBCLASS_DATA[className][subclassName];
-  if (!subclassData) {
-    renderApp(); refreshPanels();
-    setTimeout(() => saveData(db), 0);
-    return;
-  }
-
-  // Check for empty/missing features — inject a placeholder note
-  const features = subclassData.features || [];
-  const hasFeatures = features.length > 0;
-  if (!hasFeatures) {
-    ch.featuresList.push({
-      name: subclassName,
-      desc: '<em class="no-features-note">No features data yet.</em>',
-      _subclass: subclassName,
-      _placeholder: true,
-    });
-  }
-
-  const level = ch.level || 1;
-
-  // Inject features up to current level, deduplicating resources (one per resource name)
-  const injectedResources = new Set();
-  features.forEach(feat => {
-    if (feat.level > level) return;
-
-    ch.featuresList.push({
-      name: feat.name,
-      desc: feat.description,
-      _subclass: subclassName,
-    });
-
-    if (feat.resource && !injectedResources.has(feat.resource.name)) {
-      injectedResources.add(feat.resource.name);
-      const max = resolveMaxFormula(feat.resource.maxFormula, ch);
-      ch.resources.push({
-        id: `res_${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
-        name: feat.resource.name,
-        type: (feat.resource.maxFormula === 'level_x5' || feat.resource.name.includes('Hands') || feat.resource.name.includes('Pool')) ? 'pool' : 'pips',
-        current: max,
-        max,
-        maxFormula: feat.resource.maxFormula,
-        die: feat.resource.die || null,
-        recharge: feat.resource.recharge || 'long',
-        source: subclassName,
-        desc: feat.description || '',
-        custom: false,
-        _subclass: subclassName,
-      });
-    }
-  });
+  // Same data path as the class editor, so ch.subclass and ch.classes[] stay in sync
+  const idx = Math.max(0, (ch.classes || []).findIndex(c => c.class === className));
+  applySubclassForClass(charId, idx, className, subclassName);
+  syncClassFields(ch);
 
   renderApp();
   refreshPanels();
@@ -8141,9 +8105,14 @@ function _injectResourcesForClass(ch, className) {
 
 function applySubclassForClass(charId, idx, className, subclassName) {
   const ch = db.characters[charId]; if (!ch) return;
-  // Remove old subclass features/resources for this class
-  ch.featuresList = (ch.featuresList || []).filter(f => f._forClass !== className);
+  // Remove old subclass features/resources/spells for this class
+  const oldSubs = new Set((ch.featuresList || []).filter(f => f._subclass && f._forClass === className).map(f => f._subclass));
+  if (ch.classes[idx]?.subclass) oldSubs.add(ch.classes[idx].subclass);
+  oldSubs.delete(subclassName);
+  oldSubs.forEach(sub => _removeSubclassSpells(ch, sub));
+  ch.featuresList = (ch.featuresList || []).filter(f => !(f._subclass && f._forClass === className));
   ch.resources = (ch.resources || []).filter(r => !(r._subclass && r._forClass === className));
+  if (ch.classes[idx]) ch.classes[idx].subclass = subclassName;
   // Backward compat: keep ch.subclass synced with primary
   if (idx === 0) ch.subclass = subclassName;
   if (!subclassName) return;
@@ -8179,7 +8148,8 @@ function chClassField(idx, field, value) {
   if (!ch.classes[idx]) return;
   const oldClass = ch.classes[idx].class;
   if (field === 'class') {
-    // Remove old class resources/features
+    // Remove old class resources/features, and spells the old subclass added
+    if (ch.classes[idx].subclass) _removeSubclassSpells(ch, ch.classes[idx].subclass);
     ch.resources = (ch.resources || []).filter(r => r._forClass !== oldClass && r.source !== oldClass);
     ch.featuresList = (ch.featuresList || []).filter(f => f._forClass !== oldClass);
     ch.classes[idx].class = value;
@@ -8203,9 +8173,8 @@ function chClassField(idx, field, value) {
     syncClassFields(ch);
     _syncBaseClassResources(ch);
   } else if (field === 'subclass') {
-    ch.classes[idx].subclass = value;
-    syncClassFields(ch);
     applySubclassForClass(currentCharId, idx, ch.classes[idx].class, value);
+    syncClassFields(ch);
   }
   applySpellSlots(ch);
   saveData(db);
@@ -8234,6 +8203,7 @@ function removeCharClass(idx) {
   const ch = db.characters[currentCharId]; if (!ch) return;
   if (ch.classes.length <= 1) return;
   const removed = ch.classes[idx];
+  if (removed.subclass) _removeSubclassSpells(ch, removed.subclass);
   // Remove resources/features tagged with the removed class
   ch.resources = (ch.resources || []).filter(r => r._forClass !== removed.class && r.source !== removed.class);
   ch.featuresList = (ch.featuresList || []).filter(f => f._forClass !== removed.class);
