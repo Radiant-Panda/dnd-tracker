@@ -7,7 +7,8 @@
 
 const fs = require('fs');
 const path = require('path');
-const { stripTags, flattenEntries } = require('./build-class-features');
+const { stripTags } = require('./build-class-features');
+const { entriesToRulesText } = require('./rules-text-build');
 
 const SRC_ROOT = 'C:\\Users\\Kiana\\Downloads\\5etools-src-main\\data';
 
@@ -62,7 +63,7 @@ const options = raw
   .map(o => ({ ...o, featureType: (o.featureType || []).filter(t => TYPE_LABELS[t]) }))
   .filter(o => o.featureType.length)
   .map(o => {
-    const desc = flattenEntries(o.entries || []);
+    const desc = entriesToRulesText(o.entries || []);
     const opt = { name: o.name, types: o.featureType, source: o.source, edition: editionOf(o.source), desc };
     if (o.prerequisite) opt.prereq = o.prerequisite.map(convertPrereq);
     if (/\bRepeatable\b/.test(desc)) opt.repeatable = true;

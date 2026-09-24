@@ -4134,3 +4134,49 @@ header::after {
     box-shadow: 0 3px 14px rgba(124,79,212,0.18);
   }
 }
+
+/* ── Rules text (rules-text.js) ── */
+.rules-text { display: flex; flex-direction: column; gap: 0.45rem; font-size: 0.78rem; line-height: 1.55; color: var(--text); }
+.rules-text-lg { font-size: 0.82rem; gap: 0.55rem; }
+.rules-text p { margin: 0; }
+.rules-text .rt-runin { font-style: italic; color: var(--gold-lt); }
+.rules-text strong { color: var(--gold-lt); }
+.rt-dice {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, 'SF Mono', monospace;
+  font-size: 0.9em;
+  color: var(--gold-lt);
+  background: rgba(var(--accent-rgb),0.14);
+  border: 1px solid rgba(var(--accent-rgb),0.28);
+  border-radius: 3px;
+  padding: 0 0.22em;
+  white-space: nowrap;
+}
+.rt-term { border-bottom: 1px dotted rgba(var(--accent-rgb),0.6); }
+.rt-list { margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 0.25rem; }
+.rt-list li::marker { color: var(--accent); }
+.rt-table-wrap { overflow-x: auto; }
+.rt-table { border-collapse: collapse; width: 100%; font-size: 0.74rem; font-variant-numeric: tabular-nums; }
+.rt-table caption { text-align: left; font-weight: 700; font-style: italic; color: var(--gold-lt); padding-bottom: 0.25rem; }
+.rt-table th {
+  font-size: 0.6rem; letter-spacing: 0.05em; text-transform: uppercase; font-weight: 600;
+  color: var(--text-dim); text-align: center; padding: 0.25rem 0.35rem;
+  border-bottom: 1px solid rgba(var(--accent-rgb),0.2);
+}
+.rt-table td { text-align: center; padding: 0.22rem 0.35rem; }
+.rt-table tbody tr:nth-child(odd) td { background: rgba(var(--accent-rgb),0.06); }
+.rt-table tr.rt-you td { background: rgba(var(--accent-rgb),0.22); color: var(--gold-lt); font-weight: 700; }
+.rt-option { border-left: 2px solid rgba(var(--accent-rgb),0.45); padding: 0.05rem 0 0.05rem 0.65rem; display: flex; flex-direction: column; gap: 0.35rem; }
+.rt-option-name { font-weight: 700; color: var(--gold-lt); font-size: 1.05em; }
+.rt-level {
+  display: inline-block; margin-left: 0.35rem; font-size: 0.66rem; letter-spacing: 0.03em;
+  color: var(--gold-lt); border: 1px solid rgba(var(--accent-rgb),0.5); background: rgba(var(--accent-rgb),0.14);
+  border-radius: 999px; padding: 0 0.45rem; white-space: nowrap;
+}
+
+/* Feature card headers: names wrap instead of being cut off; trackers sit on their own line */
+.sf-name { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
+.sf-card-header-stack { flex-direction: column; align-items: stretch; gap: 0.25rem; }
+.sf-head-row { display: flex; align-items: baseline; gap: 0.35rem; }
+.sf-res-row { display: flex; align-items: center; gap: 0.45rem; font-size: 0.66rem; color: var(--text-dim); }
+.sf-res-row .feat-res-mini { margin-left: 0; }
+.levelup-feat-desc { flex-basis: 100%; }
