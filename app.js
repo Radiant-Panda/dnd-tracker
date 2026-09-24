@@ -5849,14 +5849,19 @@ const FEAT_SOURCE_COLORS = {
 const FEAT_CAT_COLORS = {
   'General': '#9b6dff', 'Origin': '#f59e0b',
   'Fighting Style': '#ef4444', 'FS:P': '#ef4444', 'FS:R': '#ef4444',
-  'EB': '#c084fc',
+  'EB': '#c084fc', 'Dragonmark': '#0ea5e9',
 };
 const FEAT_CAT_LABELS = { 'EB': 'Epic Boon', 'FS:P': 'Fighting Style', 'FS:R': 'Fighting Style' };
 
 let _featSearch = '', _featCatFilter = 'All', _featSrcFilter = 'All', _featShowCount = 50;
 
-const FEAT_CAT_OPTS = ['All','General','Origin','Fighting Style','Epic Boon'];
-const FEAT_SRC_OPTS = ['All','PHB 2024','PHB 2014',"Xanathar's","Tasha's","Fizban's","Bigby's",'Dragonlance','Eberron','Sigil and the Outlands'];
+const FEAT_CAT_OPTS = ['All','General','Origin','Fighting Style','Epic Boon','Dragonmark'];
+// Source filter: the familiar books first, then every other book in the feat data
+const _FEAT_SRC_FIRST = ['PHB 2024','PHB 2014',"Xanathar's","Tasha's"];
+function featSrcOpts() {
+  const rest = [...new Set((FEATS_ITEMS_DATA?.feats || []).map(f => f.source))].filter(s => s && !_FEAT_SRC_FIRST.includes(s)).sort();
+  return ['All', ..._FEAT_SRC_FIRST, ...rest];
+}
 
 // Magic item browser
 const MAGIC_RARITY_OPTS = ['All','common','uncommon','rare','very rare','legendary'];
@@ -5878,7 +5883,7 @@ function openFeatBrowser() {
   _featSearch = ''; _featCatFilter = 'All'; _featSrcFilter = 'All'; _featShowCount = 50;
   const catBtns = FEAT_CAT_OPTS.map((c,i) =>
     `<button class="btn btn-sm ${i===0?'btn-primary':''}" onclick="setFeatFilter('cat',${i},this)">${esc(c)}</button>`).join('');
-  const srcBtns = FEAT_SRC_OPTS.map((s,i) =>
+  const srcBtns = featSrcOpts().map((s,i) =>
     `<button class="btn btn-sm ${i===0?'btn-primary':''}" onclick="setFeatFilter('src',${i},this)">${esc(s)}</button>`).join('');
   openModal(`<h2>✦ Browse Feats</h2>
     <input type="text" id="feat-search" placeholder="Search feats..." style="width:100%;margin-bottom:0.4rem" oninput="_featSearch=this.value;_featShowCount=50;updateFeatResults()">
@@ -5894,7 +5899,7 @@ function setFeatFilter(type, idx, btn) {
     _featCatFilter = FEAT_CAT_OPTS[idx] || 'All';
     document.querySelectorAll('#feat-cat-filters .btn').forEach(b => b.classList.remove('btn-primary'));
   } else {
-    _featSrcFilter = FEAT_SRC_OPTS[idx] || 'All';
+    _featSrcFilter = featSrcOpts()[idx] || 'All';
     document.querySelectorAll('#feat-src-filters .btn').forEach(b => b.classList.remove('btn-primary'));
   }
   btn.classList.add('btn-primary');
