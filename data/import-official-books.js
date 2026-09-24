@@ -137,6 +137,100 @@ if (want('spells')) {
   if (!dry) fs.writeFileSync(file, JSON.stringify(spells, null, 2), 'utf8');
 }
 
+function loadData(file, name) {
+  const p = path.join(__dirname, file);
+  const src = fs.readFileSync(p, 'utf8');
+  const i = src.indexOf('const ' + name);
+  const data = new Function(src + ';return ' + name)();
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(data)), data, file + ' holds non-JSON values');
+  return { data, save: () => dry || fs.writeFileSync(p, src.slice(0, i) + 'const ' + name + ' = ' + JSON.stringify(data, null, 2) + ';\n', 'utf8') };
+}
+const title = s => String(s).replace(/\b\w/g, c => c.toUpperCase());
+
+// ── Feats ──
+// Short labels for the feat browser's source filter, matching the existing ones ("Tasha's")
+const FEAT_SOURCE_LABELS = { XPHB: 'PHB 2024', PHB: 'PHB 2014', XGE: "Xanathar's", TCE: "Tasha's", FTD: "Fizban's", BGG: "Bigby's",
+  DSotDQ: 'Dragonlance', ERLW: 'Eberron', SatO: 'Sigil and the Outlands', EFA: 'Forge of the Artificer', SCC: 'Strixhaven',
+  FRHoF: 'Heroes of the Frontier', BMT: 'Book of Many Things', AAG: 'Spelljammer', ABH: "Astarion's Book of Hungers", LFL: 'Lorwyn' };
+const FEAT_CATEGORIES = { G: 'General', O: 'Origin', FS: 'Fighting Style', 'FS:P': 'FS:P', 'FS:R': 'FS:R', EB: 'EB', D: 'Dragonmark' };
+const ABBR = { str: 'STR', dex: 'DEX', con: 'CON', int: 'INT', wis: 'WIS', cha: 'CHA' };
+
+// 5etools prerequisites → readable text. Alternatives are OR'd; parts shared by every
+// alternative are listed once ("Level 4+, STR or DEX 13+").
+function prereqText(prereqs) {
+  if (!prereqs || !prereqs.length) return '';
+  const cats = { D: 'Dragonmark' };
+  const alts = prereqs.map(p => {
+    const parts = [];
+    if (p.campaign) parts.push(p.campaign.join(' or ') + ' campaign');
+    if (p.level != null) {
+      const l = typeof p.level === 'number' ? { level: p.level } : p.level;
+      parts.push(l.class ? `${l.class.name} ${l.level}+` : `Level ${l.level}+`);
+    }
+    if (p.ability) {
+      const byScore = {};
+      p.ability.forEach(a => Object.entries(a).forEach(([k, v]) => { (byScore[v] = byScore[v] || []).push(ABBR[k] || k); }));
+      Object.entries(byScore).forEach(([v, abs]) => parts.push(`${abs.join(' or ')} ${v}+`));
+    }
+    if (p.race) parts.push(p.race.map(r => title(r.displayEntry || (r.subrace ? `${r.subrace} ${r.name}` : r.name))).join(' or '));
+    if (p.background) parts.push(p.background.map(b => title(b.name) + ' background').join(' or '));
+    if (p.feat) parts.push(p.feat.map(f => title(f.split('|')[2] || f.split('|')[0])).join(' or ') + ' feat');
+    if (p.feature) parts.push(p.feature.map(f => title(f)).join(' or ') + ' feature');
+    if (p.spellcasting || p.spellcasting2020) parts.push('Spellcasting or Pact Magic feature');
+    if (p.spellcastingFeature) parts.push('Spellcasting feature');
+    if (p.proficiency) p.proficiency.forEach(pr => Object.entries(pr).forEach(([k, v]) => parts.push(`${title(v)} ${k} proficiency`)));
+    if (p.featCategory) parts.push(p.featCategory.map(c => `A ${cats[c] || c} feat`).join(' or '));
+    if (p.exclusiveFeatCategory) parts.push(p.exclusiveFeatCategory.map(c => `No other ${cats[c] || c} feat`).join(', '));
+    if (p.other) parts.push(p.other);
+    if (p.otherSummary) parts.push(p.otherSummary.entrySummary || stripTags(p.otherSummary.entry));
+    return parts;
+  });
+  const common = alts[0].filter(part => alts.every(a => a.includes(part)));
+  const rest = alts.map(a => a.filter(part => !common.includes(part)).join(', ')).filter(Boolean);
+  return [...common, rest.length ? [...new Set(rest)].join(' or ') : null].filter(Boolean).join(', ');
+}
+
+function abilityBonus(ability) {
+  const a = (ability || [])[0];
+  if (!a) return {};
+  if (a.choose) return { choose: { from: a.choose.from, count: a.choose.count || 1, amount: a.choose.amount || 1 } };
+  return Object.fromEntries(Object.entries(a).filter(([k]) => ABBR[k]));
+}
+
+if (want('feats')) {
+  const { data, save } = loadData('feats_items.js', 'FEATS_ITEMS_DATA');
+  const pool = J('feats.json').feat;
+  const have = new Set(data.feats.map(f => norm(f.name)));
+  // Existing feats: only the prerequisite text is regenerated (some were raw data dumps)
+  let fixed = 0;
+  for (const f of data.feats) {
+    const src = pool.find(x => x.name === f.name && x.source === f.source_key);
+    if (!src) continue;
+    const text = prereqText(resolveCopy(src, pool)?.prerequisite);
+    if (text !== f.prerequisite) { f.prerequisite = text; fixed++; }
+  }
+  note(added, 'feat prerequisite rewrites', `${fixed} existing feats`);
+  for (const raw of pool) {
+    if (!isOfficial(raw.source)) { note(skipped, 'feats (not official)', `${raw.name} [${raw.source}]`); continue; }
+    if (have.has(norm(raw.name))) continue;
+    const f = resolveCopy(raw, pool);
+    if (!f) { note(skipped, 'feats (unresolved copy)', `${raw.name} [${raw.source}]`); continue; }
+    data.feats.push({
+      name: f.name,
+      source: FEAT_SOURCE_LABELS[f.source] || bookName(f.source),
+      source_key: f.source,
+      category: FEAT_CATEGORIES[f.category] || 'General',
+      prerequisite: prereqText(f.prerequisite),
+      repeatable: !!f.repeatable,
+      ability_bonus: abilityBonus(f.ability),
+      desc: entriesToRulesText(f.entries || []),
+    });
+    have.add(norm(f.name));
+    note(added, 'feats', `${f.name} [${f.source}]`);
+  }
+  save();
+}
+
 for (const [k, v] of Object.entries(added)) console.log(`\nADDED ${k} (${v.length}):\n  ${v.join('\n  ')}`);
 for (const [k, v] of Object.entries(skipped)) console.log(`\nSKIPPED ${k} (${v.length}): ${v.slice(0, 30).join(', ')}${v.length > 30 ? ', …' : ''}`);
 if (dry) console.log('\n(dry run — nothing written)');
