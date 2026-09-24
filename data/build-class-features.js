@@ -153,6 +153,9 @@ function jsStringEscape(str) {
   return str.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
+module.exports = { stripTags, flattenEntries };
+if (require.main !== module) return; // imported as a library by other build scripts
+
 // Build output
 const lines = ['// AUTO-GENERATED from 5etools data — do not edit by hand', '// Run: node data/build-class-features.js to regenerate', ''];
 

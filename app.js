@@ -5539,8 +5539,8 @@ function renderFeaturesSection(ch) {
     ...(CLASS_FEATURES[ch.class] || []),
     ...((typeof CLASS_FEATURES_2024 !== 'undefined' && CLASS_FEATURES_2024[ch.class]) || []),
   ].map(([, name]) => name));
-  const classFeatures    = allFeatures.filter(f => !f._subclass && !f._species && !f._background && !f._feat && (f._class || knownClassNames.has(f.name)));
-  const customFeatures   = allFeatures.filter(f => !f._subclass && !f._species && !f._background && !f._feat && !f._class && !knownClassNames.has(f.name));
+  const classFeatures    = allFeatures.filter(f => !f._subclass && !f._species && !f._background && !f._feat && !f._option && (f._class || knownClassNames.has(f.name)));
+  const customFeatures   = allFeatures.filter(f => !f._subclass && !f._species && !f._background && !f._feat && !f._option && !f._class && !knownClassNames.has(f.name));
 
   // Build a map from resource name → resource object for quick lookup
   const resourceMap = {};
@@ -5750,6 +5750,42 @@ function renderFeaturesSection(ch) {
     ${sectionLabel(`${esc(ch.class || 'Class')} Features`)}
     ${classCard}` : '';
 
+  // Class options (Invocations, Metamagic, Maneuvers...) — a picker button per group, then the chosen cards
+  const optionGroups = classOptionGroups(ch);
+  const multiclass = (ch.classes || []).length > 1;
+  const optionCards = optionGroups.map(g => {
+    const n = g.chosen.length;
+    const countColor = n > g.max ? '#ef4444' : n < g.max ? 'var(--gold-lt)' : 'var(--text-dim)';
+    const cards = g.chosen.map(f => {
+      const i = allFeatures.indexOf(f);
+      const idKey = `co-desc-${i}`;
+      return `
+      <div class="sf-card cf-card" id="co-card-${i}">
+        <div class="sf-card-header" onclick="toggleSfCard('${idKey}', this)">
+          <span class="sf-source-badge" ${badgeStyle('#0ea5e9')}>${esc(f._optionSource || '')}</span>
+          <span class="sf-name">${esc(f.name)}</span>
+          <span class="sf-toggle">▼</span>
+          <button class="feature-del-btn cf-del-btn" onclick="event.stopPropagation();removeClassOption(${i})" title="Remove">&times;</button>
+        </div>
+        <div class="sf-card-body hidden" id="${idKey}">
+          <p class="sf-desc">${esc(f.desc || 'No description.')}</p>
+        </div>
+      </div>`;
+    }).join('');
+    return `
+      <div class="sf-card" onclick="openClassOptionPicker('${jsStr(g.key)}')" style="cursor:pointer">
+        <div class="sf-card-header">
+          <span class="sf-name" style="flex:1;white-space:normal;overflow:visible">${esc(g.label)}${multiclass ? ` <span style="color:var(--text-dim);font-weight:400">(${esc(g.cls)})</span>` : ''}</span>
+          <span style="color:${countColor};font-size:0.78rem;font-weight:700;margin-right:0.5rem" title="${n > g.max ? 'More chosen than your level allows' : ''}">${n} / ${g.max}</span>
+          <span style="color:var(--text-dim);font-size:0.72rem">${n < g.max ? 'Choose ↗' : 'Change ↗'}</span>
+        </div>
+      </div>
+      ${cards}`;
+  }).join('');
+  const optionsSection = optionGroups.length ? `
+    ${sectionLabel('Class Options')}
+    ${optionCards}` : '';
+
   const subSection = (subFeatures.length || hasSubclassModalData) ? `
     ${sectionLabel('✦ Subclass Features' + subclassModalBtn)}
     ${subCards}` : '';
@@ -5776,6 +5812,7 @@ function renderFeaturesSection(ch) {
     <div class="cs-section-label">Features &amp; Traits</div>
     ${speciesSection}
     ${classSection}
+    ${optionsSection}
     ${subSection}
     ${bgSection}
     ${featSection}
@@ -5940,6 +5977,117 @@ function addFeatToChar(featName) {
   saveData(db);
   updateFeatResults();
   renderApp();
+}
+
+// ── Class Options Picker (Invocations, Metamagic, Maneuvers...) ─────────────
+let _coState = null;
+
+function _coCurrentGroup(ch) {
+  return classOptionGroups(ch).find(g => g.key === _coState.key);
+}
+
+function openClassOptionPicker(groupKey) {
+  const ch = db.characters[currentCharId];
+  if (!ch) return;
+  _coState = { key: groupKey, search: '', showAll: false };
+  const g = _coCurrentGroup(ch);
+  if (!g) return;
+  const otherEd = g.edition === '2024' ? '2014' : '2024';
+  const hasOtherEd = CLASS_OPTIONS_DATA.options.some(o => o.types.some(t => g.types.includes(t)) && o.edition === otherEd);
+  openModal(`<h2 style="margin:0 0 0.2rem">✦ ${esc(g.label)}</h2>
+    <p id="co-count" style="color:var(--text-dim);font-size:0.8rem;margin:0 0 0.6rem"></p>
+    <input type="text" id="co-search" placeholder="Search ${esc(g.label.toLowerCase())}..." style="width:100%;margin-bottom:0.4rem" oninput="_coState.search=this.value;updateClassOptionResults()">
+    ${hasOtherEd ? `<label style="display:flex;align-items:center;gap:0.4rem;font-size:0.75rem;color:var(--text-dim);margin-bottom:0.5rem;cursor:pointer">
+      <input type="checkbox" onchange="_coState.showAll=this.checked;updateClassOptionResults()"> Also show ${otherEd} options</label>` : ''}
+    <div id="co-results" style="max-height:55vh;overflow-y:auto"></div>
+    <div class="form-actions" style="margin-top:0.8rem"><button class="btn" onclick="closeModal()">Done</button></div>`);
+  const modalEl = document.querySelector('#modal-overlay .modal');
+  if (modalEl) modalEl.style.maxWidth = '560px';
+  setTimeout(() => { updateClassOptionResults(); document.getElementById('co-search')?.focus(); }, 20);
+}
+
+function updateClassOptionResults() {
+  const el = document.getElementById('co-results');
+  const ch = db.characters[currentCharId];
+  if (!el || !ch || !_coState) return;
+  const g = _coCurrentGroup(ch);
+  if (!g) { el.innerHTML = '<p style="color:var(--text-dim)">Your class no longer gets these options.</p>'; return; }
+
+  const n = g.chosen.length;
+  const countEl = document.getElementById('co-count');
+  if (countEl) countEl.innerHTML = n > g.max
+    ? `<span style="color:#ef4444">${n} chosen — your level allows ${g.max}</span>`
+    : `${n} of ${g.max} chosen at ${esc(g.cls)} level ${_coClassLevel(ch, g.cls)}`;
+
+  const q = _coState.search.toLowerCase();
+  const match = x => !q || x.opt.name.toLowerCase().includes(q) || x.opt.desc.toLowerCase().includes(q);
+  const { suggested, other } = classOptionsForGroup(g, ch, _coState.showAll);
+  const chosenNames = new Set(g.chosen.map(f => f.name));
+  window._coVisible = [];
+
+  const row = ({ opt, status }) => {
+    const idx = window._coVisible.push(opt) - 1;
+    const uid = 'co-' + idx;
+    const taken = chosenNames.has(opt.name);
+    const prereq = classOptionPrereqLabel(opt);
+    const reason = status.met ? '' : `<div style="font-size:0.68rem;color:#f59e0b;width:100%;padding-left:0.1rem">Requires ${esc(status.unmet.join(' · '))}</div>`;
+    const btn = taken && !opt.repeatable
+      ? `<button class="btn btn-sm btn-primary" onclick="removeClassOptionByName('${jsStr(opt.name)}')" title="Remove">✓ Chosen</button>`
+      : `<button class="btn btn-sm" onclick="addClassOption(${idx})">+ ${taken ? 'Again' : 'Add'}</button>`;
+    return `<div class="spell-browser-row" style="flex-wrap:wrap;${status.met ? '' : 'opacity:0.6'}">
+      <div class="spell-browser-left">
+        <span style="font-size:0.82rem;font-weight:600">${esc(opt.name)}</span>
+        <span class="spell-source-badge" style="background:${opt.edition === '2024' ? '#c084fc' : '#6d7b9b'}">${esc(opt.source)}</span>
+        ${prereq && status.met ? `<span style="font-size:0.68rem;color:var(--text-dim)">${esc(prereq)}</span>` : ''}
+      </div>
+      <div style="display:flex;gap:0.3rem;flex-shrink:0">
+        <button id="fbt-${uid}" class="btn btn-sm" onclick="toggleFeatDesc('${uid}')">▾</button>
+        ${btn}
+      </div>
+      ${reason}
+      <div id="${uid}" style="display:none;width:100%;padding:0.3rem 0.25rem 0.4rem;font-size:0.78rem;color:var(--text-dim);border-top:1px solid rgba(var(--accent-rgb),0.15);margin-top:0.2rem">
+        <p style="margin:0">${esc(opt.desc)}</p>
+      </div>
+    </div>`;
+  };
+  const heading = t => `<div class="feat-section-label" style="margin:0.6rem 0 0.3rem">${t}</div>`;
+  const s = suggested.filter(match), o = other.filter(match);
+  el.innerHTML =
+    heading(`Suggested — you meet the prerequisites (${s.length})`) +
+    (s.map(row).join('') || '<p style="color:var(--text-dim);font-size:0.8rem">None match.</p>') +
+    (o.length ? heading(`Other options (${o.length})`) + o.map(row).join('') : '');
+}
+
+function addClassOption(idx) {
+  const ch = db.characters[currentCharId];
+  const opt = (window._coVisible || [])[idx];
+  const g = ch && _coCurrentGroup(ch);
+  if (!opt || !g) return;
+  ch.featuresList = ch.featuresList || [];
+  ch.featuresList.push({
+    name: opt.name, desc: opt.desc,
+    _option: opt.types[0], _optionTypes: opt.types, _optionClass: g.cls, _optionSource: opt.source,
+  });
+  saveData(db);
+  renderApp();
+  updateClassOptionResults();
+}
+
+function removeClassOption(i) {
+  const ch = db.characters[currentCharId];
+  if (!ch?.featuresList?.[i]?._option) return;
+  ch.featuresList.splice(i, 1);
+  saveData(db);
+  renderApp();
+}
+
+function removeClassOptionByName(name) {
+  const ch = db.characters[currentCharId];
+  const g = ch && _coCurrentGroup(ch);
+  const f = g && g.chosen.find(x => x.name === name);
+  if (!f) return;
+  removeClassOption(ch.featuresList.indexOf(f));
+  updateClassOptionResults();
 }
 
 // ── Magic Initiate Spell Picker ──────────────────────────────────────────────
