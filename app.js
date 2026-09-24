@@ -3601,7 +3601,7 @@ const _SPELL_SRC_DISPLAY = { "Player's Handbook (2024)":{abbr:'PHB24',color:'#c0
 let allSpellsDb   = null; // sorted master list from API
 let customSpells  = null; // [{...}, ...]  user-created
 let spellViewTab  = 'all'; // 'all' | 'known' | 'prepared'
-let spellFilters  = { q:'', level:'all', school:'all', cls:'all', source:'all', conc:false, ritual:false };
+let spellFilters  = { q:'', level:'all', school:'all', cls:'mine', source:'all', conc:false, ritual:false };
 let spellFetching = false;
 let spellShowCount = 100;
 
@@ -3633,6 +3633,27 @@ function _spellByName(name, ch) {
   const lc = String(name).toLowerCase(), ed = _spellEditionFor(ch);
   const matches = (allSpellsDb || []).filter(s => String(s.name).toLowerCase() === lc);
   return matches.find(s => (s.edition || '2024') === ed) || matches[0] || null;
+}
+
+// Priced material components: "M (diamonds worth 300+ GP, which the spell consumes)" → { gp: 300, consumed: true }
+function _costlyComponent(components) {
+  const m = String(components || '').match(/([\d,]+)\+?\s*gp/i);
+  return m ? { gp: m[1], consumed: /consume/i.test(components) } : null;
+}
+function _costTag(sp) {
+  const c = _costlyComponent(sp.components);
+  return c ? `<span class="spell-tag cost" title="${esc(sp.components)}">${esc(c.gp)} gp${c.consumed ? ' · used up' : ''}</span>` : '';
+}
+// Cantrips scale with character level ("At level 5: 2d10"); leveled spells scale with the slot instead
+function _spellTextCtx(sp, ch) {
+  return sp && sp.level_int === 0 ? { level: parseInt(ch?.level) || 1 } : null;
+}
+
+// Class spell lists the character casts from (Eldritch Knights and Arcane Tricksters use the Wizard list)
+function _mySpellClasses(ch) {
+  const out = new Set();
+  casterEntries(ch).forEach(e => out.add(SPELLCASTING_DATA.classes[e.cls] ? e.cls : 'Wizard'));
+  return out;
 }
 
 function getMergedSpells(ch, pool) {
@@ -3738,11 +3759,24 @@ function getFilteredAllSpells(ch) {
     ? getMergedSpells(ch, (allSpellsDb || []).filter(sp => sp.src === spellFilters.source))
     : getMergedSpells(ch);
   const f = spellFilters;
+  const mine = f.cls === 'mine' ? _mySpellClasses(ch) : new Set();
+  const myExtra = new Set();
+  if (f.cls === 'mine') _charSubclasses(ch).forEach(sub => {
+    const data = _sslDataFor(ch, sub);
+    (function collect(v) {
+      if (typeof v === 'string') myExtra.add(v.toLowerCase());
+      else if (v && typeof v === 'object') Object.values(v).forEach(collect);
+    })(data && (data.spells || data.levels));
+  });
   return merged.filter(sp => {
     if (f.q && !sp.name.toLowerCase().includes(f.q.toLowerCase()) && !(sp.school||'').toLowerCase().includes(f.q.toLowerCase()) && !(sp.desc||'').toLowerCase().includes(f.q.toLowerCase())) return false;
     if (f.level !== 'all' && (sp.level_int ?? -1) !== parseInt(f.level)) return false;
     if (f.school !== 'all' && (sp.school||'').toLowerCase() !== f.school.toLowerCase()) return false;
-    if (f.cls !== 'all') {
+    if (f.cls === 'mine') {
+      // Your classes' lists, plus subclass lists; characters with no spellcasting see everything
+      if (mine.size && !myExtra.has(sp.name.toLowerCase()) && !sp._custom
+          && ![...mine].some(c => (sp.dnd_class || '').toLowerCase().includes(c.toLowerCase()))) return false;
+    } else if (f.cls !== 'all') {
       const classes = (sp.dnd_class || sp.page || '').toLowerCase();
       if (!classes.includes(f.cls.toLowerCase())) return false;
     }
@@ -3784,6 +3818,7 @@ function renderFilterBar() {
       ${schools.map(s=>`<option value="${s}"${spellFilters.school===s?' selected':''}>${s}</option>`).join('')}
     </select>
     <select class="spell-filter-select" onchange="applySpellFilter('cls',this.value)">
+      <option value="mine"${spellFilters.cls==='mine'?' selected':''}>My class spells</option>
       <option value="all"${spellFilters.cls==='all'?' selected':''}>All Classes</option>
       ${classes.map(c=>`<option value="${c}"${spellFilters.cls===c?' selected':''}>${c}</option>`).join('')}
     </select>
@@ -3837,6 +3872,7 @@ function renderSpellResultsHtml(ch) {
               ${srcInfo.abbr !== '?' ? `<span class="spell-source-badge" style="background:${srcInfo.color}">${srcInfo.abbr}</span>` : ''}
               ${sp.concentration==='yes'?`<span class="spell-tag conc">C</span>`:''}
               ${sp.ritual==='yes'?`<span class="spell-tag ritual">R</span>`:''}
+              ${_costTag(sp)}
             </div>
             <div class="flex gap-1" style="flex-shrink:0">
               <button class="btn btn-sm" onclick="toggleSpellDesc('sd-all-${jsStr(sp.name).replace(/\s/g,'-')}')">▾</button>
@@ -3848,7 +3884,7 @@ function renderSpellResultsHtml(ch) {
               <button class="btn btn-sm${inK?' btn-primary':''}" onclick="spellAddFromEncoded('known','${safeData}')">${inK?'✓ Known':'Learn'}</button>`}
             </div>
           </div>
-          <div class="spell-desc rules-text hidden" id="sd-all-${esc(sp.name).replace(/\s/g,'-')}" style="margin:0 0 0.3rem 0.5rem;border-top:none;padding-top:0.2rem">${renderRulesText(sp.desc) || 'No description.'}</div>`;
+          <div class="spell-desc rules-text hidden" id="sd-all-${esc(sp.name).replace(/\s/g,'-')}" style="margin:0 0 0.3rem 0.5rem;border-top:none;padding-top:0.2rem">${renderRulesText(sp.desc, _spellTextCtx(sp, ch)) || 'No description.'}</div>`;
         }).join('')}
     </div>
     ${remaining > 0 ? `<button class="btn btn-sm" style="width:100%;margin-top:0.5rem" onclick="spellShowCount+=100;updateSpellResults()">Show more (${remaining} remaining)</button>` : ''}`;
@@ -3896,6 +3932,8 @@ function renderKnownView(ch) {
   const prepared = new Set((ch.spells.prepared||[]).map(s=>typeof s==='object'?s.name:s));
   if (known.length === 0) return `<p class="spell-empty" style="padding:1rem 0">No known spells. Add some from All Spells ↑</p>`;
   const entries = known.map((sp, i) => ({ full: fullSpellData(sp, ch), i }));
+  const castsFromKnown = casterEntries(ch).some(e => e.prog.known);
+  const castBtn = sp => `<button class="btn btn-sm btn-primary btn-cast" onclick="spellCastFx(this);openCastModal('${jsStr(sp.name)}',${sp.level_int || 0})">Cast</button>`;
   const grouped = groupSpellsByLevel(entries);
   return `<div>${grouped.map(({ label, spells }) => `
     <div class="spell-group">
@@ -3914,11 +3952,13 @@ function renderKnownView(ch) {
               ${lvlLabel||isObj&&sp.school?`<span class="spell-badge" style="border-color:${sc};color:${sc}">${lvlLabel}${lvlLabel&&isObj&&sp.school?' · ':''}${esc(isObj?sp.school||'':'')}</span>`:''}
               ${isObj&&sp.concentration==='yes'?`<span class="spell-tag conc">C</span>`:''}
               ${isObj&&sp.ritual==='yes'?`<span class="spell-tag ritual">R</span>`:''}
+              ${isObj?_costTag(sp):''}
               ${isObj&&sp._fromFeat?`<span style="font-size:0.58rem;color:#9b6dff;border:1px solid rgba(155,109,255,0.35);border-radius:3px;padding:0 3px;flex-shrink:0" title="${esc(sp._fromFeat)}">${_featBadgeAbbr(sp._fromFeat)}</span>`:''}
             </div>
             <div class="spell-card-right">
+              ${isObj && (sp.level_int === 0 || castsFromKnown || inPrep || sp._fromFeat) ? castBtn(sp) : ''}
               ${isObj && sp.level_int === 0
-                ? `<span style="font-size:0.7rem;color:var(--text-dim);align-self:center;padding:0 0.3rem">✓ Always Prepared</span>`
+                ? ''
                 : isObj && sp._miFreeCast
                 ? `<span style="font-size:0.7rem;color:#9b6dff;align-self:center;padding:0 0.3rem" title="Always available — cast free 1/LR or use a spell slot">✓ MI Spell</span>`
                 : isObj && sp._sfFreeCast
@@ -3929,7 +3969,7 @@ function renderKnownView(ch) {
             </div>
           </div>
           ${isObj&&(sp.casting_time||sp.range||sp.components)?`<div class="spell-meta">${[sp.casting_time,sp.range,sp.components].filter(Boolean).map(esc).join(' · ')}</div>`:''}
-          ${isObj?`<div class="spell-desc rules-text hidden" id="${id}">${renderRulesText(sp.desc) || 'No description available.'}</div>`:''}
+          ${isObj?`<div class="spell-desc rules-text hidden" id="${id}">${renderRulesText(sp.desc, _spellTextCtx(sp, ch)) || 'No description available.'}</div>`:''}
         </div>`;
       }).join('')}
     </div>`).join('')}</div>`;
@@ -3956,6 +3996,7 @@ function renderPreparedView(ch) {
               ${lvlLabel||isObj&&sp.school?`<span class="spell-badge" style="border-color:${sc};color:${sc}">${lvlLabel}${lvlLabel&&isObj&&sp.school?' · ':''}${esc(isObj?sp.school||'':'')}</span>`:''}
               ${isObj&&sp.concentration==='yes'?`<span class="spell-tag conc">C</span>`:''}
               ${isObj&&sp.ritual==='yes'?`<span class="spell-tag ritual">R</span>`:''}
+              ${isObj?_costTag(sp):''}
             </div>
             <div class="spell-card-right">
               <button class="btn btn-sm btn-primary btn-cast" onclick="spellCastFx(this);castPreparedByIdx(${i})">Cast</button>
@@ -3964,7 +4005,7 @@ function renderPreparedView(ch) {
             </div>
           </div>
           ${isObj&&(sp.casting_time||sp.range||sp.components)?`<div class="spell-meta">${[sp.casting_time,sp.range,sp.components].filter(Boolean).map(esc).join(' · ')}</div>`:''}
-          ${isObj?`<div class="spell-desc rules-text hidden" id="${id}">${renderRulesText(sp.desc) || 'No description available.'}</div>`:''}
+          ${isObj?`<div class="spell-desc rules-text hidden" id="${id}">${renderRulesText(sp.desc, _spellTextCtx(sp, ch)) || 'No description available.'}</div>`:''}
         </div>`;
       }).join('')}
     </div>`).join('')}</div>`;
@@ -4392,6 +4433,14 @@ function openCastModal(spellName, minLevel) {
   const ordinals = ['','1st','2nd','3rd','4th','5th','6th','7th','8th','9th'];
   const pactOrd = ordinals[pactLvl] || `${pactLvl}th`;
   const noSlots = availableLevels.length === 0 && !pactAvail;
+  const full = fullSpellData(spellName, ch) || {};
+  const upcast = String(full.desc || '').split(/\n{2,}/).find(b => /^\*\*(Using a Higher-Level Spell Slot|At Higher Levels)\.\*\*/.test(b));
+  const ritualHtml = full.ritual === 'yes' ? `
+    <div style="border-top:1px solid var(--border);padding-top:0.6rem;margin-top:0.2rem">
+      <button class="btn" onclick="confirmCastRitual('${jsStr(spellName)}')">Cast as a ritual</button>
+      <span style="font-size:0.72rem;color:var(--text-dim);margin-left:0.4rem">No slot · takes 10 minutes longer</span>
+    </div>` : '';
+  const upcastHtml = upcast ? `<div class="rules-text" style="margin-top:0.6rem;font-size:0.76rem;color:var(--text-dim)">${renderRulesText(upcast)}</div>` : '';
   openModal(`<h2>Cast ${esc(spellName)}</h2>
     <p style="font-size:0.8rem;color:var(--text-dim);margin-bottom:0.9rem">Choose a slot level:</p>
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:0.5rem;margin-bottom:1rem">
@@ -4417,6 +4466,8 @@ function openCastModal(spellName, minLevel) {
         ${!pactAvail && pactCur > 0 ? `<p style="font-size:0.7rem;color:var(--text-dim);margin-top:0.25rem">Spell level too high for pact slot (${pactOrd})</p>` : ''}
       </div>` : ''}
     ${noSlots?`<p style="color:var(--red-lt);font-size:0.82rem;margin-top:0.4rem">No spell slots available!</p>`:''}
+    ${upcastHtml}
+    ${ritualHtml}
     <div class="form-actions"><button class="btn" onclick="closeModal()">Cancel</button></div>`);
 }
 
@@ -4435,6 +4486,26 @@ function confirmCastPact(spellName) {
     if (isConc) ch.activeConcentration = { spellName, castLevel: pactLvl };
     saveData(db);
     closeModal();
+    _preserveScroll(() => renderApp());
+  };
+  if (isConc && ch.activeConcentration && ch.activeConcentration.spellName !== spellName) {
+    showConfirm(`This will end your concentration on ${esc(ch.activeConcentration.spellName)}. Continue?`, docast);
+  } else {
+    docast();
+  }
+}
+
+function confirmCastRitual(spellName) {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  const isConc = fullSpellData(spellName, ch)?.concentration === 'yes';
+  const docast = () => {
+    ch.sessionLog = ch.sessionLog || [];
+    ch.sessionLog.unshift({ text: `${spellName} (ritual)`, ts: Date.now() });
+    if (ch.sessionLog.length > 100) ch.sessionLog = ch.sessionLog.slice(0, 100);
+    if (isConc) ch.activeConcentration = { spellName, castLevel: fullSpellData(spellName, ch)?.level_int || 1 };
+    saveData(db);
+    closeModal();
+    showToast(`<strong>${esc(spellName)}</strong> cast as a ritual`);
     _preserveScroll(() => renderApp());
   };
   if (isConc && ch.activeConcentration && ch.activeConcentration.spellName !== spellName) {
@@ -4605,6 +4676,25 @@ function renderSpellsSection(ch) {
   };
   const prepareLimitFormula = [limitText(prepSummary, 'Prepare'), limitText(knownSummary, 'Know')].filter(Boolean).join(' · ');
 
+  // Item bonuses (Wand of the War Mage, Rod of the Pact Keeper…) apply to every spell DC/attack
+  const bonus = { dc: parseInt(ch.spellBonus?.dc) || 0, atk: parseInt(ch.spellBonus?.atk) || 0 };
+  // Feat spells (Magic Initiate, Fey Touched…) use the ability chosen for the feat
+  const featAbilities = [...new Set((ch.spells.known || []).map(sp => sp && (sp._miAbility || sp._sfAbility))
+    .filter(ab => ab && ABILITY_SHORT[ab]))];
+  const featRows = featAbilities.filter(ab => !casters.some(e => e.prog.ability === ab)).map(ab => {
+    const sMod = mod(ch.abilities[ab]);
+    return `<div class="spell-stat-row">
+      <div class="spell-stat-box"><div class="spell-stat-label">Feat spells</div><div class="spell-stat-val">${ABILITY_SHORT[ab]}</div></div>
+      <div class="spell-stat-box"><div class="spell-stat-label">Spell Save DC</div><div class="spell-stat-val">${8 + pb + sMod + bonus.dc}</div></div>
+      <div class="spell-stat-box"><div class="spell-stat-label">Spell Attack</div><div class="spell-stat-val">${(pb + sMod + bonus.atk) >= 0 ? '+' : ''}${pb + sMod + bonus.atk}</div></div>
+    </div>`;
+  }).join('');
+  const bonusHtml = (isSpellcaster || featRows) ? `<div class="spell-bonus-row">
+      <span>Item bonus</span>
+      <label>DC <input type="number" id="spell-bonus-dc" value="${bonus.dc}" onchange="setSpellBonus('dc',this.value)"></label>
+      <label>Attack <input type="number" id="spell-bonus-atk" value="${bonus.atk}" onchange="setSpellBonus('atk',this.value)"></label>
+    </div>` : '';
+
   // Per-class spellcasting stat rows (one per casting ability)
   let headerStats = '';
   if (isSpellcaster) {
@@ -4614,17 +4704,18 @@ function renderSpellsSection(ch) {
       if (!ab || seen.has(ab)) return '';
       seen.add(ab);
       const sMod = mod(ch.abilities[ab]);
-      const dc = 8 + pb + sMod;
-      const atk = pb + sMod;
+      const dc = 8 + pb + sMod + bonus.dc;
+      const atk = pb + sMod + bonus.atk;
       return `<div class="spell-stat-row">
         <div class="spell-stat-box"><div class="spell-stat-label">${esc(e.cls)}</div><div class="spell-stat-val">${ABILITY_SHORT[ab]}</div></div>
         <div class="spell-stat-box"><div class="spell-stat-label">Spell Save DC</div><div class="spell-stat-val">${dc}</div></div>
         <div class="spell-stat-box"><div class="spell-stat-label">Spell Attack</div><div class="spell-stat-val">${atk>=0?'+':''}${atk}</div></div>
       </div>`;
     }).join('') + (prepareLimitFormula ? `<div style="font-size:0.7rem;color:var(--text-dim);margin-top:0.3rem">${esc(prepareLimitFormula)}</div>` : '');
-  } else {
+  } else if (!featRows) {
     headerStats = `<p class="text-dim" style="font-size:0.82rem;margin-bottom:0.8rem">${esc(ch.class)} does not use spellcasting.</p>`;
   }
+  headerStats += featRows + bonusHtml;
 
   // Cantrips line — shown above spell slots when the character's class has a cantrip table
   const _cMax = _cantripMax(ch);
@@ -4694,6 +4785,12 @@ function renderSpellsSection(ch) {
     </div>
     <div id="spell-tab-content"></div>
   </div>`;
+}
+
+function setSpellBonus(kind, value) {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  ch.spellBonus = { ...(ch.spellBonus || {}), [kind]: parseInt(value) || 0 };
+  saveData(db); renderApp();
 }
 
 function toggleSpellDesc(id) { document.getElementById(id)?.classList.toggle('hidden'); }

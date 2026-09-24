@@ -83,6 +83,58 @@ const p = require('puppeteer-core');
     document.body.insertAdjacentHTML('beforeend', '<div id="cspt"><input id="csp-name" value="Zap"><input id="csp-level" value="2"><select id="csp-school"><option>Evocation</option></select><textarea id="csp-desc">Now with thunder.</textarea></div>');
     saveCustomSpell(customSpells.findIndex(sp => sp.name === 'Zap')); document.getElementById('cspt').remove();
     check('editing a custom spell updates characters that know it', ch.spells.known.find(sp => sp.name === 'Zap')?.desc === 'Now with thunder.', ch.spells.known.find(sp => sp.name === 'Zap'));
+    // Improvements ─────────────────────────────────────────────
+    const knownCard = name => [...document.querySelectorAll('#spell-tab-content .spell-card')].find(c => c.querySelector('.spell-name')?.textContent === name);
+    // Cast from the Known tab
+    ch = mk('Sorcerer', 3, '2014');
+    ch.spells.known.push({ name: 'Magic Missile', level_int: 1 }, { name: 'Fire Bolt', level_int: 0 });
+    spellViewTab = 'known'; renderApp(); await wait();
+    check('2014 Sorcerer can cast a known spell from Known', !!knownCard('Magic Missile')?.querySelector('.btn-cast'), null);
+    check('cantrips have a Cast button on Known', !!knownCard('Fire Bolt')?.querySelector('.btn-cast'), null);
+    ch = mk('Wizard', 3, '2024');
+    ch.spells.known.push({ name: 'Sleep', level_int: 1 });
+    spellViewTab = 'known'; renderApp(); await wait();
+    check('2024 Wizard must prepare before casting', !knownCard('Sleep')?.querySelector('.btn-cast'), null);
+
+    // Cast window: ritual + upcasting
+    ch = mk('Wizard', 5, '2024');
+    openCastModal('Detect Magic', 1);
+    check('ritual spells offer ritual casting', !!document.querySelector('#modal-overlay [onclick*="confirmCastRitual"]'), null);
+    const slotsBefore = ch.spells.slots[1];
+    confirmCastRitual('Detect Magic');
+    check('ritual casting uses no slot and is logged', ch.spells.slots[1] === slotsBefore && ch.sessionLog[0].text === 'Detect Magic (ritual)', ch.sessionLog[0]);
+    openCastModal('Fireball', 3);
+    const castText = document.querySelector('#modal-overlay')?.textContent || '';
+    check('cast window explains upcasting', castText.includes('Using a Higher-Level Spell Slot') && castText.includes('for each spell slot level above 3'), castText.slice(0, 200));
+    closeModal();
+
+    // Cantrip scaling and costly components
+    ch = mk('Wizard', 5, '2024');
+    ch.spells.known.push({ name: 'Fire Bolt', level_int: 0 }, { name: 'Revivify', level_int: 3 });
+    spellViewTab = 'known'; renderApp(); await wait();
+    check('cantrip shows its damage at your level', (knownCard('Fire Bolt')?.textContent || '').includes('At level 5: 2d10'), knownCard('Fire Bolt')?.textContent.slice(0, 200));
+    check('priced components are tagged', (knownCard('Revivify')?.querySelector('.spell-tag.cost')?.textContent || '') === '300 gp · used up', knownCard('Revivify')?.querySelector('.spell-tag.cost')?.textContent);
+
+    // "My class spells" filter
+    spellFilters = { q: '', level: 'all', school: 'all', cls: 'mine', source: 'all', conc: false, ritual: false };
+    ch = mk('Cleric', 5, '2024');
+    let mine = getFilteredAllSpells(ch).map(sp => sp.name);
+    check('Cleric sees Cleric spells, not Fireball', mine.includes('Cure Wounds') && !mine.includes('Fireball'), mine.length);
+    chClassField(0, 'subclass', 'Light Domain');
+    mine = getFilteredAllSpells(ch).map(sp => sp.name);
+    check('subclass spells join the list (Light Domain: Fireball)', mine.includes('Fireball'), mine.length);
+    ch = mk('Fighter', 3, '2024'); chClassField(0, 'subclass', 'Eldritch Knight');
+    mine = getFilteredAllSpells(ch).map(sp => sp.name);
+    check('Eldritch Knight sees the Wizard list', mine.includes('Shield') && !mine.includes('Cure Wounds'), mine.length);
+
+    // Feat-spell DC and item bonus
+    ch = mk('Fighter', 1, '2024', { wis: 16 });
+    ch.spells.known.push({ name: 'Guidance', level_int: 0, _fromFeat: 'Magic Initiate', _miAbility: 'wis' });
+    renderApp(); await wait();
+    const rows = () => [...document.querySelectorAll('.spell-stat-row')].map(r => r.textContent.replace(/\s+/g, ' ').trim());
+    check('feat spells get their own DC row (8 + 2 + 3 = 13)', rows().some(r => r.includes('Feat spells') && r.includes('13')), rows());
+    setSpellBonus('dc', 2);
+    check('item bonus raises the DC', rows().some(r => r.includes('Feat spells') && r.includes('15')), rows());
     return out;
   });
   results.forEach(r => console.log(r)); if (errs.length) console.log('PAGE ERRORS', errs);
