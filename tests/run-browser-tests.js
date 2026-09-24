@@ -6,7 +6,7 @@ const http = require('http');
 
 const root = path.join(__dirname, '..');
 const tests = process.argv.slice(2).length ? process.argv.slice(2)
-  : ['class-switch.browser.test.js', 'features.browser.test.js', 'rules-text.browser.test.js', 'books.browser.test.js'];
+  : ['class-switch.browser.test.js', 'features.browser.test.js', 'rules-text.browser.test.js', 'books.browser.test.js', 'spells.browser.test.js'];
 
 const server = spawn('npx', ['--yes', 'serve', '-l', '5173', root], { shell: true, stdio: 'ignore', windowsHide: true });
 const stop = () => {
@@ -23,7 +23,7 @@ const up = () => new Promise(res => http.get('http://localhost:5173/', r => { r.
   let failed = 0;
   for (const t of tests) {
     console.log(`\n── ${t}`);
-    const r = spawnSync(process.execPath, [path.join(__dirname, t)], { stdio: 'inherit' });
+    const r = spawnSync(process.execPath, [path.resolve(__dirname, t)], { stdio: 'inherit' });
     if (r.status !== 0) failed++;
   }
   console.log(failed ? `\n${failed} browser test file(s) failed` : '\nAll browser tests passed');
