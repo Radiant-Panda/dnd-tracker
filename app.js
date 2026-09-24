@@ -7040,7 +7040,7 @@ function renderProficienciesLanguages(ch) {
     <div class="cs-section-label">Proficiencies &amp; Languages</div>
     ${groupsHtml || '<div class="feature-empty">No proficiencies yet.</div>'}
     <div class="prof-add-row">
-      <input type="text" id="prof-add-input" list="prof-suggestions" placeholder="Add a proficiency (armor, weapon, tool…)" onkeydown="if(event.key==='Enter')addProficiencyFromInput()">
+      <input type="text" id="prof-add-input" list="prof-suggestions" placeholder="Add armor, weapon, tool…" onkeydown="if(event.key==='Enter')addProficiencyFromInput()">
       <datalist id="prof-suggestions">${suggestions.map(n => `<option value="${esc(n)}">`).join('')}</datalist>
       <button class="btn btn-sm" onclick="addProficiencyFromInput()">Add</button>
     </div>
