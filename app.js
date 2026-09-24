@@ -805,6 +805,7 @@ function migrateCharacter(ch) {
   const _classForSub = sub => (ch.classes.find(c => c.subclass === sub) || ch.classes[0] || {}).class;
   (ch.featuresList || []).forEach(f => { if (f._subclass && !f._forClass) f._forClass = _classForSub(f._subclass); });
   (ch.resources || []).forEach(r => { if (r._subclass && !r._forClass) r._forClass = _classForSub(r._subclass); });
+  _syncSubclassFeaturesFor(ch, false);
   // v5: proficiency source tracking — one-time migration
   if (!ch._profMigrationApplied) {
     const _migClass = ch.classes[0]?.class || 'Fighter';
@@ -5508,10 +5509,10 @@ function getClassFeaturesUpToLevel(className, level, ch) {
   return list.filter(([lvl]) => lvl <= level).map(([lvl, name, desc]) => ({ name, desc }));
 }
 
-function openClassFeaturesModal(charId) {
+function openClassFeaturesModal(charId, className) {
   const ch = db.characters[charId]; if (!ch) return;
-  const cls = ch.class || '';
-  const level = parseInt(ch.level) || 1;
+  const cls = className || ch.class || '';
+  const level = _resClassLevel(ch, cls) || parseInt(ch.level) || 1;
   const allFeats = _classFeaturesFor(cls, ch);
 
   // Group by level
@@ -5558,10 +5559,11 @@ function renderFeaturesSection(ch) {
   const bgFeatures       = allFeatures.filter(f => f._background);
   const featFeatures     = allFeatures.filter(f => f._feat);
   // Class features: either explicitly flagged, or name matches a known class feature (handles old data without _class flag)
-  const knownClassNames  = new Set([
-    ...(CLASS_FEATURES[ch.class] || []),
-    ...((typeof CLASS_FEATURES_2024 !== 'undefined' && CLASS_FEATURES_2024[ch.class]) || []),
-  ].map(([, name]) => name));
+  const charClasses      = (ch.classes && ch.classes.length ? ch.classes : [{ class: ch.class, level: ch.level }]);
+  const knownClassNames  = new Set(charClasses.flatMap(c => [
+    ...(CLASS_FEATURES[c.class] || []),
+    ...((typeof CLASS_FEATURES_2024 !== 'undefined' && CLASS_FEATURES_2024[c.class]) || []),
+  ]).map(([, name]) => name));
   const classFeatures    = allFeatures.filter(f => !f._subclass && !f._species && !f._background && !f._feat && !f._option && (f._class || knownClassNames.has(f.name)));
   const customFeatures   = allFeatures.filter(f => !f._subclass && !f._species && !f._background && !f._feat && !f._option && !f._class && !knownClassNames.has(f.name));
 
@@ -5572,7 +5574,7 @@ function renderFeaturesSection(ch) {
   // Look up the level a subclass feature was gained at
   function featLevel(f) {
     const sd = typeof SUBCLASS_DATA !== 'undefined' &&
-      SUBCLASS_DATA[ch.class]?.[f._subclass]?.features;
+      SUBCLASS_DATA[f._forClass || ch.class]?.[f._subclass]?.features;
     if (!sd) return null;
     const match = sd.find(s => s.name === f.name);
     return match ? match.level : null;
@@ -5581,7 +5583,7 @@ function renderFeaturesSection(ch) {
   // Look up a linked resource for a subclass feature
   function linkedResource(f) {
     const sd = typeof SUBCLASS_DATA !== 'undefined' &&
-      SUBCLASS_DATA[ch.class]?.[f._subclass]?.features;
+      SUBCLASS_DATA[f._forClass || ch.class]?.[f._subclass]?.features;
     if (!sd) return null;
     const match = sd.find(s => s.name === f.name);
     if (!match?.resource) return null;
@@ -5682,7 +5684,7 @@ function renderFeaturesSection(ch) {
           ${f._mi.spellName ? `<span class="spell-badge" style="margin:0 2px 2px 0;font-size:0.7rem;display:inline-block;border-color:#f59e0b;color:#f59e0b">${esc(f._mi.spellName)} <em>1/LR</em></span>` : ''}
           <button class="btn btn-sm" style="margin-top:0.4rem;font-size:0.72rem;display:block" onclick="event.stopPropagation();_editMiFeat(${i})">Edit Spell Choices</button>
         </div>`;
-    } else if (f.name === 'Magic Initiate') {
+    } else if (/^Magic Initiate\b/.test(f.name)) {
       spellSection = `${_DIV}<button class="btn btn-sm" style="font-size:0.72rem" onclick="event.stopPropagation();_editMiFeat(${i})">Choose Spells</button></div>`;
     } else if (f._sf) {
       const _sfCfg = _sfConfigKey({ name: f.name, source: f._featSource || '' });
@@ -5720,16 +5722,18 @@ function renderFeaturesSection(ch) {
       </div>`;
   }).join('');
 
-  // Class features — single card that opens the full modal
-  const classFeatTotal = _classFeaturesFor(ch.class, ch).filter(([lvl]) => lvl <= (parseInt(ch.level) || 1)).length;
-  const classCard = (_classFeaturesFor(ch.class, ch).length || classFeatures.length) ? `
-    <div class="sf-card" onclick="openClassFeaturesModal('${ch.id}')" style="cursor:pointer">
+  // Class features — one card per class, each opening the full modal at that class's level
+  const classCard = charClasses.filter(c => _classFeaturesFor(c.class, ch).length).map(c => {
+    const total = _classFeaturesFor(c.class, ch).filter(([lvl]) => lvl <= (parseInt(c.level) || 1)).length;
+    return `
+    <div class="sf-card" onclick="openClassFeaturesModal('${ch.id}','${jsStr(c.class)}')" style="cursor:pointer">
       <div class="sf-card-header">
-        <span class="sf-source-badge" ${badgeStyle('#6366f1')}>${esc(ch.class || 'Class').toUpperCase()}</span>
-        <span class="sf-name" style="flex:1">${classFeatTotal} feature${classFeatTotal !== 1 ? 's' : ''} at your level</span>
+        <span class="sf-source-badge" ${badgeStyle('#6366f1')}>${esc(c.class || 'Class').toUpperCase()}${charClasses.length > 1 ? ' ' + (parseInt(c.level) || 1) : ''}</span>
+        <span class="sf-name" style="flex:1">${total} feature${total !== 1 ? 's' : ''} at your level</span>
         <span style="color:var(--text-dim);font-size:0.72rem">View all ↗</span>
       </div>
-    </div>` : '';
+    </div>`;
+  }).join('');
 
   // Custom feature cards — editable
   const customRows = customFeatures.map(f => {
@@ -5770,7 +5774,7 @@ function renderFeaturesSection(ch) {
     ? `<button class="btn btn-sm" onclick="openSubclassModal('${ch.id}')" style="font-size:0.7rem;padding:0.2rem 0.5rem;margin-left:0.5rem;vertical-align:middle;text-transform:none;letter-spacing:0">✦ Spells &amp; Tables</button>`
     : '';
   const classSection = classCard ? `
-    ${sectionLabel(`${esc(ch.class || 'Class')} Features`)}
+    ${sectionLabel(charClasses.length > 1 ? 'Class Features' : `${esc(ch.class || 'Class')} Features`)}
     ${classCard}` : '';
 
   // Class options (Invocations, Metamagic, Maneuvers...) — a picker button per group, then the chosen cards
@@ -6126,8 +6130,8 @@ function openMagicInitiatePicker(featData, editIdx) {
   const classes = is2024 ? _MI_2024_CLASSES : _MI_2014_CLASSES;
   const defaultCls = classes[0];
   let miId = Math.random().toString(36).slice(2, 8);
-  let initCls = defaultCls;
-  let initAbility = _MI_DEFAULT_ABILITY[defaultCls] || 'wis';
+  let initCls = featData._fixedCls || defaultCls;
+  let initAbility = _MI_DEFAULT_ABILITY[initCls] || 'wis';
   if (editIdx >= 0) {
     const existingFeat = db.characters[currentCharId]?.featuresList?.[editIdx];
     if (existingFeat?._mi) {
@@ -6136,7 +6140,7 @@ function openMagicInitiatePicker(featData, editIdx) {
       initAbility = existingFeat._mi.ability || initAbility;
     }
   }
-  _miState = { featData, editIdx: editIdx ?? -1, miId, step: 1, cls: initCls, ability: initAbility, cantrips: [], spell1: null, is2024, classes };
+  _miState = { featData, editIdx: editIdx ?? -1, miId, step: 1, cls: initCls, ability: initAbility, cantrips: [], spell1: null, is2024, classes: featData._fixedCls ? [featData._fixedCls] : classes };
   // Pre-fill existing selections from tagged known spells when editing
   if (editIdx >= 0) {
     const knownSpells = db.characters[currentCharId]?.spells?.known || [];
@@ -6279,11 +6283,15 @@ function _cleanupMiFeatData(ch, miData) {
 function _editMiFeat(i) {
   const ch = db.characters[currentCharId]; if (!ch) return;
   const feat = (ch.featuresList || [])[i];
-  if (!feat || feat.name !== 'Magic Initiate') return;
-  const featData = (FEATS_ITEMS_DATA?.feats || []).find(x => x.name === 'Magic Initiate' && x.source === feat._featSource)
-    || (FEATS_ITEMS_DATA?.feats || []).find(x => x.name === 'Magic Initiate');
+  if (!feat || !/^Magic Initiate\b/.test(feat.name)) return;
+  // Backgrounds grant a fixed list, e.g. "Magic Initiate (Cleric)" — always the 2024 feat
+  const fixedCls = (feat.name.match(/\((\w+)\)/) || [])[1];
+  const feats = FEATS_ITEMS_DATA?.feats || [];
+  const featData = fixedCls
+    ? feats.find(x => x.name === 'Magic Initiate' && x.source_key === 'XPHB')
+    : feats.find(x => x.name === 'Magic Initiate' && x.source === feat._featSource) || feats.find(x => x.name === 'Magic Initiate');
   if (!featData) return;
-  openMagicInitiatePicker(featData, i);
+  openMagicInitiatePicker(fixedCls ? { ...featData, name: feat.name, source: feat._featSource, _fixedCls: fixedCls } : featData, i);
 }
 
 // ── Spell-Feat Picker (General) ───────────────────────────────────────────────
@@ -7443,68 +7451,67 @@ function _updateOnlineBanner(isOnline) {
 }
 
 // ── Sync Subclass Features on Level Change ────────────────────────────────────
-function syncSubclassFeatures(charId) {
-  const ch = db.characters[charId];
-  if (!ch || !ch.subclass) return;
+function _newSubclassResource(res, subclassName, cls, ch, desc) {
+  const max = resourceMax({ maxFormula: res.maxFormula, _subclass: subclassName, _forClass: cls }, ch);
+  return {
+    id: `res_${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
+    name: res.name,
+    type: (res.maxFormula === 'level_x5' || res.name.includes('Hands') || res.name.includes('Pool')) ? 'pool' : 'pips',
+    current: max, max, maxFormula: res.maxFormula,
+    die: res.die || null, recharge: res.recharge || 'long',
+    source: subclassName, desc: desc || '',
+    custom: false, _subclass: subclassName, _forClass: cls,
+  };
+}
 
-  const cls = ch.class || '';
-  const subclassName = ch.subclass;
-  const level = ch.level || 1;
-  const subclassData = typeof SUBCLASS_DATA !== 'undefined' &&
-    SUBCLASS_DATA[cls]?.[subclassName];
-  if (!subclassData) return;
-
+// Brings every class's subclass features and trackers in line with that class's level:
+// adds ones now unlocked (announced when notify is set) and removes ones above the level.
+function _syncSubclassFeaturesFor(ch, notify) {
+  if (!ch || typeof SUBCLASS_DATA === 'undefined') return;
+  ch.featuresList = ch.featuresList || [];
+  ch.resources = ch.resources || [];
   const unlocked = [];
-
-  // 1. Add newly unlocked features
-  const existingNames = new Set((ch.featuresList || []).filter(f => f._subclass === subclassName).map(f => f.name));
-  (subclassData.features || []).forEach(feat => {
-    if (feat.level <= level && !existingNames.has(feat.name)) {
-      ch.featuresList = ch.featuresList || [];
-      ch.featuresList.push({ name: feat.name, desc: feat.description, _subclass: subclassName, _forClass: cls });
-      unlocked.push({ name: feat.name, resource: feat.resource });
-    }
-  });
-
-  // 3. Create resource trackers for newly unlocked features
-  const existingResNames = new Set((ch.resources || []).map(r => r.name));
-  unlocked.forEach(({ resource }) => {
-    if (!resource || existingResNames.has(resource.name)) return;
-    existingResNames.add(resource.name);
-    const max = resourceMax({ maxFormula: resource.maxFormula, _subclass: subclassName, _forClass: cls }, ch);
-    ch.resources = ch.resources || [];
-    ch.resources.push({
-      id: `res_${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
-      name: resource.name,
-      type: (resource.maxFormula === 'level_x5' || resource.name.includes('Hands') || resource.name.includes('Pool')) ? 'pool' : 'pips',
-      current: max,
-      max,
-      maxFormula: resource.maxFormula,
-      die: resource.die || null,
-      recharge: resource.recharge || 'long',
-      source: subclassName,
-      desc: '',
-      custom: false,
-      _subclass: subclassName,
-      _forClass: cls,
+  (ch.classes || []).forEach(entry => {
+    const cls = entry.class, sub = entry.subclass, lvl = parseInt(entry.level) || 1;
+    const feats = (sub && SUBCLASS_DATA[cls]?.[sub]?.features) || [];
+    if (!feats.length) return;
+    const open = feats.filter(f => f.level <= lvl);
+    const openNames = new Set(open.map(f => f.name));
+    const openRes = new Set(open.filter(f => f.resource).map(f => f.resource.name));
+    const mine = f => f._subclass === sub && f._forClass === cls;
+    ch.featuresList = ch.featuresList.filter(f => !mine(f) || f._placeholder || openNames.has(f.name));
+    ch.resources = ch.resources.filter(r => !mine(r) || openRes.has(r.name));
+    const have = new Set(ch.featuresList.filter(mine).map(f => f.name));
+    const haveRes = new Set(ch.resources.map(r => r.name));
+    open.forEach(feat => {
+      if (!have.has(feat.name)) {
+        have.add(feat.name);
+        ch.featuresList.push({ name: feat.name, desc: feat.description, _subclass: sub, _forClass: cls });
+        unlocked.push({ name: feat.name, resource: feat.resource, cls });
+      }
+      if (feat.resource && !haveRes.has(feat.resource.name)) {
+        haveRes.add(feat.resource.name);
+        ch.resources.push(_newSubclassResource(feat.resource, sub, cls, ch, feat.description));
+      }
     });
   });
-
-  // 4. Toast
-  if (unlocked.length) {
+  syncClassResources(ch);
+  if (notify && unlocked.length) {
     const lines = unlocked.map(u => {
       let msg = `<strong>${esc(u.name)}</strong>`;
       if (u.resource) {
-        const die = scaledDie(u.resource.name, _resClassLevel(ch, cls)) || u.resource.die;
+        const die = scaledDie(u.resource.name, _resClassLevel(ch, u.cls)) || u.resource.die;
         const recharge = u.resource.recharge === 'short' ? 'short rest' : 'long rest';
         msg += ` — ${esc(u.resource.name)}${die ? ' '+die : ''}, recharges on ${recharge}`;
       }
       return msg;
     }).join('<br>');
-    showToast(`<div class="toast-title">✦ Level ${level} unlocked:</div>${lines}`);
+    showToast(`<div class="toast-title">✦ Unlocked:</div>${lines}`);
   }
+}
 
-  syncClassResources(ch);
+function syncSubclassFeatures(charId, notify = true) {
+  _syncSubclassFeaturesFor(db.characters[charId], notify);
 }
 
 function renderSubclassField(ch) {
@@ -7710,14 +7717,15 @@ function renderCharacterSheet() {
           const rmpmm = (SPECIES_DATA?.races_mpmm || []).map(r => r.name);
           const allRaces = [...s2024, ...r2014, ...rmpmm];
           const customRace = ch.race && !allRaces.includes(ch.race) ? ch.race : null;
-          const makeOpts = (arr) => arr.map(n => `<option${ch.race===n?' selected':''}>${esc(n)}</option>`).join('');
+          const raceEd = ch.raceEdition || ((ch.edition || '2024') === '2014' && r2014.includes(ch.race) ? '2014' : '2024');
+          const makeOpts = (arr, ed) => arr.map(n => `<option value="${ed}|${esc(n)}"${ch.race===n && (raceEd===ed || !s2024.includes(n) || !r2014.includes(n)) ?' selected':''}>${esc(n)}</option>`).join('');
           const customGrp = customRace ? `<optgroup label="Other"><option value="${esc(customRace)}" selected>${esc(customRace)}</option></optgroup>` : '';
           return `<select style="${ddStyle}" onchange="changeRace(this.value)">
             <option value=""${!ch.race?' selected':''}>Choose species…</option>
             ${customGrp}
-            <optgroup label="2024 PHB">${makeOpts(s2024)}</optgroup>
-            <optgroup label="2014 PHB">${makeOpts(r2014)}</optgroup>
-            <optgroup label="Mordenkainen's Multiverse">${makeOpts(rmpmm)}</optgroup>
+            <optgroup label="2024 PHB">${makeOpts(s2024, '2024')}</optgroup>
+            <optgroup label="2014 PHB">${makeOpts(r2014, '2014')}</optgroup>
+            <optgroup label="Mordenkainen's Multiverse">${makeOpts(rmpmm, '2014')}</optgroup>
           </select>`;
         })()}
       </div>
@@ -7790,10 +7798,13 @@ function changeBackground(newBg) {
     }
   }
 
-  // Strip old background-sourced features and feat
-  ch.featuresList = (ch.featuresList || []).filter(f =>
-    !(f._background === true) && !(f._feat && f._featSource?.startsWith('Background ('))
-  );
+  // Strip old background-sourced features and feat, including spells the feat granted
+  const fromOldBg = f => f._background === true || (f._feat && f._featSource?.startsWith('Background ('));
+  (ch.featuresList || []).filter(fromOldBg).forEach(f => {
+    if (f._mi) _cleanupMiFeatData(ch, f._mi);
+    if (f._sf) _cleanupSfFeatData(ch, f._sf);
+  });
+  ch.featuresList = (ch.featuresList || []).filter(f => !fromOldBg(f));
 
   ch.background = newBg;
 
@@ -7831,18 +7842,19 @@ function changeRace(newRace) {
   // Strip old species traits
   ch.featuresList = (ch.featuresList || []).filter(f => !f._species);
 
-  ch.race = newRace;
+  // Values look like "2014|Elf" (the dropdown); a plain name follows the character's edition
+  const [edPart, namePart] = String(newRace || '').includes('|') ? newRace.split('|') : [null, newRace];
+  const edition = edPart || ((ch.edition || '2024') === '2014' ? '2014' : '2024');
+  ch.race = namePart;
+  ch.raceEdition = edition;
 
-  const allSources = [
-    ...(SPECIES_DATA?.species_2024 || []),
-    ...(SPECIES_DATA?.races_2014 || []),
-    ...(SPECIES_DATA?.races_mpmm || [])
-  ];
-  const raceData = allSources.find(r => r.name === newRace);
+  const s2024 = SPECIES_DATA?.species_2024 || [], s2014 = [...(SPECIES_DATA?.races_2014 || []), ...(SPECIES_DATA?.races_mpmm || [])];
+  const allSources = edition === '2014' ? [...s2014, ...s2024] : [...s2024, ...s2014];
+  const raceData = allSources.find(r => r.name === namePart);
   if (raceData) {
     // Traits
     (raceData.traits || []).forEach(trait => {
-      ch.featuresList.push({ name: trait.name, desc: trait.desc, _species: newRace });
+      ch.featuresList.push({ name: trait.name, desc: trait.desc, _species: namePart });
     });
     // Speed
     if (raceData.speed) ch.combat.speed = raceData.speed;
@@ -7935,29 +7947,10 @@ function applySubclassForClass(charId, idx, className, subclassName) {
   if (!subclassName) return;
   const subclassData = (typeof SUBCLASS_DATA !== 'undefined') && SUBCLASS_DATA[className]?.[subclassName];
   if (!subclassData) return;
-  const features = subclassData.features || [];
-  if (!features.length) {
+  if (!(subclassData.features || []).length) {
     ch.featuresList.push({ name: subclassName, desc: '<em class="no-features-note">No features data yet.</em>', _subclass: subclassName, _forClass: className, _placeholder: true });
   }
-  const level = ch.level || 1;
-  const injectedResources = new Set();
-  features.forEach(feat => {
-    if (feat.level > level) return;
-    ch.featuresList.push({ name: feat.name, desc: feat.description, _subclass: subclassName, _forClass: className });
-    if (feat.resource && !injectedResources.has(feat.resource.name) && !ch.resources.some(r => r.name === feat.resource.name)) {
-      injectedResources.add(feat.resource.name);
-      const max = resourceMax({ maxFormula: feat.resource.maxFormula, _subclass: subclassName, _forClass: className }, ch);
-      ch.resources.push({
-        id: `res_${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
-        name: feat.resource.name,
-        type: (feat.resource.maxFormula === 'level_x5' || feat.resource.name.includes('Hands') || feat.resource.name.includes('Pool')) ? 'pool' : 'pips',
-        current: max, max, maxFormula: feat.resource.maxFormula,
-        die: feat.resource.die || null, recharge: feat.resource.recharge || 'long',
-        source: subclassName, desc: feat.description || '',
-        custom: false, _subclass: subclassName, _forClass: className,
-      });
-    }
-  });
+  _syncSubclassFeaturesFor(ch, false);
 }
 
 function chClassField(idx, field, value) {
@@ -7967,8 +7960,10 @@ function chClassField(idx, field, value) {
   if (field === 'class') {
     // Remove old class resources/features, and spells the old subclass added
     if (ch.classes[idx].subclass) _removeSubclassSpells(ch, ch.classes[idx].subclass);
-    ch.resources = (ch.resources || []).filter(r => r._forClass !== oldClass && r.source !== oldClass);
-    ch.featuresList = (ch.featuresList || []).filter(f => f._forClass !== oldClass);
+    if (!ch.classes.some((c, i) => i !== idx && c.class === oldClass)) {
+      ch.resources = (ch.resources || []).filter(r => r._forClass !== oldClass && r.source !== oldClass);
+      ch.featuresList = (ch.featuresList || []).filter(f => f._forClass !== oldClass);
+    }
     ch.classes[idx].class = value;
     ch.classes[idx].subclass = '';
     syncClassFields(ch);
@@ -7988,7 +7983,7 @@ function chClassField(idx, field, value) {
     const otherSum = ch.classes.reduce((s, c, i) => i === idx ? s : s + c.level, 0);
     ch.classes[idx].level = Math.min(newLvl, 20 - otherSum);
     syncClassFields(ch);
-    syncClassResources(ch);
+    syncSubclassFeatures(currentCharId);
   } else if (field === 'subclass') {
     applySubclassForClass(currentCharId, idx, ch.classes[idx].class, value);
     syncClassFields(ch);
@@ -8021,9 +8016,11 @@ function removeCharClass(idx) {
   if (ch.classes.length <= 1) return;
   const removed = ch.classes[idx];
   if (removed.subclass) _removeSubclassSpells(ch, removed.subclass);
-  // Remove resources/features tagged with the removed class
-  ch.resources = (ch.resources || []).filter(r => r._forClass !== removed.class && r.source !== removed.class);
-  ch.featuresList = (ch.featuresList || []).filter(f => f._forClass !== removed.class);
+  // Remove resources/features tagged with the removed class (unless another entry still has it)
+  if (!ch.classes.some((c, i) => i !== idx && c.class === removed.class)) {
+    ch.resources = (ch.resources || []).filter(r => r._forClass !== removed.class && r.source !== removed.class);
+    ch.featuresList = (ch.featuresList || []).filter(f => f._forClass !== removed.class);
+  }
   if (removed.subclass) {
     ch.resources = ch.resources.filter(r => r._subclass !== removed.subclass || r._forClass !== removed.class);
     ch.featuresList = ch.featuresList.filter(f => f._subclass !== removed.subclass || f._forClass !== removed.class);
