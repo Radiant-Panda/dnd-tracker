@@ -807,6 +807,13 @@ function migrateCharacter(ch) {
   (ch.resources || []).forEach(r => { if (r._subclass && !r._forClass) r._forClass = _classForSub(r._subclass); });
   _syncSubclassFeaturesFor(ch, false);
   _refreshStoredRulesText(ch);
+  // Older 2024 background data spelled "Sleight Of Hand" (never matched the skill list) and "Calligrapher'S"
+  (ch.skillProficiencies || []).forEach((e, i) => {
+    if (e === 'Sleight Of Hand') ch.skillProficiencies[i] = 'Sleight of Hand';
+    else if (e && e.name === 'Sleight Of Hand') e.name = 'Sleight of Hand';
+  });
+  if (typeof ch.proficiencies === 'string') ch.proficiencies = ch.proficiencies.replace(/'S\b/g, "'s");
+  if (Array.isArray(ch.backgroundTools)) ch.backgroundTools = ch.backgroundTools.map(t => String(t).replace(/'S\b/g, "'s"));
   // v5: proficiency source tracking — one-time migration
   if (!ch._profMigrationApplied) {
     const _migClass = ch.classes[0]?.class || 'Fighter';

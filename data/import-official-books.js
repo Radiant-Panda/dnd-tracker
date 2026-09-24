@@ -231,6 +231,84 @@ if (want('feats')) {
   save();
 }
 
+// ── Backgrounds ──
+const SKILLS = ['Acrobatics', 'Animal Handling', 'Arcana', 'Athletics', 'Deception', 'History', 'Insight', 'Intimidation',
+  'Investigation', 'Medicine', 'Nature', 'Perception', 'Performance', 'Persuasion', 'Religion', 'Sleight of Hand', 'Stealth', 'Survival'];
+const skillName = s => SKILLS.find(k => k.toLowerCase() === String(s).toLowerCase()) || title(s);
+// "calligrapher's supplies" → "Calligrapher's Supplies" (not "Calligrapher'S"), "anyArtisansTool" → "Any Artisan's Tools"
+const toolName = t => ({ anyartisanstool: "Any Artisan's Tools", anymusicalinstrument: 'Any Musical Instrument', anygamingset: 'Any Gaming Set' }[norm(t)]
+  || title(t).replace(/'S\b/g, "'s").replace(/\b(Of|And|The)\b/g, w => w.toLowerCase()));
+const ABILITY_NAMES = { str: 'Strength', dex: 'Dexterity', con: 'Constitution', int: 'Intelligence', wis: 'Wisdom', cha: 'Charisma' };
+
+function fixedKeys(list) { // [{insight: true, religion: true}] → ['insight','religion'] (ignores "choose")
+  return Object.entries((list || [])[0] || {}).filter(([k, v]) => v === true).map(([k]) => k);
+}
+function choiceNote(list, what) {
+  const c = ((list || [])[0] || {}).choose;
+  const n = c && (c.count || 1);
+  return c ? `Choose ${n} ${n === 1 ? what.replace(/s$/, '') : what} from ${c.from.map(title).join(', ')}.` : '';
+}
+
+if (want('backgrounds')) {
+  const { data, save } = loadData('species_backgrounds.js', 'SPECIES_DATA');
+  // Existing backgrounds: fix capitalisation that broke skill matching ("Sleight Of Hand")
+  let fixed = 0;
+  for (const b of [...data.backgrounds_2024, ...data.backgrounds_2014]) {
+    const skills = (b.skills || []).map(skillName), tools = (b.tools || []).map(toolName);
+    if (JSON.stringify(skills) !== JSON.stringify(b.skills) || JSON.stringify(tools) !== JSON.stringify(b.tools)) {
+      b.skills = skills; b.tools = tools;
+      if (b.desc) b.desc = b.desc.replace(/Sleight Of Hand/g, 'Sleight of Hand');
+      fixed++;
+    }
+  }
+  note(added, 'background name fixes', `${fixed} existing backgrounds`);
+
+  const pool = J('backgrounds.json').background;
+  // Granted feats use the feat data's own spelling ("Mark of Making", not "Mark Of Making")
+  const featNames = [...loadData('feats_items.js', 'FEATS_ITEMS_DATA').data.feats.map(x => x.name), ...J('feats.json').feat.map(x => x.name)];
+  const realFeat = n => featNames.find(x => norm(x) === norm(n)) || title(n);
+  // First paragraph of the description, looking inside sections (but not lists)
+  const firstParagraph = entries => {
+    for (const e of entries || []) {
+      if (typeof e === 'string') return stripTags(e).replace(/[{}]/g, '');
+      const inner = e && e.type !== 'list' && firstParagraph(e.entries);
+      if (inner) return inner;
+    }
+    return '';
+  };
+  const have = new Set([...data.backgrounds_2024, ...data.backgrounds_2014].map(b => norm(b.name)));
+  for (const raw of pool) {
+    if (!isOfficial(raw.source)) { note(skipped, 'backgrounds (not official)', `${raw.name} [${raw.source}]`); continue; }
+    if (have.has(norm(raw.name))) continue;
+    const b = resolveCopy(raw, pool);
+    if (!b) { note(skipped, 'backgrounds (unresolved copy)', `${raw.name} [${raw.source}]`); continue; }
+    const skills = fixedKeys(b.skillProficiencies).map(skillName);
+    const tools = fixedKeys(b.toolProficiencies).map(toolName);
+    const choices = [choiceNote(b.skillProficiencies, 'skills'), choiceNote(b.toolProficiencies, 'tools')].filter(Boolean).join(' ');
+    const weighted = ((b.ability || [])[0] || {}).choose?.weighted;
+    if (weighted) {
+      // 2024-style: ability scores + an origin feat
+      const feat = Object.keys((b.feats || [])[0] || {})[0];
+      const [featBase, featVariant] = feat ? feat.split('|')[0].split('; ') : [];
+      const featName = feat ? realFeat(featBase) + (featVariant ? ` (${title(featVariant)})` : '') : '';
+      const names = weighted.from.map(a => ABILITY_NAMES[a]);
+      data.backgrounds_2024.push({
+        name: b.name, source: bookName(b.source), abilityGroup: weighted.from, abilityGroupNames: names,
+        skills, tools, feat: featName,
+        desc: [`+2/+1 to ${names.slice(0, -1).join(', ')} or ${names.slice(-1)}.`, skills.length && `Skills: ${skills.join(', ')}.`, choices, featName].filter(Boolean).join(' '),
+      });
+    } else {
+      // 2014-style: the opening description paragraph
+      const intro = firstParagraph(b.entries);
+      data.backgrounds_2014.push({ name: b.name, source: bookName(b.source), skills, tools,
+        desc: [intro, choices].filter(Boolean).join(' ') });
+    }
+    have.add(norm(b.name));
+    note(added, 'backgrounds', `${b.name} [${b.source}]${weighted ? ' (2024-style)' : ''}`);
+  }
+  save();
+}
+
 for (const [k, v] of Object.entries(added)) console.log(`\nADDED ${k} (${v.length}):\n  ${v.join('\n  ')}`);
 for (const [k, v] of Object.entries(skipped)) console.log(`\nSKIPPED ${k} (${v.length}): ${v.slice(0, 30).join(', ')}${v.length > 30 ? ', …' : ''}`);
 if (dry) console.log('\n(dry run — nothing written)');
