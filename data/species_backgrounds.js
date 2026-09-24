@@ -3834,5 +3834,1812 @@ const SPECIES_DATA = {
       ],
       "desc": "You gain the Strixhaven Initiate feat and must choose Witherbloom within it."
     }
+  ],
+  "species_more": [
+    {
+      "name": "Aetherborn",
+      "source": "Plane Shift: Kaladesh",
+      "edition": "2014",
+      "size": "Medium",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Age",
+          "desc": "Aetherborn come into being as adults and live no more than a few years."
+        },
+        {
+          "name": "Alignment",
+          "desc": "As a rule, aetherborn are driven by hedonism and self-interest, making them neutral at best and thoroughly evil at worst. Neutral aetherborn might devote much of their time (and wealth) to parties and social activity, while evil aetherborn are usually involved in the criminal underworld."
+        },
+        {
+          "name": "Size",
+          "desc": "Aetherborn are about the same size as humans, ranging from 5 to 6 feet tall. They are quite light—only about 100 pounds—and their weight diminishes as they age and more and more of their substance returns to the aethersphere. Your size is Medium."
+        },
+        {
+          "name": "Darkvision",
+          "desc": "Thanks to your heritage, you have superior vision in dark and dim conditions. You can see in dim light within 60 feet of you as if it were bright light, and in darkness as if it were dim light. You can't discern color in darkness, only shades of gray."
+        },
+        {
+          "name": "Born of Aether",
+          "desc": "You have resistance to necrotic damage."
+        },
+        {
+          "name": "Menacing",
+          "desc": "You have proficiency in the Intimidation skill."
+        },
+        {
+          "name": "Languages",
+          "desc": "You can speak, read, and write Common and two other languages of your choice."
+        },
+        {
+          "name": "Gift of the Aetherborn",
+          "desc": "An unknown aetherborn, desperately seeking a means to extend their short life, discovered a process of transformation that prolonged their existence—by giving them the ability to feed on the life essence of other beings. Since then, other aetherborn have learned and carried out this monstrous transformation, and aetherborn with this \"gift\" have become a small minority among an already small population.\n\nA gifted aetherborn has the ability to drain the life essence of other beings. Similar to the way heat is transferred from a warm object to a cold one, a gifted aetherborn need only touch another living being with a clawed hand to draw life essence out, fueling their own continued existence while draining strength and vitality from their victim.\n\nFor many aetherborn, living as they do for indulgence and instant gratification, the concepts of \"want\" and \"need\" are virtually synonymous. But Aetherborn with this gift understand what it is to truly need, for they develop a hunger for life essence that far exceeds any desires they might have felt before their transformation. A gifted aetherborn who abstains from this feeding deteriorates even more rapidly than other aetherborn, while enduring unspeakable agony caused by the deprivation of life energy.\n\nAt the DM's option, an aetherborn character can research methods of achieving this dark \"gift.\" The process is similar to inventing and manufacturing a rare magic item (see \"Inventing and Manufacturing Devices\" earlier in this document). But rather than aether, the process requires a variety of rare unguents and unusual ingredients that make up the cost of researching and undergoing the transformation.\n\nAn aetherborn with this gift gains the Drain Life ability: a natural attack that deals 1d6 necrotic damage and restores the same number of hit points to the aetherborn. However, if the aetherborn goes for 7 days without dealing this damage, their hit point maximum is reduced by 1d6 per week. This reduction can't be removed until the aetherborn has used their Drain Life ability and completed a long rest."
+        }
+      ],
+      "abilityBonuses": {
+        "cha": 2
+      },
+      "abilityNote": "Choose +1 to 2 of STR, DEX, CON, INT, WIS"
+    },
+    {
+      "name": "Astral Elf",
+      "source": "Astral Adventurer's Guide",
+      "edition": "2014",
+      "size": "Medium",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Creature Type",
+          "desc": "You are a Humanoid. You are also considered an elf for any prerequisite or effect that requires you to be an elf."
+        },
+        {
+          "name": "Astral Fire",
+          "desc": "You know one of the following cantrips of your choice: dancing lights, light, or sacred flame. Intelligence, Wisdom, or Charisma is your spellcasting ability for it (choose when you select this race)."
+        },
+        {
+          "name": "Darkvision",
+          "desc": "You can see in dim light within 60 feet of yourself as if it were bright light, and in darkness as if it were dim light. You discern colors in that darkness only as shades of gray."
+        },
+        {
+          "name": "Fey Ancestry",
+          "desc": "You have advantage on saving throws you make to avoid or end the charmed condition on yourself."
+        },
+        {
+          "name": "Keen Senses",
+          "desc": "You have proficiency in the Perception skill."
+        },
+        {
+          "name": "Starlight Step",
+          "desc": "As a bonus action, you can magically teleport up to 30 feet to an unoccupied space you can see. You can use this trait a number of times equal to your proficiency bonus, and you regain all expended uses when you finish a long rest."
+        },
+        {
+          "name": "Astral Trance",
+          "desc": "You don't need to sleep, and magic can't put you to sleep. You can finish a long rest in 4 hours if you spend those hours in a trancelike meditation, during which you remain conscious.\n\nWhenever you finish this trance, you gain proficiency in one skill of your choice and with one weapon or tool of your choice, selected from the Player's Handbook. You mystically acquire these proficiencies by drawing them from shared elven memory and the experiences of entities on the Astral Plane, and you retain them until you finish your next long rest."
+        }
+      ],
+      "abilityNote": "Choose +2 to one ability and +1 to another (any)"
+    },
+    {
+      "name": "Autognome",
+      "source": "Astral Adventurer's Guide",
+      "edition": "2014",
+      "size": "Small",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Creature Type",
+          "desc": "You are a Construct."
+        },
+        {
+          "name": "Armored Casing",
+          "desc": "You are encased in thin metal or some other durable material. While you aren't wearing armor, your base Armor Class is 13 + your Dexterity modifier."
+        },
+        {
+          "name": "Built for Success",
+          "desc": "You can add a d4 to one attack roll, ability check, or saving throw you make, and you can do so after seeing the d20 roll but before the effects of the roll are resolved. You can use this trait a number of times equal to your proficiency bonus, and you regain all expended uses when you finish a long rest."
+        },
+        {
+          "name": "Healing Machine",
+          "desc": "If the mending spell is cast on you, you can spend a Hit Die, roll it, and regain a number of hit points equal to the roll plus your Constitution modifier (minimum of 1 hit point).\n\nIn addition, your creator designed you to benefit from several spells that preserve life but that normally don't affect Constructs: cure wounds, healing word, mass cure wounds, mass healing word, and spare the dying."
+        },
+        {
+          "name": "Mechanical Nature",
+          "desc": "You have resistance to poison damage and immunity to disease, and you have advantage on saving throws against being paralyzed or poisoned. You don't need to eat, drink, or breathe."
+        },
+        {
+          "name": "Sentry's Rest",
+          "desc": "When you take a long rest, you spend at least 6 hours in an inactive, motionless state, instead of sleeping. In this state, you appear inert, but you remain conscious."
+        },
+        {
+          "name": "Specialized Design",
+          "desc": "You gain two tool proficiencies of your choice, selected from the Player's Handbook."
+        }
+      ],
+      "abilityNote": "Choose +2 to one ability and +1 to another (any)"
+    },
+    {
+      "name": "Aven",
+      "source": "Plane Shift: Amonkhet",
+      "edition": "2014",
+      "size": "Medium",
+      "speed": 25,
+      "traits": [
+        {
+          "name": "Age",
+          "desc": "Like humans, aven reach adulthood in their late teens and can theoretically live into their 80s. Of course, most find a glorious (or inglorious) death long before that point."
+        },
+        {
+          "name": "Alignment",
+          "desc": "Most aven lean toward some form of neutrality. Ibis-headed aven, focused more on knowledge than any other virtue, are usually neutral. Hawk-headed aven are inclined toward lawful neutral."
+        },
+        {
+          "name": "Size",
+          "desc": "Aven stand from 5 to 6 feet tall, but their bodies are slender and their bones are partially hollow to facilitate their flight. Your size is Medium."
+        },
+        {
+          "name": "Flight",
+          "desc": "You have a flying speed of 30 feet. You can't use your flying speed while you wear medium or heavy armor. (If your campaign uses the variant rule for encumbrance, you can't use your flying speed if you are encumbered.)"
+        },
+        {
+          "name": "Languages",
+          "desc": "You can speak, read, and write Common and Aven."
+        }
+      ],
+      "abilityBonuses": {
+        "dex": 2
+      }
+    },
+    {
+      "name": "Boggart",
+      "source": "Lorwyn: First Light",
+      "edition": "2024",
+      "size": "Small",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Creature Type",
+          "desc": "You are a Humanoid. You are also considered a goblinoid for any prerequisite or effect that requires you to be a goblinoid."
+        },
+        {
+          "name": "Darkvision",
+          "desc": "You can see in dim light within 60 feet of you as if it were bright light and in darkness as if it were in dim light. You discern colors in that darkness only as shades of gray."
+        },
+        {
+          "name": "Fey Ancestry",
+          "desc": "You have advantage on saving throws you make to avoid or end the charmed condition on yourself."
+        },
+        {
+          "name": "Fury of the Small",
+          "desc": "When you damage a creature with an attack or a spell and the creature's size is larger than yours, you can cause the attack or spell to deal extra damage to the creature. The extra damage equals your proficiency bonus.\n\nYou can use this trait a number of times equal to your proficiency bonus, regaining all expended uses when you finish a long rest, and you can use it no more than once per turn."
+        },
+        {
+          "name": "Nimble Escape",
+          "desc": "You can take the Disengage or Hide action as a bonus action on each of your turns."
+        }
+      ]
+    },
+    {
+      "name": "Custom Lineage",
+      "source": "Tasha's Cauldron of Everything",
+      "edition": "2014",
+      "size": "Small/Medium",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Creature Type",
+          "desc": "You are a humanoid. You determine your appearance and whether you resemble any of your kin."
+        },
+        {
+          "name": "Size",
+          "desc": "You are Small or Medium (your choice)."
+        },
+        {
+          "name": "Feat",
+          "desc": "You gain one a feat of your choice for which you qualify."
+        },
+        {
+          "name": "Variable Trait",
+          "desc": "You gain one of the following options of your choice: (a) darkvision with a range of 60 feet or (b) proficiency in one skill of your choice."
+        },
+        {
+          "name": "Languages",
+          "desc": "You can speak, read, and write Common and one other language that you and your DM agree is appropriate for your character."
+        }
+      ],
+      "abilityNote": "Choose +2 to 1 of STR, DEX, CON, INT, WIS, CHA"
+    },
+    {
+      "name": "Dhampir",
+      "source": "Astarion's Book of Hungers",
+      "edition": "2024",
+      "size": "Small/Medium",
+      "speed": 35,
+      "traits": [
+        {
+          "name": "Darkvision",
+          "desc": "You have Darkvision with a range of 60 feet."
+        },
+        {
+          "name": "Spider Climb",
+          "desc": "You have a Climb Speed equal to your Speed. When you reach character level 3, you can move up, down, and across vertical surfaces and along ceilings while leaving your hands free."
+        },
+        {
+          "name": "Trace of Undeath",
+          "desc": "You have Resistance to Necrotic damage."
+        },
+        {
+          "name": "Vampiric Bite",
+          "desc": "When you use your Unarmed Strike and deal damage, you can choose to bite with your fangs. You deal Piercing damage equal to 1d4 plus your Constitution modifier instead of the normal damage of an Unarmed Strike.\n\nIn addition, when you deal this damage to a creature that isn't a Construct or an Undead, you can empower yourself in one of the following ways:\n\n• **Drain.** You regain Hit Points equal to the Piercing damage dealt.\n• **Strengthen.** You gain a bonus to the next ability check or attack roll you make within the next minute; the bonus is equal to the Piercing damage dealt.\n\nYou can empower yourself with this trait a number of times equal to your Proficiency Bonus, and you regain all expended uses when you finish a Long Rest."
+        }
+      ]
+    },
+    {
+      "name": "Dhampir",
+      "source": "Van Richten's Guide to Ravenloft",
+      "edition": "2014",
+      "size": "Small/Medium",
+      "speed": 35,
+      "traits": [
+        {
+          "name": "Size",
+          "desc": "You are Medium or Small. You choose the size when you gain this lineage."
+        },
+        {
+          "name": "Ancestral Legacy",
+          "desc": "If you replace a race with this lineage, you can keep the following elements of that race: any skill proficiencies you gained from it and any climbing, flying, or swimming speed you gained from it.\n\nIf you don't keep any of those elements or you choose this lineage at character creation, you gain proficiency in two skills of your choice."
+        },
+        {
+          "name": "Darkvision",
+          "desc": "You can see in dim light within 60 feet of you as if it were bright light and in darkness as if it were dim light. You discern colors in that darkness as shades of gray."
+        },
+        {
+          "name": "Deathless Nature",
+          "desc": "You don't need to breathe."
+        },
+        {
+          "name": "Spider Climb",
+          "desc": "You have a climbing speed equal to your walking speed. In addition, at 3rd level, you can move up, down, and across vertical surfaces and upside down along ceilings, while leaving your hands free."
+        },
+        {
+          "name": "Vampiric Bite",
+          "desc": "Your fanged bite is a natural weapon, which counts as a simple melee weapon with which you are proficient. You add your Constitution modifier, instead of your Strength modifier, to the attack and damage rolls when you attack with this bite. It deals 1d4 piercing damage on a hit. While you are missing half or more of your hit points, you have advantage on attack rolls you make with this bite.\n\nWhen you attack with this bite and hit a creature that isn't a Construct or an Undead, you can empower yourself in one of the following ways of your choice:\n\n• You regain hit points equal to the piercing damage dealt by the bite.\n• You gain a bonus to the next ability check or attack roll you make; the bonus equals the piercing damage dealt by the bite\n\nYou can empower yourself with this bite a number of times equal to your proficiency bonus, and you regain all expended uses when you finish a long rest."
+        }
+      ],
+      "abilityNote": "Choose +2 to one ability and +1 to another (any)"
+    },
+    {
+      "name": "Dragonborn (Chromatic)",
+      "source": "Fizban's Treasury of Dragons",
+      "edition": "2014",
+      "size": "Medium",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Chromatic Ancestry",
+          "desc": "You have a chromatic dragon ancestor, granting you a special magical affinity. Choose one kind of dragon from the Chromatic Ancestry table. This determines the damage type for your other traits, as shown in the table.\n\nTable: Chromatic Ancestry\n| Dragon | Damage Type |\n| Black | Acid |\n| Blue | Lightning |\n| Green | Poison |\n| Red | Fire |\n| White | Cold |"
+        },
+        {
+          "name": "Breath Weapon",
+          "desc": "When you take the Attack action on your turn, you can replace one of your attacks with an exhalation of magical energy in a 30-foot line that is 5 feet wide. Each creature in that area must make a Dexterity saving throw (DC = 8 + your Constitution modifier + your proficiency bonus). On a failed save, the creature takes 1d10 damage of the type associated with your Chromatic Ancestry. On a successful save, it takes half as much damage. This damage increases by 1d10 when you reach 5th level (2d10), 11th level (3d10), and 17th level (4d10).\n\nYou can use your Breath Weapon a number of times equal to your proficiency bonus, and you regain all expended uses when you finish a long rest."
+        },
+        {
+          "name": "Draconic Resistance",
+          "desc": "You have resistance to the damage type associated with your Chromatic Ancestry."
+        },
+        {
+          "name": "Chromatic Warding",
+          "desc": "Starting at 5th level, as an action, you can channel your draconic energy to protect yourself. For 1 minute, you become immune to the damage type associated with your Chromatic Ancestry. Once you use this trait, you can't do so again until you finish a long rest."
+        }
+      ],
+      "abilityNote": "Choose +2 to one ability and +1 to another (any)"
+    },
+    {
+      "name": "Dragonborn (Gem)",
+      "source": "Fizban's Treasury of Dragons",
+      "edition": "2014",
+      "size": "Medium",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Gem Ancestry",
+          "desc": "You have a gem dragon ancestor, granting you a special magical affinity. Choose one kind of dragon from the Gem Ancestry table. This determines the damage type for your other traits, as shown in the table.\n\nTable: Gem Ancestry\n| Dragon | Damage Type |\n| Amethyst | Force |\n| Crystal | Radiant |\n| Emerald | Psychic |\n| Sapphire | Thunder |\n| Topaz | Necrotic |"
+        },
+        {
+          "name": "Breath Weapon",
+          "desc": "When you take the Attack action on your turn, you can replace one of your attacks with an exhalation of magical energy in a 15-foot cone. Each creature in that area must make a Dexterity saving throw (DC = 8 + your Constitution modifier + your proficiency bonus). On a failed save, the creature takes 1d10 damage of the type associated with your Gem Ancestry. On a successful save, it takes half as much damage. This damage increases by 1d10 when you reach 5th level (2d10), 11th level (3d10), and 17th level (4d10).\n\nYou can use your Breath Weapon a number of times equal to your proficiency bonus, and you regain all expended uses when you finish a long rest."
+        },
+        {
+          "name": "Draconic Resistance",
+          "desc": "You have resistance to the damage type associated with your Gem Ancestry."
+        },
+        {
+          "name": "Psionic Mind",
+          "desc": "You can send telepathic messages to any creature you can see within 30 feet of you. You don't need to share a language with the creature for it to understand these messages, but it must be able to understand at least one language to comprehend them."
+        },
+        {
+          "name": "Gem Flight",
+          "desc": "Starting at 5th level, you can use a bonus action to manifest spectral wings on your body. These wings last for 1 minute. For the duration, you gain a flying speed equal to your walking speed and can hover. Once you use this trait, you can't do so again until you finish a long rest."
+        }
+      ],
+      "abilityNote": "Choose +2 to one ability and +1 to another (any)"
+    },
+    {
+      "name": "Dragonborn (Metallic)",
+      "source": "Fizban's Treasury of Dragons",
+      "edition": "2014",
+      "size": "Medium",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Metallic Ancestry",
+          "desc": "You have a metallic dragon ancestor, granting you a special magical affinity. Choose one kind of dragon from the Metallic Ancestry table. This determines the damage type for your other traits, as shown in the table.\n\nTable: Metallic Ancestry\n| Dragon | Damage Type |\n| Brass | Fire |\n| Bronze | Lightning |\n| Copper | Acid |\n| Gold | Fire |\n| Silver | Cold |"
+        },
+        {
+          "name": "Breath Weapon",
+          "desc": "When you take the Attack action on your turn, you can replace one of your attacks with an exhalation of magical energy in a 15-foot cone. Each creature in that area must make a Dexterity saving throw (DC = 8 + your Constitution modifier + your proficiency bonus). On a failed save, the creature takes 1d10 damage of the type associated with your Metallic Ancestry. On a successful save, it takes half as much damage. This damage increases by 1d10 when you reach 5th level (2d10), 11th level (3d10), and 17th level (4d10).\n\nYou can use your Breath Weapon a number of times equal to your proficiency bonus, and you regain all expended uses when you finish a long rest."
+        },
+        {
+          "name": "Draconic Resistance",
+          "desc": "You have resistance to the damage type associated with your Metallic Ancestry."
+        },
+        {
+          "name": "Metallic Breath Weapon",
+          "desc": "At 5th level, you gain a second breath weapon. When you take the Attack action on your turn, you can replace one of your attacks with an exhalation in a 15-foot cone. The save DC for this breath is 8 + your Constitution modifier + your proficiency bonus. Whenever you use this trait, choose one:\n\n• **Enervating Breath.** Each creature in the cone must succeed on a Constitution saving throw or become incapacitated until the start of your next turn.\n• **Repulsion Breath.** Each creature in the cone must succeed on a Strength saving throw or be pushed 20 feet away from you and be knocked prone.\n\nOnce you use your Metallic Breath Weapon, you can't do so again until you finish a long rest."
+        }
+      ],
+      "abilityNote": "Choose +2 to one ability and +1 to another (any)"
+    },
+    {
+      "name": "Dwarf (Kaladesh)",
+      "source": "Plane Shift: Kaladesh",
+      "edition": "2014",
+      "size": "Medium",
+      "speed": 25,
+      "traits": [
+        {
+          "name": "Age",
+          "desc": "Dwarves mature at the same rate as humans, but they're considered young until they reach the age of 50. On average, they live about 350 years."
+        },
+        {
+          "name": "Alignment",
+          "desc": "Most dwarves are lawful, believing firmly in the benefits of a well-ordered society. They tend toward good as well, with a strong sense of fair play and a belief that everyone deserves to share in the benefits of a just order."
+        },
+        {
+          "name": "Size",
+          "desc": "Dwarves stand around 5 feet tall and average about 150 pounds. Your size is Medium."
+        },
+        {
+          "name": "Speed",
+          "desc": "Your base walking speed is 25 feet. Your speed is not reduced by wearing heavy armor."
+        },
+        {
+          "name": "Darkvision",
+          "desc": "Accustomed to life underground in your race's ancient past, you have superior vision in dark and dim conditions. You can see in dim light within 60 feet of you as if it were bright light, and in darkness as if it were dim light. You can't discern color in darkness, only shades of gray."
+        },
+        {
+          "name": "Dwarven Resilience",
+          "desc": "You have advantage on saving throws against poison, and you have resistance against poison damage."
+        },
+        {
+          "name": "Dwarven Toughness",
+          "desc": "Your hit point maximum increases by 1, and it increases by 1 every time you gain a level."
+        },
+        {
+          "name": "Artisan's Expertise",
+          "desc": "You gain proficiency with two kinds of artisan's tools of your choice. Your proficiency bonus is doubled for any ability check you make that uses either of the chosen proficiencies. In addition, whenever you make an Intelligence (History) check related to the origin of any architectural construction (including buildings, public works such as canals and aqueducts, and the massive cogwork that underlies much of the construction of Ghirapur), you are considered proficient in the History skill and add double your proficiency bonus to the check, instead of your normal proficiency bonus."
+        },
+        {
+          "name": "Languages",
+          "desc": "You can speak, read, and write Common and Dwarvish. Dwarvish is full of hard consonants and guttural sounds, and those characteristics spill over into whatever other language a dwarf might speak."
+        }
+      ],
+      "abilityBonuses": {
+        "con": 2,
+        "wis": 1
+      }
+    },
+    {
+      "name": "Elf (Kaladesh)",
+      "source": "Plane Shift: Kaladesh",
+      "edition": "2014",
+      "size": "Medium",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Age",
+          "desc": "Although elves reach physical maturity at about the same age as humans, the elven understanding of adulthood goes beyond physical growth to encompass worldly experience. An elf typically claims adulthood and an adult name around the age of 100 and can live to be 750 years old."
+        },
+        {
+          "name": "Alignment",
+          "desc": "Elves love freedom, variety, and self-expression, so they lean strongly toward the gentler aspects of chaos. They value and protect others' freedom as well as their own, and they are more often good than not."
+        },
+        {
+          "name": "Size",
+          "desc": "Elves range from under 5 to over 6 feet tall and have slender builds. Your size is Medium."
+        },
+        {
+          "name": "Darkvision",
+          "desc": "Accustomed to twilit forests and the night sky, you have superior vision in dark and dim conditions. You can see in dim light within 60 feet of you as if it were bright light, and in darkness as if it were dim light. You can't discern color in darkness, only shades of gray."
+        },
+        {
+          "name": "Keen Senses",
+          "desc": "You have proficiency in the Perception skill."
+        },
+        {
+          "name": "Elf Weapon Training",
+          "desc": "You have proficiency with the longsword, shortsword, shortbow, and longbow."
+        },
+        {
+          "name": "Fey Ancestry",
+          "desc": "You have advantage on saving throws against being charmed, and magic can't put you to sleep."
+        },
+        {
+          "name": "Trance",
+          "desc": "Elves don't need to sleep. Instead, they meditate deeply, remaining semiconscious, for 4 hours a day. (The Common word for such meditation is \"trance.\") While meditating, you can dream after a fashion; such dreams are actually mental exercises that have become reflexive through years of practice. After resting in this way, you gain the same benefit that a human does from 8 hours of sleep.\n\nIf you meditate during a long rest, you finish the rest after only 4 hours. You otherwise obey all the rules for a long rest; only the duration is changed."
+        },
+        {
+          "name": "Languages",
+          "desc": "You can speak, read, and write Common and Elvish. Elvish is fluid, with subtle intonations and intricate grammar. Elven literature is rich and varied, and their songs and poems are famous among other races. Many bards learn their language so they can add Elvish ballads to their repertoires."
+        },
+        {
+          "name": "Elf Culture",
+          "desc": "The elves of Kaladesh don't organize themselves into nations or tribes. Still, they recognize three distinct cultural groups among their kind—though in truth these groupings are more like attitudes or alignments with regard to the rest of society and the use of technology. Choose one of these cultures."
+        }
+      ],
+      "abilityBonuses": {
+        "dex": 2,
+        "wis": 1
+      }
+    },
+    {
+      "name": "Elf (Zendikar)",
+      "source": "Plane Shift: Zendikar",
+      "edition": "2014",
+      "size": "Medium",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Age",
+          "desc": "Although elves reach physical maturity at about the same age as humans, the elven understanding of adulthood goes beyond physical growth to encompass worldly experience. An elf typically claims adulthood and an adult name around the age of 100 and can live to be 750 years old."
+        },
+        {
+          "name": "Alignment",
+          "desc": "Elves love freedom, variety, and self-expression, so they lean strongly toward the gentler aspects of chaos. They value and protect others' freedom as well as their own, and they are more often good than not."
+        },
+        {
+          "name": "Size",
+          "desc": "Elves range from under 5 to over 6 feet tall and have slender builds. Your size is Medium."
+        },
+        {
+          "name": "Darkvision",
+          "desc": "Accustomed to twilit forests and the night sky, you have superior vision in dark and dim conditions. You can see in dim light within 60 feet of you as if it were bright light, and in darkness as if it were dim light. You can't discern color in darkness, only shades of gray."
+        },
+        {
+          "name": "Keen Senses",
+          "desc": "You have proficiency in the Perception skill."
+        },
+        {
+          "name": "Fey Ancestry",
+          "desc": "You have advantage on saving throws against being charmed, and magic can't put you to sleep."
+        },
+        {
+          "name": "Languages",
+          "desc": "You can speak, read, and write Common and Elvish. Elvish is fluid, with subtle intonations and intricate grammar. Elven literature is rich and varied, and their songs and poems are famous among other races. Many bards learn their language so they can add Elvish ballads to their repertoires."
+        }
+      ],
+      "abilityBonuses": {
+        "wis": 2
+      }
+    },
+    {
+      "name": "Faerie",
+      "source": "Lorwyn: First Light",
+      "edition": "2024",
+      "size": "Small",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Creature Type",
+          "desc": "You are a Fey."
+        },
+        {
+          "name": "Fairy Magic",
+          "desc": "You know the druidcraft cantrip. Starting at 3rd level, you can cast the faerie fire spell with this trait. Starting at 5th level, you can also cast the enlarge/reduce spell with this trait. Once you cast faerie fire or enlarge/reduce with this trait, you can't cast that spell with it again until you finish a long rest. You can also cast either of those spells using any spell slots you have of the appropriate level.\n\nIntelligence, Wisdom, or Charisma is your spellcasting ability for these spells when you cast them with this trait (choose when you select this race)."
+        },
+        {
+          "name": "Flight",
+          "desc": "Because of your wings, you have a flying speed equal to your walking speed. You can't use this flying speed if you're wearing medium or heavy armor."
+        },
+        {
+          "name": "Faerie Lineage",
+          "desc": "As a native of either Lorwyn and Shadowmoor, you may gain additional traits.\n\n• **Lorwyn.** You do not gain any additional traits.\n• **Shadowmoor.** You have Darkvision with a range of 120 feet."
+        }
+      ]
+    },
+    {
+      "name": "Flamekin",
+      "source": "Lorwyn: First Light",
+      "edition": "2024",
+      "size": "Small/Medium",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Size",
+          "desc": "You are Medium or Small. You choose the size when you select this race."
+        },
+        {
+          "name": "Darkvision",
+          "desc": "You can see in dim light within 60 feet of you as if it were bright light and in darkness as if it were dim light. You discern colors in that darkness only as shades of gray."
+        },
+        {
+          "name": "Fire Resistance",
+          "desc": "You have resistance to fire damage."
+        },
+        {
+          "name": "Reach to the Blaze",
+          "desc": "You know the produce flame cantrip. Starting at 3rd level, you can cast the burning hands spell with this trait. Starting at 5th level, you can also cast the flame blade spell with this trait, without a material component. Once you cast burning hands or flame blade with this trait, you can't cast that spell with it again until you finish a long rest. You can also cast either of those spells using any spell slots you have of the appropriate level.\n\nIntelligence, Wisdom, or Charisma is your spellcasting ability for these spells when you cast them with this trait (choose when you select this race)."
+        }
+      ]
+    },
+    {
+      "name": "Giff",
+      "source": "Astral Adventurer's Guide",
+      "edition": "2014",
+      "size": "Medium",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Astral Spark",
+          "desc": "Your psychic connection to the Astral Plane enables you to mystically access a spark of divine power, which you can channel through your weapons. When you hit a target with a simple or martial weapon, you can cause the target to take extra force damage equal to your proficiency bonus.\n\nYou can use this trait a number of times equal to your proficiency bonus, but you can use it no more than once per turn. You regain all expended uses when you finish a long rest."
+        },
+        {
+          "name": "Firearms Mastery",
+          "desc": "You have a mystical connection to firearms that traces back to the gods of the giff, who delighted in such weapons. You have proficiency with all firearms and ignore the loading property of any firearm. In addition, attacking at long range with a firearm doesn't impose disadvantage on your attack roll."
+        },
+        {
+          "name": "Hippo Build",
+          "desc": "You have advantage on Strength-based ability checks and Strength saving throws. In addition, you count as one size larger when determining your carrying capacity and the weight you can push, drag, or lift."
+        }
+      ],
+      "abilityNote": "Choose +2 to one ability and +1 to another (any)"
+    },
+    {
+      "name": "Gith",
+      "source": "Mordenkainen's Tome of Foes",
+      "edition": "2014",
+      "size": "Medium",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Age",
+          "desc": "Gith reach adulthood in their late teens and live for about a century."
+        },
+        {
+          "name": "Size",
+          "desc": "Gith are taller and leaner than humans, with most a slender 6 feet in height."
+        },
+        {
+          "name": "Languages",
+          "desc": "You can speak, read, and write Common and Gith."
+        }
+      ],
+      "abilityBonuses": {
+        "int": 1
+      }
+    },
+    {
+      "name": "Hadozee",
+      "source": "Astral Adventurer's Guide",
+      "edition": "2014",
+      "size": "Small/Medium",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Size",
+          "desc": "You are Medium or Small. You choose the size when you select this race."
+        },
+        {
+          "name": "Dexterous Feet",
+          "desc": "As a bonus action, you can use your feet to manipulate an object, open or close a door or container, or pick up or set down a Tiny object."
+        },
+        {
+          "name": "Glide",
+          "desc": "When you fall at least 10 feet above the ground, you can use your reaction to extend your skin membranes to glide horizontally a number of feet equal to your walking speed, and you take 0 damage from the fall. You determine the direction of the glide."
+        },
+        {
+          "name": "Hadozee Dodge",
+          "desc": "The magic that runs in your veins heightens your natural defenses. When you take damage, you can use your reaction to roll a d6. Add your proficiency bonus to the number rolled, and reduce the damage you take by an amount equal to that total (minimum of 0 damage).\n\nYou can use this trait a number of times equal to your proficiency bonus. You regain all expended uses when you finish a long rest."
+        }
+      ],
+      "abilityNote": "Choose +2 to one ability and +1 to another (any)"
+    },
+    {
+      "name": "Hexblood",
+      "source": "Van Richten's Guide to Ravenloft",
+      "edition": "2014",
+      "size": "Small/Medium",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Creature Type",
+          "desc": "You are a Fey."
+        },
+        {
+          "name": "Size",
+          "desc": "You are Medium or Small. You choose the size when you gain this lineage."
+        },
+        {
+          "name": "Ancestral Legacy",
+          "desc": "If you replace a race with this lineage, you can keep the following elements of that race: any skill proficiencies you gained from it and any climbing, flying, or swimming speed you gained from it.\n\nIf you don't keep any of those elements or you choose this lineage at character creation, you gain proficiency in two skills of your choice."
+        },
+        {
+          "name": "Darkvision",
+          "desc": "You can see in dim light within 60 feet of you as if it were bright light and in darkness as if it were dim light. You discern colors in that darkness as shades of gray."
+        },
+        {
+          "name": "Eerie Token",
+          "desc": "As a bonus action, you can harmlessly remove a lock of your hair, one of your nails, or one of your teeth. This token is imbued with magic until you finish a long rest. While the token is imbued in this way, you can take these actions:\n\n• **Telepathic Message.** As an action, you can send a telepathic message to the creature holding or carrying the token, as long as you are within 10 miles of it. The message can contain up to twenty-five words.\n• **Remote Viewing.** If you are within 10 miles of the token, you can enter a trance as an action. The trance lasts for 1 minute, but it ends early if you dismiss it (no action required) or are incapacitated. During this trance, you can see and hear from the token as if you were located where it is. While you are using your senses at the token's location, you are blinded and deafened in regard to your own surroundings. When the trance ends, the token is harmlessly destroyed.\n\nOnce you create a token using this feature, you can't do so again until you finish a long rest, at which point your missing part regrows."
+        },
+        {
+          "name": "Hex Magic",
+          "desc": "You can cast the disguise self and hex spells with this trait. Once you cast either of these spells with this trait, you can't cast that spell with it again until you finish a long rest. You can also cast these spells using any spell slots you have.\n\nIntelligence, Wisdom, or Charisma is your spellcasting ability for these spells (choose the ability when you gain this lineage).\n\n**Becoming a Hag.** Hags can undertake a ritual to irreversibly transform a hexblood they created into a new hag, either one of their own kind or that embodies the hexblood's nature. This requires that both the hag and hexblood be in the same place and consent to the lengthy ritual—circumstances most hexbloods shun but might come to accept over the course of centuries. Once a hexblood undergoes this irreversible ritual, they emerge as a hag NPC no longer under the control of the hexblood's player, unless the DM rules otherwise."
+        }
+      ],
+      "abilityNote": "Choose +2 to one ability and +1 to another (any)"
+    },
+    {
+      "name": "Human (Innistrad)",
+      "source": "Plane Shift: Ixalan",
+      "edition": "2014",
+      "size": "Medium",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Age",
+          "desc": "Humans reach adulthood in their late teens and live less than a century."
+        },
+        {
+          "name": "Alignment",
+          "desc": "Humans tend toward no particular alignment."
+        },
+        {
+          "name": "Size",
+          "desc": "Humans vary widely in height and build, from barely 5 feet to well over 6 feet tall. Regardless of your position in that range, your size is Medium."
+        },
+        {
+          "name": "Languages",
+          "desc": "You can speak, read, and write Common and one extra language of your choice."
+        }
+      ]
+    },
+    {
+      "name": "Human (Ixalan)",
+      "source": "Plane Shift: Ixalan",
+      "edition": "2014",
+      "size": "Medium",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Age",
+          "desc": "Humans reach adulthood in their late teens and live less than a century."
+        },
+        {
+          "name": "Size",
+          "desc": "Humans vary widely in height and build, from barely 5 feet to well over 6 feet tall. Regardless of your position in that range, your size is Medium."
+        },
+        {
+          "name": "Languages",
+          "desc": "You can speak, read, and write Common and one extra language of your choice. Or, if your campaign uses the optional rules for languages found in the previous section, your national origin determines your native language: Itzocan for the Sun Empire, Coalition pidgin for the Brazen Coalition, or Vampire for the Legion of Dusk. You still speak one additional language of your choice, and Common if it exists in your campaign."
+        },
+        {
+          "name": "Alignment",
+          "desc": "Humans tend toward no particular alignment. The best and the worst are found among them."
+        },
+        {
+          "name": "Speed",
+          "desc": "Your base walking speed is 30 feet."
+        }
+      ],
+      "abilityBonuses": {
+        "str": 1,
+        "dex": 1,
+        "con": 1,
+        "int": 1,
+        "wis": 1,
+        "cha": 1
+      }
+    },
+    {
+      "name": "Human (Kaladesh)",
+      "source": "Plane Shift: Kaladesh",
+      "edition": "2014",
+      "size": "Medium",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Age",
+          "desc": "Humans reach adulthood in their late teens and live less than a century."
+        },
+        {
+          "name": "Size",
+          "desc": "Humans vary widely in height and build, from barely 5 feet to well over 6 feet tall. Regardless of your position in that range, your size is Medium."
+        },
+        {
+          "name": "Languages",
+          "desc": "You can speak, read, and write Common and one extra language of your choice. Humans typically learn the languages of other peoples they deal with, including obscure dialects. They are fond of sprinkling their speech with words borrowed from other tongues: Dwarvish curses, Elvish musical expressions, Vedalken scholarly jargon, and so on."
+        },
+        {
+          "name": "Alignment",
+          "desc": "Humans tend toward no particular alignment."
+        },
+        {
+          "name": "Speed",
+          "desc": "Your base walking speed is 30 feet."
+        }
+      ],
+      "abilityBonuses": {
+        "str": 1,
+        "dex": 1,
+        "con": 1,
+        "int": 1,
+        "wis": 1,
+        "cha": 1
+      }
+    },
+    {
+      "name": "Human (Zendikar)",
+      "source": "Plane Shift: Zendikar",
+      "edition": "2014",
+      "size": "Medium",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Age",
+          "desc": "Humans reach adulthood in their late teens and live less than a century."
+        },
+        {
+          "name": "Size",
+          "desc": "Humans vary widely in height and build, from barely 5 feet to well over 6 feet tall. Regardless of your position in that range, your size is Medium."
+        },
+        {
+          "name": "Languages",
+          "desc": "You can speak, read, and write Common and one extra language of your choice. Humans typically learn the languages of other peoples they deal with, including obscure dialects. They are fond of sprinkling their speech with words borrowed from other tongues: vampire curses, Elvish musical expressions, merfolk scholarly jargon, and so on."
+        }
+      ],
+      "abilityBonuses": {
+        "str": 1,
+        "dex": 1,
+        "con": 1,
+        "int": 1,
+        "wis": 1,
+        "cha": 1
+      }
+    },
+    {
+      "name": "Kalashtar",
+      "source": "Eberron: Forge of the Artificer",
+      "edition": "2024",
+      "size": "Medium",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Dual Mind",
+          "desc": "You have Advantage on Wisdom and Charisma saving throws."
+        },
+        {
+          "name": "Mental Discipline",
+          "desc": "You have Resistance to Psychic damage."
+        },
+        {
+          "name": "Mind Link",
+          "desc": "You have telepathy with a range in feet equal to 10 times your level. When you're using this trait to speak telepathically to a creature, you can take a Magic action to give that creature the ability to speak telepathically with you for 1 hour or until you take another Magic action to end this effect."
+        },
+        {
+          "name": "Severed from Dreams",
+          "desc": "You can't be the target of the Dream spell. In addition, when you finish a Long Rest, you gain proficiency in one skill of your choice. This proficiency lasts until you finish another Long Rest."
+        }
+      ]
+    },
+    {
+      "name": "Kalashtar",
+      "source": "Eberron: Rising from the Last War",
+      "edition": "2014",
+      "size": "Medium",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Age",
+          "desc": "Kalashtar mature and age at the same rate as humans."
+        },
+        {
+          "name": "Alignment",
+          "desc": "The noble spirit tied to a kalashtar drives it toward lawful and good behavior. Most kalashtar combine strong self-discipline with compassion for all beings, but some kalashtar resist the virtuous influence of their spirit."
+        },
+        {
+          "name": "Size",
+          "desc": "Your size is Medium."
+        },
+        {
+          "name": "Dual Mind",
+          "desc": "You have advantage on all Wisdom saving throws."
+        },
+        {
+          "name": "Mental Discipline",
+          "desc": "You have resistance to psychic damage."
+        },
+        {
+          "name": "Mind Link",
+          "desc": "You can speak telepathically to any creature you can see, provided the creature is within a number of feet of you equal to 10 times your level. You don't need to share a language with the creature for it to understand your telepathic utterances, but the creature must be able to understand at least one language.\n\nWhen you're using this trait to speak telepathically to a creature, you can use your action to give that creature the ability to speak telepathically with you for 1 hour or until you end this effect as an action. To use this ability, the creature must be able to see you and must be within this trait's range. You can give this ability to only one creature at a time; giving it to a creature takes it away from another creature who has it."
+        },
+        {
+          "name": "Severed from Dreams",
+          "desc": "Kalashtar sleep, but they don't connect to the plane of dreams as other creatures do. Instead, their minds draw from the memories of their otherworldly spirit while they sleep. As such, you are immune to spells and other magical effects that require you to dream, like dream, but not to spells and other magical effects that put you to sleep, like sleep."
+        },
+        {
+          "name": "Languages",
+          "desc": "You can speak, read, and write Common, Quori, and one other language of your choice."
+        }
+      ],
+      "abilityBonuses": {
+        "wis": 2,
+        "cha": 1
+      }
+    },
+    {
+      "name": "Kender",
+      "source": "Dragonlance: Shadow of the Dragon Queen",
+      "edition": "2014",
+      "size": "Small",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Fearless",
+          "desc": "You have advantage on saving throws you make to avoid or end the frightened condition on yourself. When you fail a saving throw to avoid or end the frightened condition on yourself, you can choose to succeed instead. Once you succeed on a saving throw in this way, you can't do so again until you finish a long rest."
+        },
+        {
+          "name": "Kender Curiosity",
+          "desc": "Thanks to the mystical origin of your people, you gain proficiency with one of the following skills of your choice: Insight, Investigation, Sleight of Hand, Stealth, or Survival."
+        },
+        {
+          "name": "Taunt",
+          "desc": "You have an extraordinary ability to fluster creatures. As a bonus action, you can unleash a string of provoking words at a creature within 60 feet of yourself that can hear and understand you. The target must succeed on a Wisdom saving throw, or it has disadvantage on attack rolls against targets other than you until the start of your next turn. The DC equals 8 + your proficiency bonus + your Intelligence, Wisdom, or Charisma modifier (choose when you select this race).\n\nYou can use this bonus action a number of times equal to your proficiency bonus, and you regain all expended uses when you finish a long rest."
+        }
+      ],
+      "abilityNote": "Choose +2 to one ability and +1 to another (any)"
+    },
+    {
+      "name": "Khenra",
+      "source": "Plane Shift: Amonkhet",
+      "edition": "2014",
+      "size": "Medium",
+      "speed": 35,
+      "traits": [
+        {
+          "name": "Age",
+          "desc": "Khenra mature quickly, reaching adulthood in their early teens. Khenra initiates are usually the youngest in a crop, completing the trials by their late teens. Even without a violent death, they rarely live past 60."
+        },
+        {
+          "name": "Alignment",
+          "desc": "Most khenra lean toward chaotic alignments. They have no particular inclination toward good or evil."
+        },
+        {
+          "name": "Size",
+          "desc": "Khenra have similar builds to humans. Your size is Medium."
+        },
+        {
+          "name": "Khenra Weapon Training",
+          "desc": "You have proficiency with the khopesh (longsword), spear, and javelin."
+        },
+        {
+          "name": "Khenra Twins",
+          "desc": "If your twin is alive and you can see your twin, whenever you roll a 1 on an attack roll, ability check, or saving throw, you can reroll the die and must use the new roll. If your twin is dead (or if you were born without a twin), you can't be frightened."
+        },
+        {
+          "name": "Languages",
+          "desc": "You can speak, read, and write Common and Khenra."
+        }
+      ],
+      "abilityBonuses": {
+        "dex": 2,
+        "str": 1
+      }
+    },
+    {
+      "name": "Khoravar",
+      "source": "Eberron: Forge of the Artificer",
+      "edition": "2024",
+      "size": "Small/Medium",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Darkvision",
+          "desc": "You have Darkvision with a range of 60 feet."
+        },
+        {
+          "name": "Fey Ancestry",
+          "desc": "You have Advantage on saving throws you make to avoid or end the Charmed condition."
+        },
+        {
+          "name": "Fey Gift",
+          "desc": "You know the Friends cantrip. Whenever you finish a Long Rest, you can replace that cantrip with a different cantrip from the Cleric, Druid, or Wizard spell list. Intelligence, Wisdom, or Charisma is your spellcasting ability for it (choose the ability when you select this species)."
+        },
+        {
+          "name": "Lethargy Resilience",
+          "desc": "When you fail a saving throw to avoid or end the Unconscious condition, you can succeed instead. Once you use this trait, you can't do so again until you finish 1d4 Long Rests."
+        },
+        {
+          "name": "Skill Versatility",
+          "desc": "You gain proficiency in one skill or with one tool of your choice. Whenever you finish a Long Rest, you can replace it with another skill or tool proficiency."
+        }
+      ]
+    },
+    {
+      "name": "Kithkin",
+      "source": "Lorwyn: First Light",
+      "edition": "2024",
+      "size": "Small",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Brave",
+          "desc": "You have Advantage on saving throws you make to avoid or end the Frightened condition."
+        },
+        {
+          "name": "Halfling Nimbleness",
+          "desc": "You can move through the space of any creature that is a size larger than you, but you can't stop in the same space."
+        },
+        {
+          "name": "Luck",
+          "desc": "When you roll a 1 on the d20 of a D20 Test, you can reroll the die, and you must use the new roll."
+        },
+        {
+          "name": "Naturally Stealthy",
+          "desc": "You can take the Hide action even when you are obscured only by a creature that is at least one size larger than you."
+        },
+        {
+          "name": "Kithkin Lineage",
+          "desc": "As a native of either Lorwyn and Shadowmoor, you may gain additional traits.\n\n• **Lorwyn.** You do not gain any additional traits.\n• **Shadowmoor.** You have Darkvision with a range of 120 feet."
+        }
+      ]
+    },
+    {
+      "name": "Kor",
+      "source": "Plane Shift: Zendikar",
+      "edition": "2014",
+      "size": "Medium",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Age",
+          "desc": "Kor mature at the same rate as humans and live about as long."
+        },
+        {
+          "name": "Alignment",
+          "desc": "Most kor are lawful good, with a strong dedication to community and the traditions of their ancestors."
+        },
+        {
+          "name": "Size",
+          "desc": "Kor average nearly 6 feet tall, but are much lighter and more slender than humans. Your size is Medium."
+        },
+        {
+          "name": "Brave",
+          "desc": "You have advantage on saving throws against being frightened."
+        },
+        {
+          "name": "Climbing",
+          "desc": "You also have a climbing speed of 30 feet as long as you are not encumbered or wearing heavy armor."
+        },
+        {
+          "name": "Kor Climbing",
+          "desc": "You have proficiency in the Athletics and Acrobatics skills."
+        },
+        {
+          "name": "Languages",
+          "desc": "You can speak, read, and write Common, and communicate in the silent speech of the Kor."
+        },
+        {
+          "name": "Lucky",
+          "desc": "When you roll a 1 on the d20 for an attack roll, ability check, or saving throw, you can reroll the die and must use the new roll."
+        }
+      ],
+      "abilityBonuses": {
+        "dex": 2,
+        "wis": 1
+      }
+    },
+    {
+      "name": "Leonin",
+      "source": "Mythic Odysseys of Theros",
+      "edition": "2014",
+      "size": "Medium",
+      "speed": 35,
+      "traits": [
+        {
+          "name": "Age",
+          "desc": "Leonin mature and age at about the same rate as humans."
+        },
+        {
+          "name": "Alignment",
+          "desc": "Leonin tend toward good alignments. Leonin who are focused on the pride lean toward lawful good."
+        },
+        {
+          "name": "Size",
+          "desc": "Leonin are typically over 6 feet tall, with some standing over 7 feet. Your size is Medium."
+        },
+        {
+          "name": "Darkvision",
+          "desc": "You can see in dim light within 60 feet of you as if it were bright light and in darkness as if it were dim light. You can't discern color in darkness, only shades of gray."
+        },
+        {
+          "name": "Claws",
+          "desc": "Your claws are natural weapons, which you can use to make unarmed strikes. If you hit with them, you can deal slashing damage equal to 1d4 + your Strength modifier, instead of the bludgeoning damage normal for an unarmed strike."
+        },
+        {
+          "name": "Hunter's Instincts",
+          "desc": "You have proficiency in one of the following skills of your choice: Athletics, Intimidation, Perception, or Survival."
+        },
+        {
+          "name": "Daunting Roar",
+          "desc": "As a bonus action, you can let out an especially menacing roar. Creatures of your choice within 10 feet of you that can hear you must succeed on a Wisdom saving throw or become frightened of you until the end of your next turn. The DC of the save equals 8 + your proficiency bonus + your Constitution modifier. Once you use this trait, you can't use it again until you finish a short or long rest."
+        },
+        {
+          "name": "Languages",
+          "desc": "You can speak, read, and write Common and Leonin."
+        }
+      ],
+      "abilityBonuses": {
+        "str": 1,
+        "con": 2
+      }
+    },
+    {
+      "name": "Locathah",
+      "source": "Locathah Rising",
+      "edition": "2014",
+      "size": "Medium",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Age",
+          "desc": "Locathah mature to adulthood by the age of 10 but have been known to live up to 80 years."
+        },
+        {
+          "name": "Alignment",
+          "desc": "Most locathah are true neutral or have some aspect of neutrality in their alignment. They tend toward good, coming from a culture where compassion for the downtrodden is a commonality."
+        },
+        {
+          "name": "Natural Armor",
+          "desc": "You have tough, scaly skin. When you aren't wearing armor, your AC is 12 + your Dexterity modifier. You can use your natural armor to determine your AC if the armor you wear would leave you with a lower AC. A shield's benefits apply as normal while you use your natural armor."
+        },
+        {
+          "name": "Observant & Athletic",
+          "desc": "You have proficiency in the Athletics and Perception skills."
+        },
+        {
+          "name": "Leviathan Will",
+          "desc": "You have advantage on saving throws against being charmed, frightened, paralyzed, poisoned, stunned, or put to sleep."
+        },
+        {
+          "name": "Limited Amphibiousness",
+          "desc": "You can breathe air and water, but you need to be submerged at least once every 4 hours to avoid suffocating."
+        },
+        {
+          "name": "Size",
+          "desc": "Locathah stand between 5 and 6 feet tall and average about 150 pounds. Your size is Medium."
+        },
+        {
+          "name": "Language",
+          "desc": "You can speak, read, and write Aquan and Common."
+        }
+      ],
+      "abilityBonuses": {
+        "str": 2,
+        "dex": 1
+      }
+    },
+    {
+      "name": "Lorwyn Changeling",
+      "source": "Lorwyn: First Light",
+      "edition": "2024",
+      "size": "Small/Medium",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Shape Self",
+          "desc": "As an action, you can reshape your body to a two-legged Humanoid shape or to a four-legged Beast shape. While you have a Humanoid shape, you can wear clothing and armor made for a Humanoid of your size."
+        },
+        {
+          "name": "Darkvision",
+          "desc": "You have Darkvision with a range of 120 feet."
+        },
+        {
+          "name": "Delightful Imitator",
+          "desc": "You have proficiency in the Deception or Performance skill."
+        },
+        {
+          "name": "Unpredictable Movement",
+          "desc": "When you roll Initiative, you can immediately move up to half your Speed, provided you don't have Disadvantage on the Initiative roll."
+        }
+      ]
+    },
+    {
+      "name": "Loxodon",
+      "source": "Guildmasters' Guide to Ravnica",
+      "edition": "2014",
+      "size": "Medium",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Age",
+          "desc": "Loxodons physically mature at the same rate as humans, but they live about 450 years. They highly value the weight of wisdom and experience and are considered young until they reach the age of 60."
+        },
+        {
+          "name": "Alignment",
+          "desc": "Most loxodons are lawful, believing in the value of a peaceful, ordered life. They also tend toward good."
+        },
+        {
+          "name": "Size",
+          "desc": "Loxodons stand between 7 and 8 feet tall. Their massive bodies weigh between 300 and 400 pounds. Your size is Medium."
+        },
+        {
+          "name": "Powerful Build",
+          "desc": "You count as one size larger when determining your carrying capacity and the weight you can push, drag, or lift."
+        },
+        {
+          "name": "Loxodon Serenity",
+          "desc": "You have advantage on saving throws against being charmed or frightened."
+        },
+        {
+          "name": "Natural Armor",
+          "desc": "You have thick, leathery skin. When you aren't wearing armor, your AC is 12 + your Constitution modifier. You can use your natural armor to determine your AC if the armor you wear would leave you with a lower AC. A shield's benefits apply as normal while you use your natural armor.\n\n**Tip: AC Calculations Don't Stack.** When the game gives you more than one way to calculate your Armor Class, you can use only one of them. You choose the one to use. For example, if you have the loxodon's Natural Armor trait and the monk's Unarmored Defense feature, you don't mix them together. Instead, you choose which one determines your AC."
+        },
+        {
+          "name": "Trunk",
+          "desc": "You can grasp things with your trunk, and you can use it as a snorkel. It has a reach of 5 feet, and it can lift a number of pounds equal to five times your Strength score. You can use it to do the following simple tasks: lift, drop, hold, push, or pull an object or a creature; open or close a door or a container; grapple someone; or make an unarmed strike. Your DM might allow other simple tasks to be added to that list of options.\n\nYour trunk can't wield weapons or shields or do anything that requires manual precision, such as using tools or magic items or performing the somatic components of a spell."
+        },
+        {
+          "name": "Keen Smell",
+          "desc": "Thanks to your sensitive trunk, you have advantage on Wisdom (Perception), Wisdom (Survival), and Intelligence (Investigation) checks that involve smell."
+        },
+        {
+          "name": "Languages",
+          "desc": "You can speak, read, and write Common and Loxodon."
+        }
+      ],
+      "abilityBonuses": {
+        "con": 2,
+        "wis": 1
+      }
+    },
+    {
+      "name": "Merfolk",
+      "source": "Plane Shift: Zendikar",
+      "edition": "2014",
+      "size": "Medium",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Age",
+          "desc": "Merfolk mature at the same rate humans do and reach adulthood around the age of 20. They live considerably longer than humans, though, often reaching well over 100 years."
+        },
+        {
+          "name": "Alignment",
+          "desc": "Most merfolk are neutral, though merfolk of the Emeria and Cosi creeds have chaotic leanings."
+        },
+        {
+          "name": "Amphibious",
+          "desc": "You can breathe air and water."
+        },
+        {
+          "name": "Size",
+          "desc": "Merfolk are about the same size and build as humans. Your size is Medium."
+        },
+        {
+          "name": "Swimming",
+          "desc": "You have a swimming speed of 30 feet."
+        },
+        {
+          "name": "Languages",
+          "desc": "You can speak, read, and write Common, Merfolk, and one extra language of your choice."
+        }
+      ],
+      "abilityBonuses": {
+        "cha": 1
+      }
+    },
+    {
+      "name": "Minotaur (Amonkhet)",
+      "source": "Plane Shift: Amonkhet",
+      "edition": "2014",
+      "size": "Medium",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Age",
+          "desc": "Minotaurs develop more slowly than humans, reaching full maturity around the age of 20. They typically become acolytes at around 8 or 9 years old, making them among the older members of their crops. Once they reach maturity, though, minotaurs age quickly, rushing headlong through the trials (as they do all aspects of life) to complete them before they pass their peak. A minotaur allowed to die of old age would rarely live beyond 40."
+        },
+        {
+          "name": "Alignment",
+          "desc": "Most minotaurs lean toward chaotic alignments, and they have a slight inclination toward evil."
+        },
+        {
+          "name": "Size",
+          "desc": "Minotaurs average over 6 feet in height, and they have strong, stocky builds. Your size is Medium."
+        },
+        {
+          "name": "Natural Weapon",
+          "desc": "You can use your horns as a natural weapon to make unarmed strikes. If you hit with your horns, you deal bludgeoning damage equal to 1d6 + your Strength modifier."
+        },
+        {
+          "name": "Menacing",
+          "desc": "You gain proficiency in the Intimidation skill."
+        },
+        {
+          "name": "Relentless Endurance",
+          "desc": "When you are reduced to 0 hit points but not killed outright, you can drop to 1 hit point instead. You can't use this feature again until you finish a long rest."
+        },
+        {
+          "name": "Savage Attacks",
+          "desc": "When you score a critical hit with a melee weapon attack, you can roll one of the weapon's damage dice one additional time and add it to the extra damage of the critical hit."
+        },
+        {
+          "name": "Languages",
+          "desc": "You can speak, read, and write Common and Minotaur."
+        }
+      ],
+      "abilityBonuses": {
+        "str": 2,
+        "con": 1
+      }
+    },
+    {
+      "name": "Naga",
+      "source": "Plane Shift: Amonkhet",
+      "edition": "2014",
+      "size": "Medium",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Age",
+          "desc": "Like humans, naga reach adulthood in their late teens. They show no signs of aging beyond that point except for growing larger, so in theory, a naga could live well over a century."
+        },
+        {
+          "name": "Alignment",
+          "desc": "Most naga are either neutral or neutral evil in alignment."
+        },
+        {
+          "name": "Size",
+          "desc": "Naga stand about 5 feet tall when upright, but the total length of their bodies, head to tail, ranges from 10 to as much as 20 feet. Your size is Medium."
+        },
+        {
+          "name": "Speed Burst",
+          "desc": "By lowering your body to the ground and propelling yourself with your arms, you can move more quickly for a time. As a bonus action on your turn, if you have both hands free, you can increase your walking speed by 5 feet until the end of your turn."
+        },
+        {
+          "name": "Natural Weapons",
+          "desc": "Your fanged maw and constricting serpentine body are natural weapons, which you can use to make unarmed strikes.\n\nIf you hit with your bite, you deal piercing damage equal to 1d4 + your Strength modifier, and your target must make a Constitution saving throw (8 + your proficiency bonus + your Constitution modifier). On a failed save, the target takes 1d4 poison damage.\n\nIf you hit with your constrict attack, you deal bludgeoning damage equal to 1d6 + your Strength modifier, and the target is grappled (escape 8 + your proficiency bonus + your Strength modifier). Until this grapple ends, the target is restrained, and you can't constrict another target."
+        },
+        {
+          "name": "Poison Immunity",
+          "desc": "You are immune to poison damage and can't be poisoned."
+        },
+        {
+          "name": "Poison Affinity",
+          "desc": "You gain proficiency with the poisoner's kit."
+        },
+        {
+          "name": "Languages",
+          "desc": "You can speak, read, and write Common and Naga."
+        }
+      ],
+      "abilityBonuses": {
+        "con": 2,
+        "int": 1
+      }
+    },
+    {
+      "name": "Orc (Ixalan)",
+      "source": "Plane Shift: Ixalan",
+      "edition": "2014",
+      "size": "Medium",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Age",
+          "desc": "Orcs mature a little faster than humans, reaching adulthood around age 14. They age noticeably faster and rarely live longer than 75 years."
+        },
+        {
+          "name": "Alignment",
+          "desc": "Most orcs lean toward chaotic alignments, and many serve on pirate ships that encourage an inclination toward evil."
+        },
+        {
+          "name": "Size",
+          "desc": "Orcs average over 6 feet in height, and they have strong, stocky builds. Your size is Medium."
+        },
+        {
+          "name": "Menacing",
+          "desc": "You gain proficiency in the Intimidation skill."
+        },
+        {
+          "name": "Relentless Endurance",
+          "desc": "When you are reduced to 0 hit points but not killed outright, you can drop to 1 hit point instead. You can't use this feature again until you finish a long rest."
+        },
+        {
+          "name": "Savage Attacks",
+          "desc": "When you score a critical hit with a melee weapon attack, you can roll one of the weapon's damage dice one additional time and add it to the extra damage of the critical hit."
+        },
+        {
+          "name": "Darkvision",
+          "desc": "You can see in dim light within 60 feet of you as if it were bright light, and in darkness as if it were dim light. You can't discern color in darkness, only shades of gray."
+        },
+        {
+          "name": "Languages",
+          "desc": "You can speak, read, and write Common (if it exists in your campaign) and Orc."
+        }
+      ],
+      "abilityBonuses": {
+        "str": 2,
+        "con": 1
+      }
+    },
+    {
+      "name": "Owlin",
+      "source": "Strixhaven: A Curriculum of Chaos",
+      "edition": "2014",
+      "size": "Small/Medium",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Size",
+          "desc": "You are Medium or Small. You choose the size when you select this race."
+        },
+        {
+          "name": "Darkvision",
+          "desc": "You can see in dim light within 120 feet of yourself as if it were bright light and in darkness as if it were dim light. You discern colors in that darkness only as shades of gray."
+        },
+        {
+          "name": "Flight",
+          "desc": "Thanks to your wings, you have a flying speed equal to your walking speed. You can't use this flying speed if you're wearing medium or heavy armor."
+        },
+        {
+          "name": "Silent Feathers",
+          "desc": "You have proficiency in the Stealth skill."
+        }
+      ],
+      "abilityNote": "Choose +2 to one ability and +1 to another (any)"
+    },
+    {
+      "name": "Plasmoid",
+      "source": "Astral Adventurer's Guide",
+      "edition": "2014",
+      "size": "Small/Medium",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Creature Type",
+          "desc": "You are an Ooze."
+        },
+        {
+          "name": "Size",
+          "desc": "You are Medium or Small. You choose the size when you select this race."
+        },
+        {
+          "name": "Amorphous",
+          "desc": "You can squeeze through a space as narrow as 1 inch wide, provided you are wearing and carrying nothing. You have advantage on ability checks you make to initiate or escape a grapple."
+        },
+        {
+          "name": "Darkvision",
+          "desc": "You can see in dim light within 60 feet of yourself as if it were bright light, and in darkness as if it were dim light. You discern colors in that darkness only as shades of gray."
+        },
+        {
+          "name": "Hold Breath",
+          "desc": "You can hold your breath for 1 hour."
+        },
+        {
+          "name": "Natural Resilience",
+          "desc": "You have resistance to acid and poison damage, and you have advantage on saving throws against being poisoned."
+        },
+        {
+          "name": "Shape Self",
+          "desc": "As an action, you can reshape your body to give yourself a head, one or two arms, one or two legs, and makeshift hands and feet, or you can revert to a limbless blob. While you have a humanlike shape, you can wear clothing and armor made for a Humanoid of your size.\n\nAs a bonus action, you can extrude a pseudopod that is up to 6 inches wide and 10 feet long or reabsorb it into your body. As part of the same bonus action, you can use this pseudopod to manipulate an object, open or close a door or container, or pick up or set down a Tiny object. The pseudopod contains no sensory organs and can't attack, activate magic items, or lift more than 10 pounds."
+        }
+      ],
+      "abilityNote": "Choose +2 to one ability and +1 to another (any)"
+    },
+    {
+      "name": "Reborn",
+      "source": "Van Richten's Guide to Ravenloft",
+      "edition": "2014",
+      "size": "Small/Medium",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Size",
+          "desc": "You are Medium or Small. You choose the size when you gain this lineage."
+        },
+        {
+          "name": "Ancestral Legacy",
+          "desc": "If you replace a race with this lineage, you can keep the following elements of that race: any skill proficiencies you gained from it and any climbing, flying, or swimming speed you gained from it.\n\nIf you don't keep any of those elements or you choose this lineage at character creation, you gain proficiency in two skills of your choice."
+        },
+        {
+          "name": "Deathless Nature",
+          "desc": "You have escaped death, a fact represented by the following benefits:\n\n• You have advantage on saving throws against disease and being poisoned, and you have resistance to poison damage.\n• You have advantage on death saving throws.\n• You don't need to eat, drink, or breathe.\n• You don't need to sleep, and magic can't put you to sleep. You can finish a long rest in 4 hours if you spend those hours in an inactive, motionless state, during which you retain consciousness."
+        },
+        {
+          "name": "Knowledge from a Past Life",
+          "desc": "You temporarily remember glimpses of the past, perhaps faded memories from ages ago or a previous life. When you make an ability check that uses a skill, you can roll a d6 immediately after seeing the number on the d20 and add the number on the d6 to the check. You can use this feature a number of times equal to your proficiency bonus, and you regain all expended uses when you finish a long rest."
+        }
+      ],
+      "abilityNote": "Choose +2 to one ability and +1 to another (any)"
+    },
+    {
+      "name": "Rimekin",
+      "source": "Lorwyn: First Light",
+      "edition": "2024",
+      "size": "Small/Medium",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Cold Fire Magic",
+          "desc": "You know the Ray of Frost cantrip. When you reach character levels 3 and 5, you learn the Ice Knife spell and the Flame Blade spell, respectively. You always have those spells prepared. You can cast each once without a spell slot, and you regain the ability to cast these spells in this way when you finish a Long Rest. You can also cast the spells using any spell slots you have of the appropriate level. When you cast Flame Blade using this trait, the spell deals Cold damage instead of Fire damage.\n\nIntelligence, Wisdom, or Charisma is your spellcasting ability for these spells (choose the ability when you select this species)."
+        },
+        {
+          "name": "Cold Resistance",
+          "desc": "You have Resistance to Cold damage."
+        },
+        {
+          "name": "Darkvision",
+          "desc": "You have Darkvision with a range of 60 feet."
+        }
+      ]
+    },
+    {
+      "name": "Simic Hybrid",
+      "source": "Guildmasters' Guide to Ravnica",
+      "edition": "2014",
+      "size": "Medium",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Age",
+          "desc": "Hybrids begin their lives as adult humans, elves, or vedalken. They age at a slightly accelerated rate, so their maximum life spans are probably reduced somewhat. The Guardian Project has not been operating long enough to observe the full effect of this phenomenon."
+        },
+        {
+          "name": "Alignment",
+          "desc": "Most hybrids share the generally neutral outlook of the Simic Combine. They are more interested in scientific research and the standing of their guild than in moral or ethical questions. Those who leave the Combine, however, often do so because their philosophical outlook and alignment are more in line with a different guild's."
+        },
+        {
+          "name": "Size",
+          "desc": "Your size is Medium, within the normal range of your humanoid base race."
+        },
+        {
+          "name": "Darkvision",
+          "desc": "You can see in dim light within 60 feet of you as if it were bright light, and in darkness as if it were dim light. You can't discern color in darkness, only shades of gray."
+        },
+        {
+          "name": "Languages",
+          "desc": "You can speak, read, and write Common and your choice of Elvish or Vedalken."
+        },
+        {
+          "name": "Animal Enhancement",
+          "desc": "Your body has been altered to incorporate certain animal characteristics. You choose one animal enhancement now and a second enhancement at 5th level.\n\nAt 1st level, choose one of the following options:\n\n• **Manta Glide.** You have ray-like fins that you can use as wings to slow your fall or allow you to glide. When you fall and aren't incapacitated, you can subtract up to 100 feet from the fall when calculating falling damage, and you can move up to 2 feet horizontally for every 1 foot you descend.\n• **Nimble Climber.** You have a climbing speed equal to your walking speed.\n• **Underwater Adaptation.** You can breathe air and water, and you have a swimming speed equal to your walking speed.\n\nAt 5th level, your body evolves further, developing new characteristics. Choose one of the options you didn't take at 1st level, or one of the following options:\n\n• **Grappling Appendage.** You have two special appendages growing alongside your arms. Choose whether they're both claws or tentacles. As an action, you can use one of them to try to grapple a creature. Each one is also a natural weapon, which you can use to make an unarmed strike. If you hit with it, the target takes bludgeoning damage equal to 1d6 + your Strength modifier, instead of the bludgeoning damage normal for an unarmed strike. Immediately after hitting, you can try to grapple the target as a bonus action. These appendages can't precisely manipulate anything and can't wield weapons, magic items, or other specialized equipment.\n• **Carapace.** Your skin in places is covered by a thick shell. You gain a +1 bonus to AC when you're not wearing heavy armor.\n• **Acid Spit.** As an action, you can spray acid from glands in your mouth, targeting one creature or object you can see within 30 feet of you. The target takes 2d10 acid damage unless it succeeds on a Dexterity saving throw against a DC equal to 8 + your Constitution modifier + your proficiency bonus. This damage increases by 1d10 when you reach 11th level (3d10) and 17th level (4d10). You can use this trait a number of times equal to your Constitution modifier (minimum of once), and you regain all expended uses of it when you finish a long rest."
+        }
+      ],
+      "abilityBonuses": {
+        "con": 2
+      },
+      "abilityNote": "Choose +1 to 1 of STR, DEX, INT, WIS, CHA"
+    },
+    {
+      "name": "Siren",
+      "source": "Plane Shift: Ixalan",
+      "edition": "2014",
+      "size": "Medium",
+      "speed": 25,
+      "traits": [
+        {
+          "name": "Alignment",
+          "desc": "Most sirens lean toward chaotic alignment, cherishing the freedom and independence that comes from joining a pirate crew."
+        },
+        {
+          "name": "Size",
+          "desc": "Sirens stand about 5 to 6 feet tall, but their bodies are slender and their bones partially hollow to facilitate their flight. Your size is Medium."
+        },
+        {
+          "name": "Siren's Song",
+          "desc": "You know the friends cantrip and can cast it without material components."
+        },
+        {
+          "name": "Flight",
+          "desc": "You have a flying speed of 30 feet. You can't use your flying speed while you wear medium or heavy armor. (If your campaign uses the variant rule for encumbrance, you can't use your flying speed if you are encumbered.)"
+        },
+        {
+          "name": "Languages",
+          "desc": "You can speak, read, and write Common (if it exists in your campaign) and Siren."
+        }
+      ],
+      "abilityBonuses": {
+        "cha": 2
+      }
+    },
+    {
+      "name": "Thri-kreen",
+      "source": "Astral Adventurer's Guide",
+      "edition": "2014",
+      "size": "Small/Medium",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Creature Type",
+          "desc": "You are a Monstrosity."
+        },
+        {
+          "name": "Size",
+          "desc": "You are Medium or Small. You choose the size when you select this race."
+        },
+        {
+          "name": "Chameleon Carapace",
+          "desc": "While you aren't wearing armor, your carapace gives you a base Armor Class of 13 + your Dexterity modifier.\n\nAs an action, you can change the color of your carapace to match the color and texture of your surroundings, giving you advantage on Dexterity (Stealth) checks made to hide in those surroundings."
+        },
+        {
+          "name": "Darkvision",
+          "desc": "You can see in dim light within 60 feet of yourself as if it were bright light, and in darkness as if it were dim light. You discern colors in that darkness only as shades of gray."
+        },
+        {
+          "name": "Secondary Arms",
+          "desc": "You have two slightly smaller secondary arms below your primary pair of arms. The secondary arms can manipulate an object, open or close a door or container, pick up or set down a Tiny object, or wield a weapon that has the light property."
+        },
+        {
+          "name": "Sleepless",
+          "desc": "You do not require sleep and can remain conscious during a long rest, though you must still refrain from strenuous activity to gain the benefit of the rest."
+        },
+        {
+          "name": "Thri-kreen Telepathy",
+          "desc": "Without the assistance of magic, you can't speak the non-thri-kreen languages you know. Instead you use telepathy to convey your thoughts. You have the magical ability to transmit your thoughts mentally to willing creatures within 120 feet of yourself. A contacted creature doesn't need to share a language with you to understand your thoughts, but it must be able to understand at least one language. Your telepathic link to a creature is broken if you and the creature move more than 120 feet apart, if either of you is incapacitated, or if either of you mentally breaks the contact (no action required)."
+        }
+      ],
+      "abilityNote": "Choose +2 to one ability and +1 to another (any)"
+    },
+    {
+      "name": "Vampire",
+      "source": "Plane Shift: Zendikar",
+      "edition": "2014",
+      "size": "Medium",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Age",
+          "desc": "Vampires don't mature and age in the same way that other races do. Every living vampire is either a bloodchief, infected by Ulamog's influence in the distant reaches of history, or was spawned by a bloodchief from a living human. Most vampires are thus very old, but few have any memory of their earliest years."
+        },
+        {
+          "name": "Alignment",
+          "desc": "Vampires have no innate tendency toward evil, but consuming the life energy of other creatures often pushes them to that end. Regardless of their moral bent, the strict hierarchies of their bloodchiefs inclines them toward a lawful alignment."
+        },
+        {
+          "name": "Size",
+          "desc": "Vampires are about the same size and build as humans. Your size is Medium."
+        },
+        {
+          "name": "Blood Thirst",
+          "desc": "You can drain blood and life energy from a willing creature, or one that is grappled by you, incapacitated, or restrained. Make a melee attack against the target. If you hit, you deal 1 piercing damage and 1d6 necrotic damage. The target's hit point maximum is reduced by an amount equal to the necrotic damage taken, and you regain hit points equal to that amount. The reduction lasts until the target finishes a long rest. The target dies if this effect reduces its hit point maximum to 0."
+        },
+        {
+          "name": "Darkvision",
+          "desc": "Thanks to your heritage, you have superior vision in dark and dim conditions. You can see in dim light within 60 feet of you as if it were bright light, and in darkness as if it were dim light. You can't discern color in darkness, only shades of gray."
+        },
+        {
+          "name": "Languages",
+          "desc": "You can speak, read, and write Common and Vampire."
+        },
+        {
+          "name": "Vampiric Resistance",
+          "desc": "You have resistance to necrotic damage."
+        }
+      ],
+      "abilityBonuses": {
+        "cha": 2
+      }
+    },
+    {
+      "name": "Vedalken",
+      "source": "Guildmasters' Guide to Ravnica",
+      "edition": "2014",
+      "size": "Medium",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Age",
+          "desc": "Vedalken mature slower than humans do, reaching maturity around age 40. Their life span is typically 350 years, with some living to the age of 500."
+        },
+        {
+          "name": "Alignment",
+          "desc": "Vedalken are usually lawful and non-evil."
+        },
+        {
+          "name": "Size",
+          "desc": "Tall and slender, Vedalken stand 6 to 6½ feet tall on average and usually weigh less than 200 pounds. Your size is Medium."
+        },
+        {
+          "name": "Vedalken Dispassion",
+          "desc": "You have advantage on all Intelligence, Wisdom, and Charisma saving throws."
+        },
+        {
+          "name": "Tireless Precision",
+          "desc": "You are proficient in one of the following skills of your choice: Arcana, History, Investigation, Medicine, Performance, or Sleight of Hand. You are also proficient with one tool of your choice.\n\nWhenever you make an ability check with the chosen skill or tool, roll a d4 and add the number rolled to the check's total."
+        },
+        {
+          "name": "Partially Amphibious",
+          "desc": "By absorbing oxygen through your skin, you can breathe underwater for up to 1 hour. Once you've reached that limit, you can't use this trait again until you finish a long rest."
+        },
+        {
+          "name": "Languages",
+          "desc": "You can speak, read, and write Common, Vedalken, and one other language of your choice."
+        }
+      ],
+      "abilityBonuses": {
+        "int": 2,
+        "wis": 1
+      }
+    },
+    {
+      "name": "Verdan",
+      "source": "Acquisitions Incorporated",
+      "edition": "2014",
+      "size": "V",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Age",
+          "desc": "Verdan reach adulthood at around the age of 24, and it is thought that they might live to nearly 200 years old. However, because no verdan has died of old age since the race's initial creation, their upper age limits remain subject to speculation."
+        },
+        {
+          "name": "Alignment",
+          "desc": "Verdan are generally good, although their absence of racial identity and shared history can sometimes see individual verdan become untethered from any moral or ethical framework."
+        },
+        {
+          "name": "Size",
+          "desc": "Verdan start out similar in size to the goblins they were created from, ranging from 3 to 4 feet in height. But at some point after reaching maturity, each verdan undergoes a sudden growth spurt of 2 feet or more. At 1st level, you are a Small creature. When you reach 5th level, you become a Medium creature."
+        },
+        {
+          "name": "Black Blood Healing",
+          "desc": "The black blood that is a sign of your people's connection to That-Which-Endures boosts your natural healing. When you roll a 1 or 2 on any Hit Die you spend at the end of a short rest, you can reroll the die and must use the new roll."
+        },
+        {
+          "name": "Limited Telepathy",
+          "desc": "You can telepathically speak to any creature you can see within 30 feet of you. You don't need to share a language with the creature for it to understand your telepathy, but it must be able to understand at least one language. This process of communication is slow and limited, allowing you to transmit and receive only simple ideas and straightforward concepts."
+        },
+        {
+          "name": "Persuasive",
+          "desc": "Your people's lack of history makes you trustworthy and humble. You have proficiency in the Persuasion skill."
+        },
+        {
+          "name": "Telepathic Insight",
+          "desc": "Your mind's connection to the world around you strengthens your will. You have advantage on all Wisdom and Charisma saving throws."
+        },
+        {
+          "name": "Language",
+          "desc": "You speak, read, and write Common, Goblin, and one additional language of your choice. This language typically has some connection to one of the areas or cultures that has been part of your life."
+        }
+      ],
+      "abilityBonuses": {
+        "con": 1,
+        "cha": 2
+      }
+    },
+    {
+      "name": "Warforged",
+      "source": "Eberron: Forge of the Artificer",
+      "edition": "2024",
+      "size": "Small/Medium",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Construct Resilience",
+          "desc": "You have Resistance to Poison damage. You also have Advantage on saving throws to avoid or end the Poisoned condition."
+        },
+        {
+          "name": "Integrated Protection",
+          "desc": "You gain a +1 bonus to your Armor Class. In addition, armor you have donned can't be removed against your will while you're alive."
+        },
+        {
+          "name": "Sentry's Rest",
+          "desc": "You don't need to sleep, and magic can't put you to sleep. You can finish a Long Rest in 6 hours if you spend those hours in an inactive, motionless state. During this time, you appear inert but remain conscious."
+        },
+        {
+          "name": "Specialized Design",
+          "desc": "You gain one skill proficiency and one tool proficiency of your choice."
+        },
+        {
+          "name": "Tireless",
+          "desc": "You don't gain Exhaustion levels from dehydration, malnutrition, or suffocation."
+        }
+      ]
+    },
+    {
+      "name": "Warforged",
+      "source": "Eberron: Rising from the Last War",
+      "edition": "2014",
+      "size": "Medium",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Age",
+          "desc": "A typical warforged is between two and thirty years old. The maximum warforged lifespan remains a mystery; so far, warforged have shown no signs of deterioration due to age. You are immune to magical aging effects."
+        },
+        {
+          "name": "Alignment",
+          "desc": "Most warforged take comfort in order and discipline, tending toward law and neutrality. But some have absorbed the morality, or lack thereof, of the beings with which they served."
+        },
+        {
+          "name": "Size",
+          "desc": "Your size is Medium."
+        },
+        {
+          "name": "Constructed Resilience",
+          "desc": "You were created to have remarkable fortitude, represented by the following benefits:\n\n• You have advantage on saving throws against being poisoned, and you have resistance to poison damage.\n• You don't need to eat, drink, or breathe.\n• You are immune to disease.\n• You don't need to sleep, and magic can't put you to sleep."
+        },
+        {
+          "name": "Sentry's Rest",
+          "desc": "When you take a long rest, you must spend at least six hours in an inactive, motionless state, rather than sleeping. In this state, you appear inert, but it doesn't render you unconscious, and you can see and hear as normal."
+        },
+        {
+          "name": "Integrated Protection",
+          "desc": "Your body has built-in defensive layers, which can be enhanced with armor:\n\n• You gain a +1 bonus to Armor Class.\n• You can don only armor with which you have proficiency. To don armor other than a shield, you must incorporate it into your body over the course of 1 hour, during which you remain in contact with the armor. To doff armor, you must spend 1 hour removing it. You can rest while donning or doffing armor in this way.\n• While you live, the armor incorporated into your body can't be removed against your will."
+        },
+        {
+          "name": "Specialized Design",
+          "desc": "You gain one skill proficiency and one tool proficiency of your choice."
+        },
+        {
+          "name": "Languages",
+          "desc": "You can speak, read, and write Common and one other language of your choice."
+        }
+      ],
+      "abilityBonuses": {
+        "con": 2
+      },
+      "abilityNote": "Choose +1 to 1 of STR, DEX, INT, WIS, CHA"
+    },
+    {
+      "name": "Yuan-ti Pureblood",
+      "source": "Volo's Guide to Monsters",
+      "edition": "2014",
+      "size": "Medium",
+      "speed": 30,
+      "traits": [
+        {
+          "name": "Age",
+          "desc": "Purebloods mature at the same rate as humans and have lifespans similar in length to theirs."
+        },
+        {
+          "name": "Size",
+          "desc": "Purebloods match humans in average size and weight. Your size is Medium."
+        },
+        {
+          "name": "Darkvision",
+          "desc": "You can see in dim light within 60 feet of you as if it were bright light, and in darkness as if it were dim light. You can't discern color in darkness, only shades of gray."
+        },
+        {
+          "name": "Innate Spellcasting",
+          "desc": "You know the poison spray cantrip. You can cast animal friendship an unlimited number of times with this trait, but you can target only snakes with it. Starting at 3rd level, you can also cast suggestion with this trait. Once you cast it, you can't do so again until you finish a long rest. Charisma is your spellcasting ability for these spells."
+        },
+        {
+          "name": "Magic Resistance",
+          "desc": "You have advantage on saving throws against spells and other magical effects."
+        },
+        {
+          "name": "Poison Immunity",
+          "desc": "You are immune to poison damage and the poisoned condition."
+        },
+        {
+          "name": "Languages",
+          "desc": "You can speak, read, and write Common, Abyssal, and Draconic."
+        }
+      ],
+      "abilityBonuses": {
+        "cha": 2,
+        "int": 1
+      }
+    }
   ]
 };

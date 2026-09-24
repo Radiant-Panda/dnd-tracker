@@ -1331,7 +1331,12 @@ const SUBCLASS_DATA = {
           "name": "War Priest",
           "level": 3,
           "description": "As a Bonus Action, you can make one attack with a weapon or an Unarmed Strike. You can use this Bonus Action a number of times equal to your Wisdom modifier (minimum of once). You regain all expended uses when you finish a Short or Long Rest.",
-          "resource": null
+          "resource": {
+            "name": "War Priest",
+            "maxFormula": "wis_mod",
+            "die": null,
+            "recharge": "short"
+          }
         },
         {
           "name": "War God's Blessing",
@@ -2054,6 +2059,48 @@ const SUBCLASS_DATA = {
           "level": 17,
           "description": "17th-level Twilight Domain feature\n\nThe twilight that you summon offers a protective embrace: you and your allies have Cover while in the sphere created by your Twilight Sanctuary.",
           "resource": null
+        }
+      ]
+    },
+    "Knowledge Domain (2024)": {
+      "name": "Knowledge Domain (2024)",
+      "source": "Heroes of the Frontier",
+      "features": [
+        {
+          "name": "Blessings of Knowledge",
+          "level": 3,
+          "description": "You gain proficiency with one type of Artisan's Tools of your choice and in two of the following skills of your choice: Arcana, History, Nature, or Religion. You have Expertise in those two skills."
+        },
+        {
+          "name": "Knowledge Domain",
+          "level": 3,
+          "description": "Unearth Secrets and Master the Mind\n\nThe Knowledge Domain values learning and understanding above all. Clerics who tap into this domain study esoteric lore, collect old tomes, delve into secret places, and examine the processes of the mind. To them, knowledge is more valuable than material wealth, and learning is an act of worship. Libraries, universities, and other educational institutions also draw on the power of the Knowledge Domain.\n\nGods of knowledge vary from masters of arcane magic to patrons of craft and invention. In Faerûn, Clerics of the Knowledge Domain worship deities of learning and ingenuity such as FRHoF and FRHoF, among many others."
+        },
+        {
+          "name": "Knowledge Domain Spells",
+          "level": 3,
+          "description": "When you reach a Cleric level specified in the Knowledge Domain Spells table, you thereafter always have the listed spells prepared.\n\n| Cleric Level | Spells |\n| 3 | Command, Comprehend Languages*, Detect Magic*, Detect Thoughts*, Identify*, Mind Spike* |\n| 5 | Dispel Magic, Nondetection, Tongues* |\n| 7 | Arcane Eye*, Banishment, Confusion |\n| 9 | Legend Lore*, Scrying*, Synaptic Static |"
+        },
+        {
+          "name": "Mind Magic",
+          "level": 3,
+          "description": "As a Magic action, you can expend one use of your Channel Divinity to manifest your magical knowledge. Choose one spell from the Divination school on the Knowledge Domain Spells table that you have prepared. As part of that action, you cast that spell without expending a spell slot or needing Material components."
+        },
+        {
+          "name": "Unfettered Mind",
+          "level": 6,
+          "description": "You gain telepathy out to 60 feet. When you use this telepathy, you can simultaneously contact a number of creatures equal to your Wisdom modifier (minimum of one).\n\nAdditionally, you gain proficiency in Intelligence saving throws. If you already have this proficiency, you instead gain saving throw proficiency with one ability in which you lack it."
+        },
+        {
+          "name": "Divine Foreknowledge",
+          "level": 17,
+          "description": "As a Bonus Action, you magically expand your mind to the future. For 1 hour, you have Advantage on D20 Tests. Once you use this feature, you can't use it again until you finish a Long Rest. You can also restore your use of this feature by expending a level 6+ spell slot (no action required).",
+          "resource": {
+            "name": "Divine Foreknowledge",
+            "maxFormula": 1,
+            "die": null,
+            "recharge": "long"
+          }
         }
       ]
     }
@@ -3147,7 +3194,12 @@ const SUBCLASS_DATA = {
           "name": "Group Recovery",
           "level": 3,
           "description": "When you use your Second Wind to regain Hit Points, you can choose a number of allies within a 30-foot Emanation originating from yourself, up to a number of allies equal to your Charisma modifier (minimum of one). Each of those allies regains Hit Points equal to 1d4 plus your Fighter level. Once you use this ability, you can't use it again until you finish a Short or Long Rest.",
-          "resource": null
+          "resource": {
+            "name": "Group Recovery",
+            "maxFormula": 1,
+            "die": null,
+            "recharge": "short"
+          }
         },
         {
           "name": "Knightly Envoy",
@@ -3579,7 +3631,12 @@ const SUBCLASS_DATA = {
           "name": "Draconic Disciple",
           "level": 3,
           "description": "3rd-level Way of the Ascendant Dragon feature\n\nYou can channel draconic power to magnify your presence and imbue your unarmed strikes with the essence of a dragon's breath. You gain the following benefits:\n\n• **Draconic Presence.** If you fail a Charisma (Intimidation) or Charisma (Persuasion) check, you can use your reaction to reroll the check, as you tap into the mighty presence of dragons. Once this feature turns a failure into a success, you can't use it again until you finish a long rest.\n• **Draconic Strike.** When you damage a target with an unarmed strike, you can change the damage type to acid, cold, fire, lightning, or poison.\n• **Tongue of Dragons.** You learn to speak, read, and write Draconic or one other language of your choice.",
-          "resource": null
+          "resource": {
+            "name": "Draconic Disciple",
+            "maxFormula": 1,
+            "die": null,
+            "recharge": "long"
+          }
         },
         {
           "name": "Wings Unfurled",
@@ -6659,7 +6716,12 @@ const SUBCLASS_DATA = {
           "name": "Clairvoyant Combatant",
           "level": 6,
           "description": "When you form a telepathic bond with a creature using your Awakened Mind, you can force that creature to make a Wisdom saving throw against your spell save DC. On a failed save, the creature has Disadvantage on attack rolls against you, and you have Advantage on attack rolls against that creature for the duration of the bond.\n\nOnce you use this feature, you can't use it again until you finish a Short or Long Rest unless you expend a Pact Magic spell slot (no action required) to restore your use of it.",
-          "resource": null
+          "resource": {
+            "name": "Clairvoyant Combatant",
+            "maxFormula": 1,
+            "die": null,
+            "recharge": "short"
+          }
         },
         {
           "name": "Eldritch Hex",
@@ -7338,7 +7400,12 @@ const SUBCLASS_DATA = {
           "name": "The Third Eye",
           "level": 10,
           "description": "You can increase your powers of perception. As a Bonus Action, choose one of the following benefits, which lasts until you start a Short or Long Rest. You can't use this feature again until you finish a Short or Long Rest.\n\n**Darkvision.** You gain Darkvision with a range of 120 feet.\n\n**Greater Comprehension.** You can read any language.\n\n**See Invisibility.** You can cast See Invisibility without expending a spell slot.",
-          "resource": null
+          "resource": {
+            "name": "The Third Eye",
+            "maxFormula": 1,
+            "die": null,
+            "recharge": "short"
+          }
         },
         {
           "name": "Greater Portent",
@@ -7422,7 +7489,12 @@ const SUBCLASS_DATA = {
           "name": "Illusory Self",
           "level": 10,
           "description": "When a creature hits you with an attack roll, you can take a Reaction to interpose an illusory duplicate of yourself between the attacker and yourself. The attack automatically misses you, then the illusion dissipates.\n\nOnce you use this feature, you can't use it again until you finish a Short or Long Rest. You can also restore your use of it by expending a level 2+ spell slot (no action required).",
-          "resource": null
+          "resource": {
+            "name": "Illusory Self",
+            "maxFormula": 1,
+            "die": null,
+            "recharge": "short"
+          }
         },
         {
           "name": "Illusory Reality",

@@ -722,6 +722,8 @@ function _inferEdition(ch) {
     if (ch.race && typeof SPECIES_DATA !== 'undefined') {
       if ((SPECIES_DATA.species_2024 || []).some(s => s.name === ch.race)) return '2024';
       if ([...(SPECIES_DATA.races_2014 || []), ...(SPECIES_DATA.races_mpmm || [])].some(s => s.name === ch.race)) return '2014';
+      const more = (SPECIES_DATA.species_more || []).find(s => s.name === ch.race);
+      if (more) return more.edition || '2014';
     }
   } catch (e) {}
   return '2024';
@@ -7520,12 +7522,10 @@ function _syncSubclassFeaturesFor(ch, notify) {
 function _refreshStoredRulesText(ch) {
   const feats = (typeof FEATS_ITEMS_DATA !== 'undefined' && FEATS_ITEMS_DATA.feats) || [];
   const opts = (typeof CLASS_OPTIONS_DATA !== 'undefined' && CLASS_OPTIONS_DATA.options) || [];
-  const race = ch.race && typeof SPECIES_DATA !== 'undefined'
-    ? ((ch.raceEdition === '2014'
-        ? [...(SPECIES_DATA.races_2014 || []), ...(SPECIES_DATA.races_mpmm || []), ...(SPECIES_DATA.species_2024 || [])]
-        : [...(SPECIES_DATA.species_2024 || []), ...(SPECIES_DATA.races_2014 || []), ...(SPECIES_DATA.races_mpmm || [])])
-      .find(r => r.name === ch.race))
-    : null;
+  // Without a recorded edition, only trust a species entry that has every trait the character has
+  const myTraits = (ch.featuresList || []).filter(f => f._species === ch.race).map(f => f.name);
+  const race = !ch.race ? null : ch.raceEdition ? _findSpecies(ch.race, ch.raceEdition)
+    : _speciesPool().map(x => x.s).find(s => s.name === ch.race && myTraits.every(n => (s.traits || []).some(t => t.name === n)));
   (ch.featuresList || []).forEach(f => {
     let desc = null;
     if (f._option) desc = opts.find(o => o.name === f.name && o.source === f._optionSource)?.desc;
@@ -7742,7 +7742,8 @@ function renderCharacterSheet() {
           const s2024 = (SPECIES_DATA?.species_2024 || []).map(s => s.name);
           const r2014 = (SPECIES_DATA?.races_2014 || []).map(r => r.name);
           const rmpmm = (SPECIES_DATA?.races_mpmm || []).map(r => r.name);
-          const allRaces = [...s2024, ...r2014, ...rmpmm];
+          const more = SPECIES_DATA?.species_more || [];
+          const allRaces = [...s2024, ...r2014, ...rmpmm, ...more.map(s => s.name)];
           const customRace = ch.race && !allRaces.includes(ch.race) ? ch.race : null;
           const raceEd = ch.raceEdition || ((ch.edition || '2024') === '2014' && r2014.includes(ch.race) ? '2014' : '2024');
           const makeOpts = (arr, ed) => arr.map(n => `<option value="${ed}|${esc(n)}"${ch.race===n && (raceEd===ed || !s2024.includes(n) || !r2014.includes(n)) ?' selected':''}>${esc(n)}</option>`).join('');
@@ -7753,6 +7754,10 @@ function renderCharacterSheet() {
             <optgroup label="2024 PHB">${makeOpts(s2024, '2024')}</optgroup>
             <optgroup label="2014 PHB">${makeOpts(r2014, '2014')}</optgroup>
             <optgroup label="Mordenkainen's Multiverse">${makeOpts(rmpmm, '2014')}</optgroup>
+            <optgroup label="Other books">${more.map(sp => { const ed = sp.edition || '2014';
+              const dup = more.filter(x => x.name === sp.name).length > 1 || s2024.includes(sp.name) || r2014.includes(sp.name);
+              const sel = ch.race === sp.name && (!dup || raceEd === ed);
+              return `<option value="${ed}|${esc(sp.name)}"${sel ? ' selected' : ''}>${esc(sp.name)}${dup ? ` (${ed})` : ''}</option>`; }).join('')}</optgroup>
           </select>`;
         })()}
       </div>
@@ -7862,6 +7867,22 @@ function changeBackground(newBg) {
   renderApp();
 }
 
+// Every species entry with the ruleset it follows, in dropdown order. "Elf" exists in
+// several lists, so lookups take the edition the character picked.
+function _speciesPool() {
+  const D = typeof SPECIES_DATA !== 'undefined' ? SPECIES_DATA : {};
+  return [
+    ...(D.species_2024 || []).map(s => ({ s, ed: '2024' })),
+    ...(D.races_2014 || []).map(s => ({ s, ed: '2014' })),
+    ...(D.races_mpmm || []).map(s => ({ s, ed: '2014' })),
+    ...(D.species_more || []).map(s => ({ s, ed: s.edition || '2014' })),
+  ];
+}
+function _findSpecies(name, edition) {
+  const matches = _speciesPool().filter(x => x.s.name === name);
+  return (matches.find(x => x.ed === edition) || matches[0])?.s || null;
+}
+
 function changeRace(newRace) {
   const ch = db.characters[currentCharId];
   if (!ch) return;
@@ -7875,9 +7896,7 @@ function changeRace(newRace) {
   ch.race = namePart;
   ch.raceEdition = edition;
 
-  const s2024 = SPECIES_DATA?.species_2024 || [], s2014 = [...(SPECIES_DATA?.races_2014 || []), ...(SPECIES_DATA?.races_mpmm || [])];
-  const allSources = edition === '2014' ? [...s2014, ...s2024] : [...s2024, ...s2014];
-  const raceData = allSources.find(r => r.name === namePart);
+  const raceData = _findSpecies(namePart, edition);
   if (raceData) {
     // Traits
     (raceData.traits || []).forEach(trait => {
@@ -9037,7 +9056,7 @@ function _wizSubclassAvailable() {
 }
 
 function _wizSpeciesCards() {
-  const srcKey = wizardData._speciesSource === '2014' ? 'races_2014' : wizardData._speciesSource === 'mpmm' ? 'races_mpmm' : 'species_2024';
+  const srcKey = { '2014': 'races_2014', mpmm: 'races_mpmm', more: 'species_more' }[wizardData._speciesSource] || 'species_2024';
   const list = SPECIES_DATA[srcKey] || [];
   return list.map((sp, i) => {
     const sel = wizardData.race === sp.name && wizardData.raceSource === srcKey;
@@ -9048,9 +9067,11 @@ function _wizSpeciesCards() {
     } else if (srcKey === 'races_mpmm') {
       bonusLine = '+2/+1 choose any';
     }
+    if (sp.abilityNote && srcKey === 'species_more') bonusLine = [bonusLine, sp.abilityNote].filter(Boolean).join(' · ');
+    const edTag = srcKey === 'species_more' ? ` · ${esc(sp.edition || '2014')} rules` : '';
     return `<div class="wiz-card ${sel?'selected':''}" onclick="wiz_selectSpecies('${srcKey}',${i})">
       <div style="font-weight:bold;font-size:0.9rem">${esc(sp.name)}</div>
-      <div style="font-size:0.72rem;color:var(--text-dim)">${esc(sp.size||'')} · ${sp.speed||30} ft</div>
+      <div style="font-size:0.72rem;color:var(--text-dim)">${esc(sp.size||'')} · ${sp.speed||30} ft${edTag}</div>
       ${bonusLine ? `<div style="font-size:0.72rem;color:var(--gold-lt);margin-top:0.15rem">${bonusLine}</div>` : ''}
       ${traits ? `<div style="font-size:0.7rem;color:var(--text-dim);margin-top:0.15rem">${traits}</div>` : ''}
     </div>`;
@@ -9091,6 +9112,7 @@ function renderWizardStep(step) {
         <button class="btn btn-sm ${s==='2024'?'btn-primary':''}" onclick="wizardData._speciesSource='2024';renderWizardStep(1)">2024 PHB</button>
         <button class="btn btn-sm ${s==='2014'?'btn-primary':''}" onclick="wizardData._speciesSource='2014';renderWizardStep(1)">2014 PHB</button>
         <button class="btn btn-sm ${s==='mpmm'?'btn-primary':''}" onclick="wizardData._speciesSource='mpmm';renderWizardStep(1)">Mordenkainen's</button>
+        <button class="btn btn-sm ${s==='more'?'btn-primary':''}" onclick="wizardData._speciesSource='more';renderWizardStep(1)">Other books</button>
       </div>
       <div class="wiz-card-grid">${_wizSpeciesCards()}</div>
       <div class="form-actions">
@@ -9176,8 +9198,8 @@ function renderWizardStep(step) {
     // Background bonus section
     let bonusSection = '';
     const bg = wizardData.backgroundData;
-    const is2014 = wizardData.raceSource === 'races_2014';
-    if (is2014 && wizardData.raceData?.abilityBonuses) {
+    const hasFixedBonuses = Object.keys(wizardData.raceData?.abilityBonuses || {}).length > 0;
+    if (hasFixedBonuses) {
       wizardData.abilityBonuses = { ...wizardData.raceData.abilityBonuses };
       const chips = Object.entries(wizardData.raceData.abilityBonuses)
         .map(([a,v]) => `<span class="wiz-stat-chip" style="opacity:0.6">+${v} ${a.toUpperCase()}</span>`).join(' ');
@@ -9330,11 +9352,7 @@ function wiz_selectSpecies(srcKey, idx) {
   wizardData.raceSource = srcKey;
   wizardData.raceData = sp;
   // Clear ability bonuses if switching source types
-  if (srcKey === 'races_2014' && sp.abilityBonuses) {
-    wizardData.abilityBonuses = { ...sp.abilityBonuses };
-  } else if (srcKey !== 'races_2014') {
-    wizardData.abilityBonuses = {};
-  }
+  wizardData.abilityBonuses = Object.keys(sp.abilityBonuses || {}).length ? { ...sp.abilityBonuses } : {};
   renderWizardStep(1);
 }
 
@@ -9345,7 +9363,7 @@ function wiz_selectBackground(idx) {
   wizardData.background = bg.name;
   wizardData.backgroundData = bg;
   // Reset ability bonuses when changing background (for 2024 mode)
-  if (wizardData.raceSource !== 'races_2014') {
+  if (!Object.keys(wizardData.raceData?.abilityBonuses || {}).length) {
     wizardData.abilityBonuses = {};
   }
   renderWizardStep(2);
@@ -9596,6 +9614,8 @@ function wizardFinish() {
     wizardData.raceData.traits.forEach(trait => {
       ch.featuresList.push({ name: trait.name, desc: trait.desc, _species: wizardData.race });
     });
+    ch.raceEdition = wizardData.raceSource === 'species_2024' ? '2024'
+      : wizardData.raceSource === 'species_more' ? (wizardData.raceData.edition || '2014') : '2014';
   }
   // Set speed from species
   if (wizardData.raceData?.speed) ch.combat.speed = wizardData.raceData.speed;
@@ -9667,6 +9687,8 @@ async function _setupWizardFinish() {
     wizardData.raceData.traits.forEach(trait => {
       ch.featuresList.push({ name: trait.name, desc: trait.desc, _species: wizardData.race });
     });
+    ch.raceEdition = wizardData.raceSource === 'species_2024' ? '2024'
+      : wizardData.raceSource === 'species_more' ? (wizardData.raceData.edition || '2014') : '2014';
   }
   if (wizardData.raceData?.speed) ch.combat.speed = wizardData.raceData.speed;
 
