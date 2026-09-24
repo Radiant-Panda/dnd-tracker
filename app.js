@@ -9984,15 +9984,21 @@ const THEMES = {
   // Key stays 'emerald' so anyone who picked the green theme keeps it
   emerald: {
     name: 'Forest',
-    accent: '#8fb07a', accentRGB: '143,176,122', gold: '#c3cf9f', goldLt: '#dde5c4',
+    accent: '#7c9c68', accentRGB: '124,156,104', gold: '#adbd8a', goldLt: '#cad5b1',
     bg: '#10140f', surface: '#191f17', surface2: '#212a1e',
-    hpGradient: 'linear-gradient(90deg, #c9a45c, #8fb07a)', textDim: '#8e9a82',
+    hpGradient: 'linear-gradient(90deg, #b99452, #7c9c68)', textDim: '#8e9a82',
   },
   crimson: {
     name: 'Crimson',
     accent: '#ef4444', accentRGB: '239,68,68', gold: '#fca5a5', goldLt: '#fecaca',
     bg: '#1a0808', surface: '#250d0d', surface2: '#301212',
     hpGradient: 'linear-gradient(90deg, #fb923c, #ef4444)',
+  },
+  maroon: {
+    name: 'Maroon',
+    accent: '#c46a74', accentRGB: '196,106,116', gold: '#d4a574', goldLt: '#e8c9a0',
+    bg: '#160a0e', surface: '#22121a', surface2: '#2c1821',
+    hpGradient: 'linear-gradient(90deg, #d4a574, #c46a74)', textDim: '#a08a8f',
   },
   sapphire: {
     name: 'Sapphire',
