@@ -41,6 +41,9 @@ function stripTags(str) {
     .replace(/\{@creature ([^|{}]+)\|[^|{}]*\|([^|}]+)\}/g, '$2')
     .replace(/\{@creature ([^|{}]+)\|[^}]*\}/g, '$1')
     .replace(/\{@creature ([^}]+)\}/g, '$1')
+    // {@dice roll|display} and {@tag name|source|display}: show the display text
+    .replace(/\{@(?:dice|damage) [^|{}]+\|([^|{}]+)\}/g, '$1')
+    .replace(/\{@(?!classFeature|subclassFeature|book|adventure|filter)\w+ [^|{}]+\|[^|{}]*\|([^|{}]+)\}/g, '$1')
     .replace(/\{@spell ([^|{}]+)\|?[^}]*\}/g, '$1')
     .replace(/\{@item ([^|{}]+)\|?[^}]*\}/g, '$1')
     .replace(/\{@class ([^|{}]+)\|?[^}]*\}/g, '$1')
@@ -133,24 +136,32 @@ function flattenEntries(entries, depth = 0) {
 }
 
 function extractFeatures(classFile, sources, skipVariants = true) {
+  const { entriesToRulesText } = require('./rules-text-build');
   const raw = JSON.parse(fs.readFileSync(path.join(SRC_DIR, classFile), 'utf8'));
   const features = raw.classFeature || [];
+  // Features another feature offers (Divine Spark inside Channel Divinity) are shown inside it
+  const inlined = new Set();
+  const resolveRef = e => {
+    if (e.type !== 'refClassFeature') return null; // class options have their own picker
+    const [name, cls, source, level] = e.classFeature.split('|');
+    const f = features.find(x => x.name === name && x.className === cls && x.source === (source || 'PHB') && String(x.level) === level);
+    if (f) inlined.add(f);
+    return f || null;
+  };
   return features
     .filter(f => {
       if (skipVariants && f.isClassFeatureVariant) return false;
       if (skipVariants && f.isOptional) return false;
       return sources.includes(f.source);
     })
-    .map(f => ({
-      level: f.level,
-      name: f.name,
-      desc: flattenEntries(f.entries || []),
-    }))
+    .map(f => ({ f, level: f.level, name: f.name, desc: entriesToRulesText(f.entries || [], { resolveRef }) }))
+    .filter(x => !inlined.has(x.f))
+    .map(({ level, name, desc }) => ({ level, name, desc }))
     .sort((a, b) => a.level - b.level);
 }
 
 function jsStringEscape(str) {
-  return str.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  return str.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n');
 }
 
 module.exports = { stripTags, flattenEntries };
