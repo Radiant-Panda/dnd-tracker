@@ -809,6 +809,11 @@ function migrateCharacter(ch) {
   (ch.resources || []).forEach(r => { if (r._subclass && !r._forClass) r._forClass = _classForSub(r._subclass); });
   _syncSubclassFeaturesFor(ch, false);
   _refreshStoredRulesText(ch);
+  if (typeof PROFICIENCY_DATA !== 'undefined') {
+    if (!ch.knownLanguages) ch.knownLanguages = ['Common'];
+    _syncClassLanguages(ch);
+    if (!ch._speciesLanguagesApplied) { _applySpeciesLanguages(ch); ch._speciesLanguagesApplied = true; }
+  }
   // Older 2024 background data spelled "Sleight Of Hand" (never matched the skill list) and "Calligrapher'S"
   (ch.skillProficiencies || []).forEach((e, i) => {
     if (e === 'Sleight Of Hand') ch.skillProficiencies[i] = 'Sleight of Hand';
@@ -2700,11 +2705,6 @@ function profBonus(level) { return Math.ceil(level/4)+1; }
 const ABILITIES = ['str','dex','con','int','wis','cha'];
 const ABILITY_NAMES = {str:'Strength',dex:'Dexterity',con:'Constitution',int:'Intelligence',wis:'Wisdom',cha:'Charisma'};
 const ABILITY_SHORT = {str:'STR',dex:'DEX',con:'CON',int:'INT',wis:'WIS',cha:'CHA'};
-const STANDARD_LANGUAGES = {
-  standard: ['Common','Common Sign Language','Dwarvish','Elvish','Giant','Gnomish','Goblin','Halfling','Orc'],
-  exotic:   ['Abyssal','Celestial','Deep Speech','Draconic','Infernal','Primordial','Sylvan','Undercommon'],
-  secret:   ['Druidic',"Thieves' Cant"],
-};
 const SKILLS = [
   {name:'Acrobatics',ability:'dex'},{name:'Animal Handling',ability:'wis'},{name:'Arcana',ability:'int'},
   {name:'Athletics',ability:'str'},{name:'Deception',ability:'cha'},{name:'History',ability:'int'},
@@ -2721,14 +2721,6 @@ const CLASS_ICONS = {
 const HIT_DICE = {
   Barbarian:12, Bard:8, Cleric:8, Druid:8, Fighter:10, Monk:8, Paladin:10,
   Ranger:10, Rogue:8, Sorcerer:6, Warlock:8, Wizard:6, Artificer:8, 'Blood Hunter':10
-};
-// Saving throw proficiencies granted at class level 1
-const CLASS_SAVE_PROFS = {
-  Barbarian:['str','con'], Bard:['dex','cha'], Cleric:['wis','cha'],
-  Druid:['int','wis'], Fighter:['str','con'], Monk:['str','dex'],
-  Paladin:['wis','cha'], Ranger:['str','dex'], Rogue:['dex','int'],
-  Sorcerer:['con','cha'], Warlock:['wis','cha'], Wizard:['int','wis'],
-  Artificer:['con','int'], 'Blood Hunter':['dex','int']
 };
 // Starting skill proficiency choices per class (2024 PHB)
 const CLASS_STARTING_PROFICIENCIES = {
@@ -2748,23 +2740,6 @@ const CLASS_STARTING_PROFICIENCIES = {
   'Blood Hunter':{ saves:['dex','int'], choose:2, skills:['Acrobatics','Arcana','Athletics','History','Insight','Investigation','Perception','Survival'], armor:['Light armor','Medium armor'], weapons:['Simple weapons','Martial weapons'], tools:[] },
 };
 
-// Proficiencies gained when multiclassing INTO a class (5e rules)
-const CLASS_MC_PROFS = {
-  Barbarian: 'Shields, simple weapons, martial weapons',
-  Bard: 'Light armor, one skill of your choice, one instrument',
-  Cleric: 'Light armor, medium armor, shields',
-  Druid: 'Light armor, medium armor, shields',
-  Fighter: 'Light armor, medium armor, shields, simple weapons, martial weapons',
-  Monk: 'Simple weapons, shortswords',
-  Paladin: 'Light armor, medium armor, shields, simple weapons, martial weapons',
-  Ranger: 'Light armor, medium armor, shields, simple weapons, martial weapons, one skill from the Ranger list',
-  Rogue: 'Light armor, one skill of your choice, thieves\' tools',
-  Sorcerer: '—',
-  Warlock: 'Light armor, simple weapons',
-  Wizard: '—',
-  Artificer: 'Light armor, medium armor, shields, thieves\' tools, tinker\'s tools',
-  'Blood Hunter': 'Medium armor, martial weapons'
-};
 // Short accent color per class for badges
 const CLASS_BADGE_COLORS = {
   Barbarian:'#ef4444', Bard:'#f59e0b', Cleric:'#fbbf24', Druid:'#22c55e',
@@ -2791,6 +2766,27 @@ function mergeProfString(existing, additions) {
   (additions || []).forEach(p => { if (p && !lower.has(p.toLowerCase())) { parts.push(p); lower.add(p.toLowerCase()); } });
   return parts.join(', ');
 }
+// Proficiencies live in ch.proficiencies (a comma list, kept for older code); ch.profSources
+// records who granted each one ("Rogue", "Background", "Paladin (multiclass)") so changing a
+// class or background can take its grants back without touching anything added by hand.
+function _grantProficiencies(ch, items, source) {
+  ch.profSources = ch.profSources || {};
+  ch.proficiencies = mergeProfString(ch.proficiencies, items);
+  items.forEach(p => { const k = p.toLowerCase(); if (!ch.profSources[k]) ch.profSources[k] = source; });
+}
+// Removes what `source` granted. `fallback` covers older saves that never recorded sources.
+function _revokeProficiencies(ch, source, fallback = []) {
+  ch.profSources = ch.profSources || {};
+  const fallbackLower = new Set(fallback.map(p => p.toLowerCase()));
+  const keep = splitProficiencies(ch.proficiencies).filter(p => {
+    const k = p.toLowerCase(), src = ch.profSources[k];
+    const drop = src ? src === source : fallbackLower.has(k);
+    if (drop) delete ch.profSources[k];
+    return !drop;
+  });
+  ch.proficiencies = joinProficiencies(keep);
+}
+
 // Pushes {name, _source:'background'} only if no entry already has that skill name
 function addBackgroundSkill(ch, skill) {
   if (!(ch.skillProficiencies || []).some(e => skillProfName(e) === skill))
@@ -2802,7 +2798,7 @@ function modStr(score) { const m=mod(score); return (m>=0?'+':'')+m; }
 function skillBonus(ch, skillName, abilityKey, pb) {
   const prof=(ch.skillProficiencies||[]).some(e=>skillProfName(e)===skillName);
   const exp=(ch.skillExpertise||[]).includes(skillName);
-  return mod(ch.abilities[abilityKey])+(prof?pb:0)+(exp?pb:0);
+  return mod(ch.abilities[abilityKey])+(prof?pb:0)+(exp?pb:0)+(!prof && !exp ? jackOfAllTrades(ch, pb) : 0);
 }
 function passivePerception(ch, pb) {
   return 10 + skillBonus(ch, 'Perception', 'wis', pb);
@@ -3135,16 +3131,12 @@ function renderCoreStats(ch, pb) {
 
 function renderSavingThrows(ch, pb) {
   // Build a map: ability → [classNames] that grant it
+  // Only the first class grants saving throws (multiclassing never adds them)
   const classGrants = {};
-  (ch.classes || []).forEach(entry => {
-    const saves = CLASS_SAVE_PROFS[entry.class] || [];
-    saves.forEach(a => {
-      if (!classGrants[a]) classGrants[a] = [];
-      if (!classGrants[a].includes(entry.class)) classGrants[a].push(entry.class);
-    });
-  });
-  // Union: manually toggled OR granted by any class
-  const allProfs = new Set([...(ch.saveProficiencies||[]), ...Object.keys(classGrants)]);
+  const firstClass = (ch.classes || [])[0]?.class || ch.class;
+  grantedSaves(ch).forEach(a => { classGrants[a] = [firstClass]; });
+  const off = new Set(ch.saveOff || []);
+  const allProfs = new Set([...(ch.saveProficiencies||[]), ...Object.keys(classGrants)].filter(a => !off.has(a)));
   return `<div class="sheet-panel" style="margin-top:0.6rem">
     <div class="cs-section-label">Saving Throws</div>
     <ul class="skill-list">
@@ -6940,6 +6932,49 @@ function toggleSfCard(id, headerEl) {
   if (toggle) toggle.textContent = hidden ? '▼' : '▲';
 }
 
+// Languages a source granted are recorded in ch.languageSources ("species" / "class"), so a
+// species or class change swaps them without touching languages picked by hand.
+function _grantLanguages(ch, langs, source) {
+  ch.knownLanguages = ch.knownLanguages || ['Common'];
+  ch.languageSources = ch.languageSources || {};
+  langs.forEach(l => {
+    if (!ch.knownLanguages.includes(l)) { ch.knownLanguages.push(l); ch.languageSources[l] = source; }
+  });
+}
+function _revokeLanguages(ch, source, keep = []) {
+  const src = ch.languageSources || {};
+  ch.knownLanguages = (ch.knownLanguages || []).filter(l => src[l] !== source || keep.includes(l));
+  Object.keys(src).forEach(l => { if (src[l] === source && !keep.includes(l)) delete src[l]; });
+}
+function _applySpeciesLanguages(ch) {
+  _revokeLanguages(ch, 'species');
+  if (!ch.race) return;
+  _grantLanguages(ch, speciesLanguages(ch.race, ch.raceEdition || (ch.edition === '2014' ? '2014' : '2024')).fixed, 'species');
+}
+function _syncClassLanguages(ch) {
+  const want = classLanguages(ch).filter(l => !(ch.dismissedLanguages || []).includes(l));
+  _revokeLanguages(ch, 'class', want);
+  _grantLanguages(ch, want, 'class');
+}
+
+function addProficiency(item) {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  const p = String(item || '').trim(); if (!p) return;
+  ch.proficiencies = mergeProfString(ch.proficiencies, [p]);
+  saveData(db); renderApp();
+}
+function addProficiencyFromInput() {
+  const el = document.getElementById('prof-add-input');
+  if (el && el.value.trim()) addProficiency(el.value);
+}
+function removeProficiency(item) {
+  const ch = db.characters[currentCharId]; if (!ch) return;
+  const k = String(item).toLowerCase();
+  ch.proficiencies = joinProficiencies(splitProficiencies(ch.proficiencies).filter(p => p.toLowerCase() !== k));
+  if (ch.profSources) delete ch.profSources[k];
+  saveData(db); renderApp();
+}
+
 function addLanguage(lang) {
   const ch = db.characters[currentCharId];
   if (!ch) return;
@@ -6955,109 +6990,63 @@ function removeLanguage(lang) {
   const ch = db.characters[currentCharId];
   if (!ch) return;
   ch.knownLanguages = (ch.knownLanguages || []).filter(l => l !== lang);
+  // A class language removed on purpose stays removed
+  if ((ch.languageSources || {})[lang] === 'class') ch.dismissedLanguages = [...new Set([...(ch.dismissedLanguages || []), lang])];
+  if (ch.languageSources) delete ch.languageSources[lang];
   saveData(db);
   renderApp();
 }
 
 function renderProficienciesLanguages(ch) {
-  const extraClasses = (ch.classes || []).slice(1);
-  const mcNote = extraClasses.length > 0 ? `
-    <div class="cs-field-label" style="margin:0.6rem 0 0.25rem">Multiclass Proficiencies</div>
-    <div class="mc-prof-list">
-      ${extraClasses.map(entry => {
-        const cls = entry.class;
-        const color = CLASS_BADGE_COLORS[cls] || '#9b6dff';
-        const profs = CLASS_MC_PROFS[cls] || '—';
-        return `<div class="mc-prof-entry">
-          <span class="mc-prof-badge" style="background:${color}">${CLASS_ICONS[cls]||''} ${cls}</span>
-          <span class="mc-prof-text">${esc(profs)}</span>
-        </div>`;
-      }).join('')}
-    </div>` : '';
+  const src = ch.profSources || {};
+  const items = splitProficiencies(ch.proficiencies);
+  const toolInfo = name => (typeof TOOLS_DATA !== 'undefined' ? TOOLS_DATA : []).find(t => {
+    const a = t.name.toLowerCase(), b = name.toLowerCase();
+    return a === b || b.includes(a);
+  });
+  const GROUPS = [['armor', 'Armor'], ['weapons', 'Weapons'], ['tools', 'Tools'], ['other', 'Other']];
+  const groupsHtml = GROUPS.map(([cat, label]) => {
+    const list = items.filter(p => proficiencyCategory(p) === cat);
+    if (!list.length) return '';
+    return `<div class="prof-group" data-cat="${cat}">
+      <span class="prof-group-label">${label}</span>
+      <div class="prof-chips">${list.map(p => {
+        const info = cat === 'tools' ? toolInfo(p) : null;
+        const from = src[p.toLowerCase()];
+        return `<span class="prof-chip"${info?.desc ? ` title="${esc(info.desc)}"` : ''}>
+          <span class="prof-chip-name">${esc(p)}</span>${from ? `<span class="prof-chip-src">${esc(from)}</span>` : ''}
+          <button class="prof-chip-remove" data-prof="${esc(p)}" onclick="removeProficiency(this.dataset.prof)" title="Remove">×</button>
+        </span>`;
+      }).join('')}</div>
+    </div>`;
+  }).join('');
+  const suggestions = [...new Set(['Light armor', 'Medium armor', 'Heavy armor', 'Shields', 'Simple weapons', 'Martial weapons',
+    ...(typeof TOOLS_DATA !== 'undefined' ? TOOLS_DATA : []).map(t => t.name)])].filter(n => !items.some(p => p.toLowerCase() === n.toLowerCase()));
 
   const known = ch.knownLanguages || ['Common'];
-  const allKnown = new Set(known);
-  const pills = known.map(l =>
-    `<span class="lang-pill">${esc(l)}<button class="lang-pill-remove" onclick='removeLanguage(${JSON.stringify(l)})' title="Remove">×</button></span>`
-  ).join('');
-
-  const allLangs = [...STANDARD_LANGUAGES.standard, ...STANDARD_LANGUAGES.exotic, ...STANDARD_LANGUAGES.secret];
-  const stdOpts = STANDARD_LANGUAGES.standard.filter(l => !allKnown.has(l))
-    .map(l => `<option value="${esc(l)}">${esc(l)}</option>`).join('');
-  const exoOpts = STANDARD_LANGUAGES.exotic.filter(l => !allKnown.has(l))
-    .map(l => `<option value="${esc(l)}">${esc(l)}</option>`).join('');
-  const secOpts = STANDARD_LANGUAGES.secret.filter(l => !allKnown.has(l))
-    .map(l => `<option value="${esc(l)}">${esc(l)}</option>`).join('');
-
-  const hasOptions = stdOpts || exoOpts || secOpts;
-  const dropdown = hasOptions ? `
+  const langSrc = ch.languageSources || {};
+  const pills = known.map(l => `<span class="lang-pill">${esc(l)}${langSrc[l] ? `<span class="prof-chip-src">${langSrc[l] === 'species' ? esc(ch.race || 'species') : 'class'}</span>` : ''}<button class="lang-pill-remove" data-lang="${esc(l)}" onclick="removeLanguage(this.dataset.lang)" title="Remove">×</button></span>`).join('');
+  const groups = languageGroups(ch).map(g => ({ ...g, languages: g.languages.filter(l => !known.includes(l)) })).filter(g => g.languages.length);
+  const dropdown = groups.length ? `
     <select class="lang-add-select" onchange="if(this.value){addLanguage(this.value);this.value=''}">
       <option value="">+ Add language…</option>
-      ${stdOpts ? `<optgroup label="Standard">${stdOpts}</optgroup>` : ''}
-      ${exoOpts ? `<optgroup label="Exotic">${exoOpts}</optgroup>` : ''}
-      ${secOpts ? `<optgroup label="Secret">${secOpts}</optgroup>` : ''}
+      ${groups.map(g => `<optgroup label="${g.label}">${g.languages.map(l => `<option value="${esc(l)}">${esc(l)}</option>`).join('')}</optgroup>`).join('')}
     </select>` : '';
-
-  // Collect tool names from proficiencies string + _background featuresList entries
-  const toolNames = [];
-  const seenTools = new Set();
-  (ch.proficiencies || '').split(',').map(t => t.trim()).filter(Boolean).forEach(t => {
-    const key = t.toLowerCase();
-    if (!seenTools.has(key)) { seenTools.add(key); toolNames.push(t); }
-  });
-  (ch.featuresList || []).filter(f => f._background === true).forEach(f => {
-    const fLow = f.name.toLowerCase();
-    const match = (TOOLS_DATA || []).find(t => { const tLow = t.name.toLowerCase(); return tLow === fLow || tLow.includes(fLow) || fLow.includes(tLow); });
-    if (match) {
-      const key = match.name.toLowerCase();
-      if (!seenTools.has(key)) { seenTools.add(key); toolNames.push(match.name); }
-    }
-  });
-
-  const toolCardsHtml = toolNames.length > 0 ? `
-    <div class="tool-prof-list">
-      ${toolNames.map(toolName => {
-        const tnLow = toolName.toLowerCase();
-        let toolData = null;
-        // 1. Exact name match (case-insensitive)
-        toolData = (TOOLS_DATA || []).find(t => t.name.toLowerCase() === tnLow);
-        // 2. Proficiency string contains a TOOLS_DATA entry name
-        if (!toolData) {
-          toolData = (TOOLS_DATA || []).find(t => tnLow.includes(t.name.toLowerCase()));
-        }
-        // 3. Starts with "Any " → strip prefix, match by type field
-        if (!toolData && toolName.startsWith('Any ')) {
-          const typeName = toolName.slice(4).toLowerCase();
-          toolData = (TOOLS_DATA || []).find(t => t.type.toLowerCase() === typeName);
-        }
-        // 4. No match → generic card with name only
-        const cardId = 'tool-' + toolName.replace(/[^a-z0-9]/gi, '-').toLowerCase();
-        return `<div class="tool-prof-card">
-          <button class="tool-prof-toggle" onclick="var d=document.getElementById('${cardId}');d.classList.toggle('open');this.querySelector('.tool-chevron').textContent=d.classList.contains('open')?'▴':'▾'">
-            <span class="tool-prof-name">${esc(toolName)}</span>
-            ${toolData ? `<span class="tool-prof-type-badge">${esc(toolData.type)}</span>` : ''}
-            <span class="tool-chevron">▾</span>
-          </button>
-          ${toolData?.desc ? `<div class="tool-prof-desc" id="${cardId}">${esc(toolData.desc)}</div>` : ''}
-        </div>`;
-      }).join('')}
-    </div>` : '';
-
-  // Filter out tool names from proficiencies so textarea only shows non-tool profs
-  const toolNameLower = new Set(toolNames.map(t => t.toLowerCase()));
-  const nonToolProfs = (ch.proficiencies || '').split(',')
-    .map(p => p.trim())
-    .filter(p => p && !toolNameLower.has(p.toLowerCase()))
-    .join(', ');
+  // 2024: every character knows Common plus two languages of their choice
+  const missing = ch.edition !== '2014' ? Math.max(0, 3 - known.length) : 0;
+  const langHint = missing ? `<div class="lang-hint">2024 rules: you know Common plus two languages — choose ${missing} more language${missing > 1 ? 's' : ''}.</div>` : '';
 
   return `<div class="sheet-panel" style="margin-top:0.6rem">
     <div class="cs-section-label">Proficiencies &amp; Languages</div>
-    <div class="cs-field-label" style="margin-bottom:0.3rem">Proficiencies</div>
-    ${toolCardsHtml}
-    <textarea class="sheet-textarea" rows="3" placeholder="Weapons, armor, other proficiencies..." oninput="(() => { const filtered = this.value.trim(); const toolList = ${JSON.stringify(toolNames)}.join(', '); const combined = filtered ? (toolList ? toolList + ', ' + filtered : filtered) : toolList; ch_field('proficiencies', combined); })()" style="margin-top:${toolNames.length?'0.5rem':'0'}">${esc(nonToolProfs)}</textarea>
-    ${mcNote}
+    ${groupsHtml || '<div class="feature-empty">No proficiencies yet.</div>'}
+    <div class="prof-add-row">
+      <input type="text" id="prof-add-input" list="prof-suggestions" placeholder="Add a proficiency (armor, weapon, tool…)" onkeydown="if(event.key==='Enter')addProficiencyFromInput()">
+      <datalist id="prof-suggestions">${suggestions.map(n => `<option value="${esc(n)}">`).join('')}</datalist>
+      <button class="btn btn-sm" onclick="addProficiencyFromInput()">Add</button>
+    </div>
     <div class="cs-field-label" style="margin:0.6rem 0 0.3rem">Languages</div>
     <div class="lang-pills-row">${pills}${dropdown}</div>
+    ${langHint}
     <div class="cs-field-label" style="margin:0.5rem 0 0.2rem;font-size:0.72rem;opacity:0.7">Additional Notes</div>
     <textarea class="sheet-textarea" rows="2" placeholder="Custom languages, dialects, notes…" oninput="ch_field('languages',this.value)">${esc(ch.languages||'')}</textarea>
   </div>`;
@@ -7864,7 +7853,7 @@ function changeBackground(newBg) {
     // Skills — tagged as background source
     (newBgData.skills || []).forEach(skill => addBackgroundSkill(ch, skill));
     // Tool proficiencies — merge additively to preserve class profs
-    ch.proficiencies = mergeProfString(ch.proficiencies, newBgData.tools || []);
+    _grantProficiencies(ch, newBgData.tools || [], 'Background');
     ch.backgroundTools = [...(newBgData.tools || [])];
     // Feat
     if (newBgData.feat) {
@@ -7921,6 +7910,7 @@ function changeRace(newRace) {
     // Speed
     if (raceData.speed) ch.combat.speed = raceData.speed;
   }
+  _applySpeciesLanguages(ch);
 
   saveData(db);
   renderApp();
@@ -8030,6 +8020,15 @@ function chClassField(idx, field, value) {
     ch.classes[idx].subclass = '';
     syncClassFields(ch);
     syncClassResources(ch);
+    if (idx === 0) {
+      const old = CLASS_STARTING_PROFICIENCIES[oldClass] || {};
+      _revokeProficiencies(ch, oldClass, [...(old.armor || []), ...(old.weapons || []), ...(old.tools || [])]);
+    } else {
+      _revokeProficiencies(ch, `${oldClass} (multiclass)`);
+      ch.skillProficiencies = (ch.skillProficiencies || []).filter(e => !(typeof e === 'object' && e._class === oldClass && e._multiclass));
+      _applyMulticlassProficiencies(ch, idx);
+    }
+    _syncClassLanguages(ch);
     // Clear old primary class proficiencies and prompt for new ones
     if (idx === 0) {
       ch.saveProficiencies = (ch.saveProficiencies || []).filter(s => {
@@ -8060,12 +8059,40 @@ function chClassField(idx, field, value) {
   }
 }
 
+function _applyMulticlassProficiencies(ch, idx) {
+  const cls = ch.classes[idx]?.class; if (!cls || idx === 0) return;
+  const mc = multiclassProficiencies(cls, ch.edition === '2014' ? '2014' : '2024');
+  _grantProficiencies(ch, [...mc.armor, ...mc.weapons, ...mc.tools], `${cls} (multiclass)`);
+  if (mc.skillChoice && typeof document !== 'undefined') openMulticlassSkillModal(ch.id, cls, mc.skillChoice);
+}
+
+function openMulticlassSkillModal(charId, cls, choice) {
+  const ch = db.characters[charId]; if (!ch) return;
+  const have = new Set((ch.skillProficiencies || []).map(skillProfName));
+  const from = (choice.from || SKILLS.map(sk => sk.name)).filter(n => !have.has(n));
+  openModal(`<h2>${esc(cls)} multiclass</h2>
+    <p style="font-size:0.82rem;color:var(--text-dim);margin-bottom:0.6rem">Multiclassing into ${esc(cls)} gives you proficiency in ${choice.count} skill${choice.count > 1 ? 's' : ''} of your choice.</p>
+    <div class="mc-skill-grid">${from.map(n => `<label><input type="checkbox" class="mc-skill-cb" value="${esc(n)}"> ${esc(n)}</label>`).join('')}</div>
+    <div class="form-actions"><button class="btn" onclick="closeModal()">Skip</button>
+      <button class="btn btn-primary" onclick="confirmMulticlassSkill('${jsStr(charId)}','${jsStr(cls)}',${choice.count})">Add</button></div>`);
+}
+
+function confirmMulticlassSkill(charId, cls, count) {
+  const ch = db.characters[charId]; if (!ch) return;
+  [...document.querySelectorAll('.mc-skill-cb:checked')].slice(0, count).forEach(cb => {
+    if (!(ch.skillProficiencies || []).some(e => skillProfName(e) === cb.value))
+      ch.skillProficiencies.push({ name: cb.value, _class: cls, _multiclass: true });
+  });
+  saveData(db); closeModal(); renderApp();
+}
+
 function addCharClass() {
   const ch = db.characters[currentCharId]; if (!ch) return;
   if (ch.level >= 20) return;
   ch.classes.push({ class: 'Fighter', subclass: '', level: 1 });
   syncClassFields(ch);
   syncClassResources(ch);
+  _applyMulticlassProficiencies(ch, ch.classes.length - 1);
   applySpellSlots(ch);
   saveData(db);
   mcEditIdx = ch.classes.length - 1;
@@ -8078,6 +8105,10 @@ function removeCharClass(idx) {
   if (ch.classes.length <= 1) return;
   const removed = ch.classes[idx];
   if (removed.subclass) _removeSubclassSpells(ch, removed.subclass);
+  if (idx > 0) {
+    _revokeProficiencies(ch, `${removed.class} (multiclass)`);
+    ch.skillProficiencies = (ch.skillProficiencies || []).filter(e => !(typeof e === 'object' && e._class === removed.class && e._multiclass));
+  }
   // Remove resources/features tagged with the removed class (unless another entry still has it)
   if (!ch.classes.some((c, i) => i !== idx && c.class === removed.class)) {
     ch.resources = (ch.resources || []).filter(r => r._forClass !== removed.class && r.source !== removed.class);
@@ -8161,9 +8192,17 @@ function unattuneItem(idx) {
 }
 function toggleSaveProf(ability) {
   const ch = db.characters[currentCharId];
-  ch.saveProficiencies = ch.saveProficiencies||[];
-  const idx = ch.saveProficiencies.indexOf(ability);
-  if (idx>=0) ch.saveProficiencies.splice(idx,1); else ch.saveProficiencies.push(ability);
+  ch.saveProficiencies = ch.saveProficiencies || [];
+  ch.saveOff = ch.saveOff || [];
+  const granted = grantedSaves(ch).includes(ability);
+  const on = (granted && !ch.saveOff.includes(ability)) || ch.saveProficiencies.includes(ability);
+  if (on) {
+    ch.saveProficiencies = ch.saveProficiencies.filter(a => a !== ability);
+    if (granted) ch.saveOff.push(ability);
+  } else {
+    ch.saveOff = ch.saveOff.filter(a => a !== ability);
+    if (!granted) ch.saveProficiencies.push(ability);
+  }
   saveData(db); renderApp();
 }
 function toggleSkillProf(skillName) {
@@ -9632,6 +9671,7 @@ function wizardFinish() {
     });
     ch.raceEdition = wizardData.raceSource === 'species_2024' ? '2024'
       : wizardData.raceSource === 'species_more' ? (wizardData.raceData.edition || '2014') : '2014';
+    _applySpeciesLanguages(ch);
   }
   // Set speed from species
   if (wizardData.raceData?.speed) ch.combat.speed = wizardData.raceData.speed;
@@ -9705,6 +9745,7 @@ async function _setupWizardFinish() {
     });
     ch.raceEdition = wizardData.raceSource === 'species_2024' ? '2024'
       : wizardData.raceSource === 'species_more' ? (wizardData.raceData.edition || '2014') : '2014';
+    _applySpeciesLanguages(ch);
   }
   if (wizardData.raceData?.speed) ch.combat.speed = wizardData.raceData.speed;
 
@@ -9850,7 +9891,7 @@ function confirmStartingProfs() {
   });
   // Merge armor/weapon/tool proficiencies into ch.proficiencies
   const allProfs = [...(data.armor||[]), ...(data.weapons||[]), ...(data.tools||[])];
-  if (allProfs.length) ch.proficiencies = mergeProfString(ch.proficiencies, allProfs);
+  if (allProfs.length) _grantProficiencies(ch, allProfs, cls);
   saveData(db);
   closeModal();
   renderApp();

@@ -1,12 +1,13 @@
-// Browser test for formatted rules text — needs the local server (npx serve -l 5173 .) and puppeteer-core:
+// Browser test for formatted rules text — opens the app from disk; needs puppeteer-core:
 //   cd tests && npm i --no-save puppeteer-core@23 && node rules-text.browser.test.js [screenshot-dir]
 const p = require('puppeteer-core');
+const { launch, openApp } = require('./browser');
 const shots = process.argv[2];
 (async () => {
-  const b = await p.launch({ executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe', headless: 'new' });
+  const b = await launch();
   const pg = await b.newPage(); const errs = []; pg.on('pageerror', e => errs.push(e.message));
   await pg.setViewport({ width: 1300, height: 1000 });
-  await pg.goto('http://localhost:5173/?t=' + Date.now(), { waitUntil: 'networkidle2' }); await new Promise(r => setTimeout(r, 2000));
+  await openApp(pg);
   const out = [];
   const check = (name, cond, detail) => out.push((cond ? 'PASS ' : 'FAIL ') + name + (cond ? '' : '  → ' + JSON.stringify(detail).slice(0, 300)));
   const shot = async (sel, file) => { if (!shots) return; const el = await pg.$(sel); if (el) { await el.evaluate(e => e.scrollIntoView()); await el.screenshot({ path: `${shots}/${file}` }); } };

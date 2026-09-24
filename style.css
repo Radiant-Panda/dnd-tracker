@@ -1819,18 +1819,6 @@ main {
   flex-shrink: 0;
   line-height: 1.2;
 }
-.mc-prof-list { display: flex; flex-direction: column; gap: 0.3rem; }
-.mc-prof-entry { display: flex; align-items: baseline; gap: 0.5rem; font-size: 0.78rem; }
-.mc-prof-badge {
-  font-size: 0.65rem;
-  font-weight: 700;
-  border-radius: 4px;
-  padding: 1px 5px;
-  color: #fff;
-  flex-shrink: 0;
-  white-space: nowrap;
-}
-.mc-prof-text { color: var(--text-dim); line-height: 1.4; }
 
 /* Notes / text areas */
 .sheet-textarea {
@@ -3156,27 +3144,7 @@ input[type=number] { -moz-appearance: textfield; }
 }
 
 /* ── Tool Proficiency Cards ── */
-.tool-prof-list { display: flex; flex-direction: column; gap: 0.3rem; margin-bottom: 0.25rem; }
-.tool-prof-card { border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
-.tool-prof-toggle {
-  width: 100%; display: flex; align-items: center; gap: 0.5rem;
-  background: var(--bg-surface2); border: none; padding: 0.4rem 0.6rem;
-  cursor: pointer; text-align: left; color: var(--text);
-}
-.tool-prof-toggle:hover { background: var(--bg-hover, rgba(var(--accent-rgb),0.08)); }
-.tool-prof-name { font-size: 0.82rem; font-weight: 600; flex: 1; }
-.tool-prof-type-badge {
-  font-size: 0.65rem; background: rgba(var(--accent-rgb),0.15); color: #b794ff;
-  border-radius: 3px; padding: 0.1rem 0.35rem; white-space: nowrap;
-}
 .tool-chevron { font-size: 0.7rem; color: var(--text-dim); margin-left: auto; padding-left: 0.25rem; }
-.tool-prof-desc {
-  display: none; font-size: 0.75rem; color: var(--text-dim); line-height: 1.5;
-  padding: 0.5rem 0.6rem; border-top: 1px solid var(--border);
-  background: var(--bg-panel);
-}
-.tool-prof-desc.open { display: block; }
-.tool-prof-plain { font-size: 0.8rem; color: var(--text-dim); padding: 0.2rem 0; }
 
 /* ── Responsive ── */
 @media (max-width: 500px) {
@@ -4185,3 +4153,18 @@ header::after {
 .spell-bonus-row { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; font-size: 0.7rem; color: var(--text-dim); margin: 0.35rem 0 0.5rem; }
 .spell-bonus-row label { display: inline-flex; align-items: center; gap: 0.25rem; }
 .spell-bonus-row input { width: 3.2rem; padding: 0.1rem 0.25rem; font-size: 0.75rem; }
+
+/* Proficiencies & Languages */
+.prof-group { display: flex; flex-direction: column; gap: 0.25rem; margin-bottom: 0.5rem; }
+.prof-group-label { font-size: 0.62rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-dim); }
+.prof-chips { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.prof-chip { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.76rem; color: var(--text);
+  background: rgba(var(--accent-rgb),0.08); border: 1px solid rgba(var(--accent-rgb),0.25); border-radius: 4px; padding: 0.1rem 0.2rem 0.1rem 0.45rem; }
+.prof-chip-src { font-size: 0.58rem; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-dim);
+  border: 1px solid var(--border); border-radius: 3px; padding: 0 0.25rem; margin-left: 0.25rem; }
+.prof-chip-remove { background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 0.9rem; line-height: 1; padding: 0 0.15rem; }
+.prof-chip-remove:hover, .prof-chip-remove:focus-visible { color: var(--red-lt); }
+.prof-add-row { display: flex; gap: 0.35rem; margin-top: 0.2rem; }
+.prof-add-row input { flex: 1; min-width: 0; font-size: 0.78rem; }
+.lang-hint { font-size: 0.7rem; color: var(--gold-lt); margin-top: 0.3rem; }
+.mc-skill-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 0.3rem; margin-bottom: 0.8rem; font-size: 0.82rem; }
