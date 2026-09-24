@@ -9981,6 +9981,12 @@ const THEMES = {
     glow1RGB: '124,79,212', glow2RGB: '232,121,249', tintBg: '#1e1332', tintRGB: '30,19,50', tint2RGB: '50,30,80',
     portraitBg: 'linear-gradient(135deg, #1e1332 0%, #2a1a42 40%, #3d2260 100%)', textDim: '#857fa8',
   },
+  lavender: {
+    name: 'Lavender',
+    accent: '#c4b0e8', accentRGB: '196,176,232', gold: '#d9ccf2', goldLt: '#ece5f9',
+    bg: '#110e18', surface: '#1a1624', surface2: '#221d2e',
+    hpGradient: 'linear-gradient(90deg, #f0c1dc, #c4b0e8)', textDim: '#9b93ad',
+  },
   // Key stays 'emerald' so anyone who picked the green theme keeps it
   emerald: {
     name: 'Forest',
@@ -9996,9 +10002,9 @@ const THEMES = {
   },
   maroon: {
     name: 'Maroon',
-    accent: '#c46a74', accentRGB: '196,106,116', gold: '#d4a574', goldLt: '#e8c9a0',
-    bg: '#160a0e', surface: '#22121a', surface2: '#2c1821',
-    hpGradient: 'linear-gradient(90deg, #d4a574, #c46a74)', textDim: '#a08a8f',
+    accent: '#c2638f', accentRGB: '194,99,143', gold: '#d4a574', goldLt: '#e8c9a0',
+    bg: '#150912', surface: '#21111c', surface2: '#2b1726',
+    hpGradient: 'linear-gradient(90deg, #d4a574, #c2638f)', textDim: '#a08a9b',
   },
   sapphire: {
     name: 'Sapphire',
