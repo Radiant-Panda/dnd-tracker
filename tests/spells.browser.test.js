@@ -70,6 +70,19 @@ const p = require('puppeteer-core');
     document.body.insertAdjacentHTML('beforeend', '<div id="cspt"><input id="csp-name" value="Zap"><input id="csp-level" value="2"><select id="csp-school"><option>Evocation</option></select></div>');
     saveCustomSpell(null); document.getElementById('cspt').remove();
     check('custom 2nd-level spell label', customSpells[0]?.level === '2nd-level', customSpells[0]);
+
+    // B9: custom spells travel with the character
+    customSpells[0].desc = 'A bolt of homebrew lightning.'; customSpells[0].duration = '1 round';
+    ch = mk('Wizard', 3);
+    spellAddFromEncoded('known', encodeURIComponent(JSON.stringify({ name: 'Zap', level_int: 2, _custom: true })));
+    const stored = ch.spells.known.find(sp => sp.name === 'Zap');
+    check('learned custom spell is stored whole', stored && stored.desc === 'A bolt of homebrew lightning.' && stored.duration === '1 round', stored);
+    customSpells = null; try { localStorage.removeItem(CUSTOM_SPELLS_KEY); } catch (e) {} // a fresh device
+    loadCustomSpells();
+    check('another device rebuilds the custom spell list', customSpells.some(sp => sp.name === 'Zap' && sp.desc), customSpells);
+    document.body.insertAdjacentHTML('beforeend', '<div id="cspt"><input id="csp-name" value="Zap"><input id="csp-level" value="2"><select id="csp-school"><option>Evocation</option></select><textarea id="csp-desc">Now with thunder.</textarea></div>');
+    saveCustomSpell(customSpells.findIndex(sp => sp.name === 'Zap')); document.getElementById('cspt').remove();
+    check('editing a custom spell updates characters that know it', ch.spells.known.find(sp => sp.name === 'Zap')?.desc === 'Now with thunder.', ch.spells.known.find(sp => sp.name === 'Zap'));
     return out;
   });
   results.forEach(r => console.log(r)); if (errs.length) console.log('PAGE ERRORS', errs);

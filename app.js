@@ -3611,6 +3611,15 @@ function loadCustomSpells() {
   if (customSpells) return;
   try { customSpells = JSON.parse(localStorage.getItem(CUSTOM_SPELLS_KEY)) || []; }
   catch { customSpells = []; }
+  // Custom spells travel with the characters that know them (characters sync to the account),
+  // so a new device rebuilds the list from them
+  const have = new Set(customSpells.map(sp => sp.name));
+  Object.values(db.characters || {}).forEach(ch => [...(ch.spells?.known || []), ...(ch.spells?.prepared || [])].forEach(sp => {
+    if (sp && typeof sp === 'object' && sp._custom && !have.has(sp.name) && sp.desc !== undefined) {
+      const { _custom, ...spell } = sp;
+      customSpells.push(spell); have.add(sp.name);
+    }
+  }));
 }
 function saveCustomSpells() {
   try { localStorage.setItem(CUSTOM_SPELLS_KEY, JSON.stringify(customSpells)); } catch {}
@@ -3861,6 +3870,7 @@ function fullSpellData(sp, ch) {
   // The spell's rules come from the database (in the character's edition); the stored copy
   // contributes only its own flags (_fromFeat, _miId, free casts…), which start with "_"
   const name = typeof sp === 'object' ? sp.name : sp;
+  if (typeof sp === 'object' && sp._custom && sp.desc !== undefined) return sp;
   const fromDb = _spellByName(name, ch) || (customSpells || []).find(s => s.name === name);
   if (!fromDb) return sp;
   const own = typeof sp === 'object' ? Object.fromEntries(Object.entries(sp).filter(([k]) => k.startsWith('_'))) : {};
@@ -3987,7 +3997,9 @@ function _updateCantripCountDisplay() {
 
 function spellAddFromEncoded(listType, encoded) {
   const ch = db.characters[currentCharId]; if (!ch) return;
-  const sp = JSON.parse(decodeURIComponent(encoded));
+  let sp = JSON.parse(decodeURIComponent(encoded));
+  // A custom spell is stored whole on the character, so it shows up on every device
+  if (sp._custom) { loadCustomSpells(); const full = customSpells.find(c => c.name === sp.name); if (full) sp = { ...full, _custom: true }; }
   // Cantrip limit check — only when adding a genuinely new cantrip
   if (sp.level_int === 0) {
     const alreadyKnown = (ch.spells.known||[])
@@ -4539,8 +4551,21 @@ function saveCustomSpell(editIdx) {
     level: (() => { const n = parseInt(document.getElementById('csp-level')?.value) || 0;
       return n === 0 ? 'Cantrip' : `${n}${n === 1 ? 'st' : n === 2 ? 'nd' : n === 3 ? 'rd' : 'th'}-level`; })(),
   };
+  const oldName = editIdx != null ? customSpells[editIdx]?.name : null;
   if (editIdx != null) customSpells[editIdx] = sp; else customSpells.push(sp);
   saveCustomSpells();
+  // Characters that know this spell get the edited version
+  if (oldName) {
+    Object.values(db.characters || {}).forEach(c => ['known', 'prepared'].forEach(list => {
+      (c.spells?.[list] || []).forEach((entry, i) => {
+        if (entry && typeof entry === 'object' && entry._custom && entry.name === oldName) {
+          const own = Object.fromEntries(Object.entries(entry).filter(([k]) => k.startsWith('_')));
+          c.spells[list][i] = { ...sp, ...own };
+        }
+      });
+    }));
+    saveData(db);
+  }
   closeModal();
   renderSpellTabContent();
 }
