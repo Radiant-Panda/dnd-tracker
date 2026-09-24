@@ -1524,7 +1524,27 @@ function getConditionClass(cond) {
 }
 
 function getCampaign() { return db.campaigns.find(c => c.id === currentCampaignId); }
-function getInitiative() { const c=getCampaign(); if(!c.initiative) c.initiative={round:1,currentIndex:0,combatants:[],log:[]}; c.initiative.combatants.forEach(cb => { if(typeof cb.tempHP === 'undefined') cb.tempHP = 0; }); if(!c.initiative.log) c.initiative.log=[]; return c.initiative; }
+function getInitiative() { const c=getCampaign(); if(!c.initiative) c.initiative={round:1,currentIndex:0,combatants:[],log:[]}; c.initiative.combatants.forEach(cb => { if(typeof cb.tempHP === 'undefined') cb.tempHP = 0; }); if(!c.initiative.log) c.initiative.log=[]; _syncLinkedCombatants(c.initiative); return c.initiative; }
+
+// A linked character is the source of truth for its own HP, temp HP, max HP and AC, so
+// damage, healing or armour changed on the character sheet shows in the tracker too
+function _syncLinkedCombatants(init) {
+  (init?.combatants || []).forEach(cb => {
+    const ch = cb.charId && db.characters[cb.charId];
+    if (!ch?.combat) return;
+    cb.hp = ch.combat.currentHP; cb.tempHP = ch.combat.tempHP || 0; cb.maxHP = ch.combat.maxHP; cb.ac = ch.combat.ac;
+  });
+}
+// Monsters and NPCs at 0 HP are out of the fight; characters at 0 HP still take turns (death saves)
+function _isDefeated(cb) { return !cb.charId && cb.type !== 'player' && cb.maxHP > 0 && cb.hp <= 0; }
+function _combatStarted(init) { return (init.round || 1) > 1 || (init.currentIndex || 0) > 0; }
+// Places a combatant by initiative (after any ties) without moving the current turn
+function _insertCombatant(init, cb) {
+  let at = init.combatants.findIndex(c => c.initiative < cb.initiative);
+  if (at < 0) at = init.combatants.length;
+  init.combatants.splice(at, 0, cb);
+  if (_combatStarted(init) && at <= (init.currentIndex || 0)) init.currentIndex = (init.currentIndex || 0) + 1;
+}
 
 function combatLog(text) {
   const init = getInitiative();
@@ -1547,6 +1567,7 @@ function _renderCombatLogEntries(init) {
 
 function renderInitiativeTracker(campaign) {
   const init = campaign.initiative || {round:1,currentIndex:0,combatants:[]};
+  _syncLinkedCombatants(init);
   const combatants = init.combatants || [];
   if (combatants.length === 0) return IS_PLAYER_VIEW
     ? `<div class="empty-frame"><div class="empty-frame-header">✦ ───── ✾ ───── ✦</div><div class="empty"><div class="empty-icon">&#9876;</div><p>No active combat.</p></div></div>`
@@ -1572,23 +1593,29 @@ function renderInitiativeTracker(campaign) {
       ${combatants.map((cb,i) => {
         const isActive = i===(init.currentIndex%combatants.length);
         const hpPct = cb.maxHP>0?Math.round((cb.hp/cb.maxHP)*100):100;
-        return `<div class="initiative-row ${isActive?'active':''}">
+        const defeated = _isDefeated(cb);
+        // Players see how a monster is doing, not its numbers
+        const hideNumbers = IS_PLAYER_VIEW && !cb.charId && cb.type !== 'player';
+        const health = defeated ? 'Defeated' : (cb.maxHP > 0 && cb.hp / cb.maxHP <= 0.5 ? 'Bloodied' : 'Healthy');
+        return `<div class="initiative-row ${isActive?'active':''}${defeated?' defeated':''}">
           <div class="init-order">${IS_PLAYER_VIEW ? `<span class="init-order-input" style="text-align:center">${cb.initiative}</span>` : `<input type="number" class="init-order-input" value="${cb.initiative}" min="1" max="30" title="Click to edit initiative" oninput="updateCombatantInitiative(${i},+this.value)"><button class="btn-reroll-init" onclick="rerollCombatantInitiative(${i})" title="Re-roll initiative">🎲</button>`}</div>
           <div class="init-body">
             <div class="init-top">
               <span class="init-name">${esc(cb.name)}</span>
               <span class="init-type ${cb.type}">${cb.type}</span>
-              ${(()=>{ const cs = _getConcentrationSpell(cb); return cs ? `<span class="conc-badge" title="Concentrating on ${esc(cs)}">C: ${esc(cs)}</span><button class="btn btn-sm conc-clear-combat" onclick="clearConcentrationForCombatant('${cb.charId}')" title="End concentration" style="font-size:0.6rem;padding:0.1rem 0.3rem;margin-left:0.25rem;opacity:0.7">&times;</button>` : ''; })()}
+              ${(()=>{ const cs = _getConcentrationSpell(cb); const canClear = !IS_PLAYER_VIEW || cb.charId === _PV_PLAYER; return cs ? `<span class="conc-badge" title="Concentrating on ${esc(cs)}">C: ${esc(cs)}</span>${canClear ? `<button class="btn btn-sm conc-clear-combat" onclick="clearConcentrationForCombatant('${cb.charId}')" title="End concentration" style="font-size:0.6rem;padding:0.1rem 0.3rem;margin-left:0.25rem;opacity:0.7">&times;</button>` : ''}` : ''; })()}
               ${isActive?'<span class="active-arrow">&#9654; Active</span>':''}
+              ${defeated?'<span class="defeated-tag">Defeated</span>':''}
             </div>
             <div class="init-stats">
               <span>AC <strong>${cb.ac}</strong></span>
               ${IS_PLAYER_VIEW
-                ? `<span>HP <strong>${cb.hp}</strong> / ${cb.maxHP}${cb.tempHP > 0 ? ` (<span class="temp-hp-display">+${cb.tempHP} temp</span>)` : ''}</span>`
-                : `<span>HP <input type="number" class="hp-input" value="${cb.hp}" min="0" max="${cb.maxHP}" oninput="updateCombatantHP(${i},+this.value)"> / ${cb.maxHP}${cb.tempHP > 0 ? ` (<span class="temp-hp-display">+${cb.tempHP} temp</span>)` : ''}<button class="btn btn-sm" style="padding:0.2rem 0.35rem; font-size:0.75rem; margin-left:0.3rem;" onclick="openTempHPInput(${i})" title="Add temp HP">+T</button></span>
+                ? (hideNumbers ? `<span class="hp-status hp-status-${health.toLowerCase()}">${health}</span>`
+                  : `<span>HP <strong>${cb.hp}</strong> / ${cb.maxHP}${cb.tempHP > 0 ? ` (<span class="temp-hp-display">+${cb.tempHP} temp</span>)` : ''}</span>`)
+                : `<span>HP <input type="number" class="hp-input" value="${cb.hp}" min="0" max="${cb.maxHP}" onchange="updateCombatantHP(${i},+this.value)" onkeydown="if(event.key==='Enter')this.blur()"> / ${cb.maxHP}${cb.tempHP > 0 ? ` (<span class="temp-hp-display">+${cb.tempHP} temp</span>)` : ''}<button class="btn btn-sm" style="padding:0.2rem 0.35rem; font-size:0.75rem; margin-left:0.3rem;" onclick="openTempHPInput(${i})" title="Add temp HP">+T</button></span>
               <span><button class="btn btn-sm" onclick="toggleCombatantHP(${i})" title="Apply damage or healing">HP</button></span>`}
             </div>
-            <div class="hp-bar-wrap" style="position:relative; overflow:hidden;"><div class="hp-bar ${hpPct<=25?'low':hpPct<=50?'mid':''}" style="width:${hpPct}%; position:relative; z-index:2;"></div>${cb.tempHP > 0 ? '<div class="hp-bar-temp" style="width:'+Math.min(100, Math.round(((cb.hp + cb.tempHP) / cb.maxHP) * 100))+'%; position:absolute; top:0; left:0; z-index:1;"></div>' : ''}</div>
+            ${hideNumbers ? '' : `<div class="hp-bar-wrap" style="position:relative; overflow:hidden;"><div class="hp-bar ${hpPct<=25?'low':hpPct<=50?'mid':''}" style="width:${hpPct}%; position:relative; z-index:2;"></div>${cb.tempHP > 0 && cb.maxHP > 0 ? '<div class="hp-bar-temp" style="width:'+Math.min(100, Math.round(((cb.hp + cb.tempHP) / cb.maxHP) * 100))+'%; position:absolute; top:0; left:0; z-index:1;"></div>' : ''}</div>`}
             ${cb._hpOpen ? `<div class="cb-hp-popover" tabindex="-1" onfocusout="if(!this.contains(event.relatedTarget))closeCombatantHP(${i})">
               <div class="cb-hp-popover-row">
                 <input type="number" class="cb-hp-input cb-hp-dmg" id="cb-hp-dmg-${i}" placeholder="0" min="1"
@@ -1608,14 +1635,14 @@ function renderInitiativeTracker(campaign) {
               <button class="btn btn-sm leg-reset-btn" onclick="resetLegendary(${i})">Reset</button>
             </div>` : ''}
             <div class="condition-row">
-              ${_conditionRowHtml(i, cb.conditions)}
+              ${_conditionRowHtml(i, cb.conditions, _condOpts(cb))}
             </div>
-            ${cb.notes ? `<div class="combatant-notes-collapsed">📝 <span class="notes-preview">${esc(cb.notes)}</span></div>` : ''}
-            ${cb._notesOpen ? `<div class="combatant-notes-expanded">
+            ${cb.notes && !IS_PLAYER_VIEW ? `<div class="combatant-notes-collapsed">📝 <span class="notes-preview">${esc(cb.notes)}</span></div>` : ''}
+            ${cb._notesOpen && !IS_PLAYER_VIEW ? `<div class="combatant-notes-expanded">
               <input type="text" class="notes-input" value="${esc(cb.notes||'')}" placeholder="Add notes (bloodied, hiding, etc.)"
                 oninput="setCombatantNotes(${i},this.value)" onblur="closeCombatantNotes(${i})">
             </div>` : ''}
-            ${cb.statBlock?`<button class="btn btn-sm stat-block-toggle" onclick="toggleStatBlock(${i})">&#128214; Stat Block</button>
+            ${cb.statBlock && !IS_PLAYER_VIEW?`<button class="btn btn-sm stat-block-toggle" onclick="toggleStatBlock(${i})">&#128214; Stat Block</button>
             <div class="stat-block-panel" id="stat-block-${i}">${renderCombatantStatBlock(cb.statBlock, i)}</div>`:''}
           </div>
           ${!IS_PLAYER_VIEW ? `<div class="combatant-actions">
@@ -1667,8 +1694,9 @@ function openAddCombatantModal() {
 function addCombatant() {
   const init = getInitiative();
   const name = document.getElementById('cb-name').value.trim()||'Unknown';
-  init.combatants.push({ id:uid(), name, initiative:parseInt(document.getElementById('cb-init').value)||1, ac:parseInt(document.getElementById('cb-ac').value)||10, hp:parseInt(document.getElementById('cb-hp').value)||10, maxHP:parseInt(document.getElementById('cb-hp').value)||10, type:document.getElementById('cb-type').value, conditions:[], notes:'', tempHP:0 });
-  combatLog(`${name} added to combat`);
+  const initiative = parseInt(document.getElementById('cb-init').value)||1;
+  _insertCombatant(init, { id:uid(), name, initiative, ac:parseInt(document.getElementById('cb-ac').value)||10, hp:parseInt(document.getElementById('cb-hp').value)||10, maxHP:parseInt(document.getElementById('cb-hp').value)||10, type:document.getElementById('cb-type').value, conditions:[], notes:'', tempHP:0 });
+  combatLog(`${name} added to combat (init ${initiative})`);
   saveData(db); closeModal(); renderApp();
 }
 let _quickAddState = null; // State for quick add initiative modal
@@ -1710,7 +1738,7 @@ function _confirmQuickAdd() {
   const initiative = parseInt(document.getElementById('qa-init').value) || _quickAddState.rolled;
   const { charId, name, type, ac, hp, maxHP } = _quickAddState;
 
-  getInitiative().combatants.push({ id:uid(), charId, name, initiative, ac, hp, maxHP, type, conditions:[], notes:'', tempHP:0 });
+  _insertCombatant(getInitiative(), { id:uid(), charId, name, initiative, ac, hp, maxHP, type, conditions:[], notes:'', tempHP:0 });
   combatLog(`${name} added to combat (init ${initiative})`);
   _quickAddState = null;
   saveData(db); closeModal(); renderApp();
@@ -1724,7 +1752,9 @@ function addAllPcsToInitiative() {
   const linked=new Set(init.combatants.filter(c=>c.charId).map(c=>c.charId));
   (campaign.characters||[]).forEach(id => {
     const ch=db.characters[id]; if(!ch||linked.has(id)) return;
-    init.combatants.push({id:uid(),charId:id,name:ch.name,initiative:Math.ceil(Math.random()*20)+initiativeBonus(ch),ac:ch.combat.ac,hp:ch.combat.currentHP,maxHP:ch.combat.maxHP,type:'player',conditions:ch.combat.conditions||[],notes:'',tempHP:ch.combat.tempHP||0});
+    const initiative = Math.ceil(Math.random()*20)+initiativeBonus(ch);
+    _insertCombatant(init, {id:uid(),charId:id,name:ch.name,initiative,ac:ch.combat.ac,hp:ch.combat.currentHP,maxHP:ch.combat.maxHP,type:'player',conditions:ch.combat.conditions||[],notes:'',tempHP:ch.combat.tempHP||0});
+    combatLog(`${ch.name} added to combat (init ${initiative})`);
   });
   saveData(db); renderApp();
 }
@@ -1806,7 +1836,13 @@ function applyCombatantHeal(i) {
   closeCombatantHP(i);
 }
 
-function sortInitiative() { const init=getInitiative(); init.combatants.sort((a,b)=>b.initiative-a.initiative); init.currentIndex=0; saveData(db); renderApp(); }
+function sortInitiative() {
+  const init=getInitiative();
+  const active = _combatStarted(init) ? init.combatants[(init.currentIndex||0) % init.combatants.length] : null;
+  init.combatants.sort((a,b)=>b.initiative-a.initiative);
+  init.currentIndex = active ? init.combatants.indexOf(active) : 0;   // keep whose turn it is
+  saveData(db); renderApp();
+}
 function nextTurn() {
   const init=getInitiative(); if(!init.combatants.length) return;
   // Clear concentration warnings from all combatants at turn change
@@ -1828,8 +1864,12 @@ function nextTurn() {
       db.characters[prev.charId].combat.conditions = [...prev.conditions];
     }
   }
-  init.currentIndex=(init.currentIndex||0)+1;
-  if(init.currentIndex>=init.combatants.length){init.currentIndex=0;init.round++;}
+  // Advance, skipping defeated monsters (at most one full lap, so it can't hang)
+  for (let step = 0; step < init.combatants.length; step++) {
+    init.currentIndex=(init.currentIndex||0)+1;
+    if(init.currentIndex>=init.combatants.length){init.currentIndex=0;init.round++;}
+    if (!_isDefeated(init.combatants[init.currentIndex])) break;
+  }
   // Auto-reset legendary actions for the now-active combatant
   const active = init.combatants[init.currentIndex % init.combatants.length];
   if (active && active.legendaryMax) {
@@ -1877,6 +1917,8 @@ function updateCombatantHP(i,val) {
   const cb=getInitiative().combatants[i];
   const oldHP = cb ? cb.hp : 0;
   const newHP = +val;
+  const ch = cb?.charId && db.characters[cb.charId];
+  if (ch && oldHP <= 0 && newHP > 0) ch.deathSaves = { successes: 0, failures: 0 };
   CharacterStore.updateInitiativeHP(currentCampaignId,i,newHP,cb.tempHP);
   if (cb && newHP !== oldHP) {
     const diff = Math.abs(newHP - oldHP);
@@ -1887,34 +1929,39 @@ function updateCombatantHP(i,val) {
       combatLog(`${cb.name} healed ${diff} HP (HP ${oldHP}→${newHP})`);
     }
   }
+  saveData(db); renderApp();
 }
 function updateCombatantInitiative(i,val) { if(!val||isNaN(val)) return; getInitiative().combatants[i].initiative=val; saveData(db); }
-function damageCombatant(i,amt) {
-  const cb=getInitiative().combatants[i];
+// Temp HP soaks damage first. Linked characters use the sheet's rules (death saves, massive damage).
+function _damageCombatant(i, amt) {
+  const init = getInitiative(), cb = init.combatants[i];
   if (!cb || amt <= 0) return;
   const oldHP = cb.hp;
-  let remaining = amt;
-  // Temp HP absorbs first
-  if (cb.tempHP > 0) {
-    const absorbed = Math.min(cb.tempHP, remaining);
-    cb.tempHP -= absorbed;
-    remaining -= absorbed;
+  const ch = cb.charId && db.characters[cb.charId];
+  if (ch) _takeDamage(ch, amt);
+  else {
+    let remaining = amt;
+    if (cb.tempHP > 0) { const absorbed = Math.min(cb.tempHP, remaining); cb.tempHP -= absorbed; remaining -= absorbed; }
+    cb.hp = Math.max(0, cb.hp - remaining);
   }
-  // Remaining damage applies to real HP
-  const newHP = Math.max(0, cb.hp - remaining);
-  CharacterStore.updateInitiativeHP(currentCampaignId,i,newHP,cb.tempHP);
-  combatLog(`${cb.name} took ${amt} damage (HP ${oldHP}→${newHP})`);
-  _checkConcentration(i,amt);
-  renderApp();
+  _syncLinkedCombatants(init);
+  combatLog(`${cb.name} took ${amt} damage (HP ${oldHP}→${cb.hp})${_isDefeated(cb) ? ' — defeated' : ''}`);
+  _checkConcentration(i, amt);
+}
+function damageCombatant(i,amt) {
+  _damageCombatant(i, amt);
+  saveData(db); renderApp();
 }
 function healCombatant(i,amt) {
-  const cb=getInitiative().combatants[i];
+  const init=getInitiative(), cb=init.combatants[i];
   if (!cb || amt <= 0) return;
   const oldHP = cb.hp;
-  const newHP = Math.min(cb.maxHP, cb.hp + amt);
-  CharacterStore.updateInitiativeHP(currentCampaignId,i,newHP,cb.tempHP);
-  combatLog(`${cb.name} healed ${amt} HP (HP ${oldHP}→${newHP})`);
-  renderApp();
+  const ch = cb.charId && db.characters[cb.charId];
+  if (ch) _heal(ch, amt);
+  else cb.hp = Math.min(cb.maxHP, cb.hp + amt);
+  _syncLinkedCombatants(init);
+  combatLog(`${cb.name} healed ${amt} HP (HP ${oldHP}→${cb.hp})`);
+  saveData(db); renderApp();
 }
 function openTempHPInput(i) {
   openModal(`<h2>Add Temp HP</h2>
@@ -1936,7 +1983,7 @@ function setCombatantTempHP(i, amount) {
     renderApp();
   }
 }
-function removeCombatant(i) { const init=getInitiative(); const name=init.combatants[i]?.name||'Unknown'; init.combatants.splice(i,1); if(init.currentIndex>=init.combatants.length) init.currentIndex=0; combatLog(`${name} removed from combat`); saveData(db); renderApp(); }
+function removeCombatant(i) { const init=getInitiative(); const name=init.combatants[i]?.name||'Unknown'; init.combatants.splice(i,1); if(i<(init.currentIndex||0)) init.currentIndex--; if(init.currentIndex>=init.combatants.length) init.currentIndex=0; combatLog(`${name} removed from combat`); saveData(db); renderApp(); }
 function spendLegendary(i, pipIdx) {
   const cb = getInitiative().combatants[i];
   if (!cb || !cb.legendaryMax) return;
@@ -2040,19 +2087,9 @@ function applyAoeDamage() {
     // 'none' = 0 damage
     if (dmg <= 0) return;
     totalHit++;
-    // Apply temp HP absorption
-    const cb = combatants[idx];
-    let remaining = dmg;
-    let newTempHP = cb.tempHP || 0;
-    if (newTempHP > 0) {
-      const absorbed = Math.min(newTempHP, remaining);
-      newTempHP -= absorbed;
-      remaining -= absorbed;
-    }
-    const newHP = Math.max(0, cb.hp - remaining);
-    CharacterStore.updateInitiativeHP(currentCampaignId, idx, newHP, newTempHP);
-    _checkConcentration(idx, dmg);
+    _damageCombatant(idx, dmg);
   });
+  saveData(db); renderApp();
 
   const parts = [];
   if (fullCount) parts.push(`${fullCount} took full`);
@@ -2077,8 +2114,21 @@ function applyAoeDamage() {
 function openConditionPicker(i) {
   const cb=getInitiative().combatants[i];
   const activeNames = (cb.conditions||[]).map(c => condName(c));
+  const ch = cb.charId && db.characters[cb.charId];
   openModal(`<h2>Conditions — ${esc(cb.name)}</h2>
     <div class="condition-picker">${CONDITIONS.map(cond => {
+      if (cond === 'Exhausted' && ch) {
+        const lvl = ch.exhaustionLevel || 0;
+        return `<div class="condition-option cond-exhaustion ${lvl ? 'active' : ''}">
+          <span>${getConditionEmoji(cond)} Exhaustion</span>
+          <span class="cond-option-right">
+            <button class="btn btn-sm" onclick="event.stopPropagation();_stepCombatantExhaustion(${i},-1)" title="Lower exhaustion">&minus;</button>
+            <span class="cond-exhaustion-level">${lvl}</span>
+            <button class="btn btn-sm" onclick="event.stopPropagation();_stepCombatantExhaustion(${i},1)" title="Raise exhaustion">+</button>
+            <span class="condition-info-btn" onclick="event.stopPropagation();openConditionRef('${cond}',null)" title="View rules">ⓘ</span>
+          </span>
+        </div>`;
+      }
       const active = activeNames.includes(cond) ? 'active' : '';
       const existing = (cb.conditions||[]).find(c => condName(c) === cond);
       const dur = existing ? condDuration(existing) : '';
@@ -2114,7 +2164,26 @@ function toggleCondition(i, cond) {
     if(name===cond) el.classList.toggle('active', isActive);
   });
   const row=document.querySelectorAll('.initiative-row')[i];
-  if(row) { const cr=row.querySelector('.condition-row'); if(cr) cr.innerHTML=_conditionRowHtml(i, cb.conditions); }
+  if(row) { const cr=row.querySelector('.condition-row'); if(cr) cr.innerHTML=_conditionRowHtml(i, cb.conditions, _condOpts(cb)); }
+}
+// Exhaustion for a linked character is its sheet's exhaustion level (0–6)
+function setCombatantExhaustion(i, level) {
+  const cb = getInitiative().combatants[i];
+  const ch = cb?.charId && db.characters[cb.charId]; if (!ch) return;
+  const next = Math.max(0, Math.min(6, level));
+  if (next === (ch.exhaustionLevel || 0)) return;
+  ch.exhaustionLevel = next;
+  combatLog(`${cb.name}: exhaustion ${next}`);
+  saveData(db);
+  const lvlEl = document.querySelector('.cond-exhaustion-level');
+  if (lvlEl) { lvlEl.textContent = next; lvlEl.closest('.condition-option')?.classList.toggle('active', next > 0); }
+  const row = document.querySelectorAll('.initiative-row')[i];
+  const cr = row?.querySelector('.condition-row'); if (cr) cr.innerHTML = _conditionRowHtml(i, cb.conditions, _condOpts(cb));
+}
+function _stepCombatantExhaustion(i, delta) {
+  const cb = getInitiative().combatants[i];
+  const ch = cb?.charId && db.characters[cb.charId]; if (!ch) return;
+  setCombatantExhaustion(i, (ch.exhaustionLevel || 0) + delta);
 }
 function setConditionDuration(i, cond, dur) {
   const cb=getInitiative().combatants[i]; cb.conditions=cb.conditions||[];
@@ -2130,15 +2199,23 @@ function setConditionDuration(i, cond, dur) {
   }
   saveData(db);
   const row=document.querySelectorAll('.initiative-row')[i];
-  if(row) { const cr=row.querySelector('.condition-row'); if(cr) cr.innerHTML=_conditionRowHtml(i, cb.conditions); }
+  if(row) { const cr=row.querySelector('.condition-row'); if(cr) cr.innerHTML=_conditionRowHtml(i, cb.conditions, _condOpts(cb)); }
 }
-function _conditionRowHtml(i, conditions) {
-  return `${(conditions||[]).map(c=>{
+// readOnly: the player view can look conditions up but not change them.
+// exhaustion: a linked character's exhaustion level, which lives on the character sheet.
+function _condOpts(cb) {
+  return { readOnly: IS_PLAYER_VIEW, exhaustion: (cb.charId && db.characters[cb.charId]?.exhaustionLevel) || 0 };
+}
+function _conditionRowHtml(i, conditions, opts = {}) {
+  const ref = opts.readOnly ? 'null' : i;
+  const tags = (conditions||[]).map(c=>{
     const name = condName(c);
     const dur = condDuration(c);
     const durBadge = dur ? `<span class="cond-dur-badge">${dur}rd${dur!==1?'s':''}</span>` : '';
-    return `<span class="condition-tag ${getConditionClass(c)}" onclick="openConditionRef('${name}',${i})" title="${dur ? dur+' round'+(dur!==1?'s':'')+' remaining' : 'Click to view rules'}">${getConditionEmoji(c)} ${name}${durBadge}</span>`;
-  }).join('')}<button class="btn btn-sm" onclick="openConditionPicker(${i})">+ Condition</button>`;
+    return `<span class="condition-tag ${getConditionClass(c)}" onclick="openConditionRef('${name}',${ref})" title="${dur ? dur+' round'+(dur!==1?'s':'')+' remaining' : 'Click to view rules'}">${getConditionEmoji(c)} ${name}${durBadge}</span>`;
+  }).join('');
+  const exhaustion = opts.exhaustion ? `<span class="condition-tag" onclick="openConditionRef('Exhausted',null)" title="Exhaustion level — set here or on the character sheet">${getConditionEmoji('Exhausted')} Exhaustion ${opts.exhaustion}</span>` : '';
+  return `${tags}${exhaustion}${opts.readOnly ? '' : `<button class="btn btn-sm" onclick="openConditionPicker(${i})">+ Condition</button>`}`;
 }
 function removeCondition(i,cond) {
   const init=getInitiative(); const cb=init.combatants[i];
@@ -2377,7 +2454,8 @@ function addMonsterToCombat(m) {
     damage_immunities: m.immunities ? m.immunities.split(', ') : [],
     damage_resistances: m.resistances ? m.resistances.split(', ') : [],
     condition_immunities: m.condition_immunities ? m.condition_immunities.split(', ') : [],
-    senses: typeof m.senses === 'string' ? {passive_perception: parseInt((m.senses.match(/passive perception (\d+)/i)||[])[1])||10} : (m.senses||{}),
+    senses: m.senses || '',
+    damage_vulnerabilities: m.vulnerabilities ? m.vulnerabilities.split(', ') : [],
     languages: m.languages || '',
     challenge_rating: m.cr, xp: m.xp || 0,
     traits: m.traits || [],
@@ -2387,15 +2465,20 @@ function addMonsterToCombat(m) {
     legendary_actions: m.legendary_actions || [],
   };
 
+  // A second Goblin becomes "Goblin 2", a third "Goblin 3"
+  const base = m.name, numbered = new RegExp('^' + base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' \\d+$');
+  const same = init.combatants.filter(c => c.name === base || numbered.test(c.name)).length;
+  const name = same ? `${base} ${same + 1}` : base;
   const combatant = {
-    id: uid(), name: m.name, initiative, ac, hp, maxHP: hp,
+    id: uid(), name, initiative, ac, hp, maxHP: hp,
     type: 'monster', conditions: [], statBlock, notes: '', tempHP: 0
   };
   if (m.legendary_count) {
     combatant.legendaryMax = m.legendary_count;
     combatant.legendaryUsed = 0;
   }
-  init.combatants.push(combatant);
+  _insertCombatant(init, combatant);
+  combatLog(`${name} added to combat (init ${initiative})`);
   saveData(db); closeModal(); showCampaign(currentCampaignId, 'initiative');
 }
 
@@ -2429,7 +2512,8 @@ function showActionPopover(combatantIdx, actionIdx, actionType) {
 
   const sb = getInitiative().combatants[combatantIdx].statBlock;
   const actionList = actionType === 'legendary' ? sb.legendary_actions :
-                     actionType === 'reaction' ? sb.reactions : sb.actions;
+                     actionType === 'reaction' ? sb.reactions :
+                     actionType === 'bonus' ? sb.bonus_actions : sb.actions;
   const action = actionList[actionIdx];
   if (!action) return;
 
@@ -2441,7 +2525,7 @@ function showActionPopover(combatantIdx, actionIdx, actionType) {
 
   if (attack.attackBonus || attack.damageDice) {
     popHtml += `<div class="action-popover-attack">`;
-    if (attack.attackBonus) popHtml += `<span class="attack-bonus">${attack.attackBonus} to hit</span>`;
+    if (attack.attackBonus) popHtml += `<span class="attack-bonus">${attack.attackBonus} to hit</span><button class="btn btn-sm dice-roll-btn attack-roll-btn" onclick="rollActionAttack(this,'${attack.attackBonus}')" title="Roll to hit">&#127919;</button>`;
     if (attack.damageDice) {
       popHtml += `<span class="attack-damage">${attack.damageDice} ${attack.damageType||''}</span>`;
       popHtml += `<button class="btn btn-sm dice-roll-btn" onclick="rollActionDamage(this,'${attack.damageDice}')" title="Roll damage">&#127922;</button>`;
@@ -2455,6 +2539,15 @@ function showActionPopover(combatantIdx, actionIdx, actionType) {
   if (btn) btn.insertAdjacentHTML('afterend', popHtml);
 }
 
+function rollActionAttack(btnEl, bonusStr) {
+  const bonus = parseInt(bonusStr) || 0;
+  const d20 = Math.floor(Math.random() * 20) + 1;
+  let el = btnEl.parentElement.querySelector('.attack-result');
+  if (!el) { btnEl.insertAdjacentHTML('afterend', `<span class="dice-result attack-result"></span>`); el = btnEl.parentElement.querySelector('.attack-result'); }
+  el.textContent = `= ${d20 + bonus} [d20 ${d20} ${bonus >= 0 ? '+' : '−'} ${Math.abs(bonus)}]${d20 === 20 ? ' — critical!' : d20 === 1 ? ' — natural 1' : ''}`;
+  el.classList.add('dice-flash');
+  setTimeout(() => el.classList.remove('dice-flash'), 400);
+}
 function rollActionDamage(btnEl, diceStr) {
   const result = rollDice(diceStr);
   let resultEl = btnEl.closest('.action-popover-attack').querySelector('.dice-result');
@@ -2473,6 +2566,7 @@ function renderCombatantStatBlock(sb, combatantIdx) {
   // Quick-reference action buttons
   const allActions = [];
   (sb.actions||[]).forEach((a,j) => allActions.push({...a, idx:j, type:'action'}));
+  (sb.bonus_actions||[]).forEach((a,j) => allActions.push({...a, idx:j, type:'bonus'}));
   (sb.reactions||[]).forEach((a,j) => allActions.push({...a, idx:j, type:'reaction'}));
   (sb.legendary_actions||[]).forEach((a,j) => allActions.push({...a, idx:j, type:'legendary'}));
 
@@ -2503,8 +2597,10 @@ function renderCombatantStatBlock(sb, combatantIdx) {
   if (sb.skills) html += `<div><strong>Skills</strong> ${esc(sb.skills)}</div>`;
   if (sb.damage_resistances?.length) html += `<div><strong>Damage Resistances</strong> ${sb.damage_resistances.join(', ')}</div>`;
   if (sb.damage_immunities?.length) html += `<div><strong>Damage Immunities</strong> ${sb.damage_immunities.join(', ')}</div>`;
+  if (sb.damage_vulnerabilities?.length) html += `<div><strong>Damage Vulnerabilities</strong> ${esc(sb.damage_vulnerabilities.join(', '))}</div>`;
   if (sb.condition_immunities?.length) html += `<div><strong>Condition Immunities</strong> ${sb.condition_immunities.join(', ')}</div>`;
-  const senseStr = Object.entries(sb.senses||{}).map(([k,v])=>`${k.replace(/_/g,' ')} ${v}`).join(', ');
+  // Older combatants stored senses as { passive_perception }; newer ones keep the full text
+  const senseStr = typeof sb.senses === 'string' ? esc(sb.senses) : Object.entries(sb.senses||{}).map(([k,v])=>`${k.replace(/_/g,' ')} ${v}`).join(', ');
   if (senseStr) html += `<div><strong>Senses</strong> ${senseStr}</div>`;
   if (sb.languages) html += `<div><strong>Languages</strong> ${esc(sb.languages)}</div>`;
   if (sb.challenge_rating !== undefined) html += `<div><strong>CR</strong> ${sb.challenge_rating} (${(sb.xp||0).toLocaleString()} XP)</div>`;
@@ -3339,6 +3435,11 @@ function renderCombatSection(ch) {
     <div class="conc-tracker">
       <span class="conc-pill">◈ Concentrating: ${esc(ch.activeConcentration.spellName)}${ch.activeConcentration.castLevel ? ` (${['','1st','2nd','3rd','4th','5th','6th','7th','8th','9th'][ch.activeConcentration.castLevel]})` : ''}</span>
       <button class="conc-clear-btn" onclick="clearConcentration()" title="End concentration">×</button>
+    </div>` : ''}
+    ${(ch.combat.conditions || []).length ? `<div class="sheet-conditions">
+      <span class="cs-field-label">Conditions</span>
+      ${ch.combat.conditions.map(c => { const n = condName(c), d = condDuration(c);
+        return `<span class="condition-tag ${getConditionClass(c)}" onclick="openConditionRef('${n}')" title="${d ? `${d} round${d !== 1 ? 's' : ''} left` : 'Click to view rules'}">${getConditionEmoji(c)} ${n}${d ? `<span class="cond-dur-badge">${d}rd${d !== 1 ? 's' : ''}</span>` : ''}</span>`; }).join('')}
     </div>` : ''}
     <div class="death-saves-row">
       <span class="cs-field-label">Death Saves</span>
