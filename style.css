@@ -4180,3 +4180,4 @@ header::after {
 .sf-res-row { display: flex; align-items: center; gap: 0.45rem; font-size: 0.66rem; color: var(--text-dim); }
 .sf-res-row .feat-res-mini { margin-left: 0; }
 .levelup-feat-desc { flex-basis: 100%; }
+.rt-table td.rt-long { text-align: left; }

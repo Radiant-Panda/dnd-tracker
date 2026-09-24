@@ -97,5 +97,22 @@ const count = (k, hit) => { report[k] = report[k] || { updated: 0, unmatched: 0 
   save();
 }
 
+// ── Spells (data/spells.json, built by process-spells.js from another dataset) ──
+{
+  const file = path.join(__dirname, 'spells.json');
+  const spells = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const SPELL_SOURCES = { phb2024: 'XPHB', phb2014: 'PHB', tce: 'TCE', xge: 'XGE', egw: 'EGW' };
+  const index = J('spells/index.json');
+  const bySource = {};
+  for (const code of new Set(Object.values(SPELL_SOURCES))) bySource[code] = index[code] ? J('spells/' + index[code]).spell : [];
+  for (const sp of spells) {
+    const pool = bySource[SPELL_SOURCES[sp.src]] || [];
+    const src = pool.find(x => x.name === sp.name) || pool.find(x => norm(x.name) === norm(sp.name));
+    count('spells', !!src);
+    if (src) sp.desc = entriesToRulesText([...(src.entries || []), ...(src.entriesHigherLevel || [])]);
+  }
+  if (!dry) fs.writeFileSync(file, JSON.stringify(spells, null, 2), 'utf8');
+}
+
 for (const [k, v] of Object.entries(report)) console.log(`${k}: ${v.updated} updated, ${v.unmatched} kept as-is`);
 if (dry) console.log('(dry run — nothing written)');
