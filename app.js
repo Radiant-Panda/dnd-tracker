@@ -1192,6 +1192,7 @@ function renderCharacterCards(campaign) {
       <div class="card-title">${esc(ch.name||'Unnamed')}</div>
       <div class="card-sub">Level ${ch.level} ${esc(ch.race)} ${formatClassLine(ch)}</div>
       <div style="margin-top:0.6rem;font-size:0.8rem;color:var(--text-dim)">HP ${ch.combat.currentHP}/${ch.combat.maxHP}</div>
+      ${(() => { const names = (ch.companionIds || []).map(id => (db.companions || {})[id]?.name).filter(Boolean); return names.length ? `<div class="card-sub">Companions: ${names.map(esc).join(', ')}</div>` : ''; })()}
       <div class="hp-bar-wrap"><div class="hp-bar ${pct<=25?'low':pct<=50?'mid':''}" style="width:${pct}%"></div></div>
       <div class="card-actions" onclick="event.stopPropagation()">
         <button class="btn btn-sm" onclick="showCharacter('${ch.id}')">Open</button>
@@ -1204,18 +1205,20 @@ function renderCharacterCards(campaign) {
 
 function openNewCharModal() { openCharWizard(); }
 function deleteCharacter(id) {
-  showConfirm('Delete this character?', () => {
-    const ch = db.characters[id];
-    // Delete portrait from Firebase Storage if applicable
-    if (ch && _isStorageUrl(ch.portrait)) _deletePortraitFromStorage(id);
-    delete db.characters[id];
-    const c = db.campaigns.find(c => c.id === currentCampaignId);
-    if (c) {
-      c.characters = c.characters.filter(cid => cid !== id);
-      if (c.activeCharId === id) c.activeCharId = c.characters[0] || null;
-    }
-    saveData(db); renderApp();
-  });
+  showConfirm('Delete this character?', () => deleteCharacterNow(id));
+}
+function deleteCharacterNow(id) {
+  const ch = db.characters[id];
+  _endCompanionsOf(id);
+  // Delete portrait from Firebase Storage if applicable
+  if (ch && _isStorageUrl(ch.portrait)) _deletePortraitFromStorage(id);
+  delete db.characters[id];
+  const c = db.campaigns.find(c => c.id === currentCampaignId);
+  if (c) {
+    c.characters = c.characters.filter(cid => cid !== id);
+    if (c.activeCharId === id) c.activeCharId = c.characters[0] || null;
+  }
+  saveData(db); renderApp();
 }
 
 // ── NPC Manager ───────────────────────────────────────────────────────────────
@@ -1256,7 +1259,7 @@ function _npcCardHtml(npc) {
       <div class="card-title npc-card-title">${esc(_npcName(npc))}</div>
       ${sub ? `<div class="card-sub">${sub}</div>` : ''}
       ${npc.statBlock ? `<div class="card-sub npc-card-stats">⚔ ${esc(npc.statSource || 'Stat block')} &middot; AC ${npc.ac ?? 10} &middot; HP ${npc.hp ?? 0}/${npc.maxHP ?? 0}</div>` : ''}
-      ${npc.disposition ? `<div class="npc-card-disp"><span class="npc-disposition npc-disp-${esc(npc.disposition.toLowerCase())}">${esc(npc.disposition)}</span></div>` : ''}
+      ${npc.disposition || _companionForNpc(npc) ? `<div class="npc-card-disp">${npc.disposition ? `<span class="npc-disposition npc-disp-${esc(npc.disposition.toLowerCase())}">${esc(npc.disposition)}</span>` : ''}${_companionForNpc(npc) ? ` <span class="companion-tag">Companion · ${esc(_companionOwnerName(_companionForNpc(npc)))}</span>` : ''}</div>` : ''}
       <div class="card-actions" onclick="event.stopPropagation()">
         <button class="btn btn-sm" onclick="showNpc('${npc.id}')">Open</button>
         <button class="btn btn-sm btn-danger" onclick="deleteNpc('${npc.id}')">Delete</button>
@@ -1296,12 +1299,14 @@ function createNpc() {
   saveData(db); closeModal(); renderApp();
 }
 function deleteNpc(id) {
-  showConfirm('Delete this NPC?', () => {
-    delete db.npcs[id];
-    const c = db.campaigns.find(c => c.id === currentCampaignId);
-    if (c) c.npcs = c.npcs.filter(nid => nid !== id);
-    saveData(db); renderApp();
-  });
+  showConfirm('Delete this NPC?', () => deleteNpcNow(id));
+}
+function deleteNpcNow(id) {
+  endCompanionship(id);
+  delete db.npcs[id];
+  const c = db.campaigns.find(c => c.id === currentCampaignId);
+  if (c) c.npcs = c.npcs.filter(nid => nid !== id);
+  saveData(db); renderApp();
 }
 
 // ── Session Journal ───────────────────────────────────────────────────────────
@@ -1382,6 +1387,7 @@ function renderJournalTab(campaign) {
 function renderNpcSheet() {
   const npc = db.npcs[currentNpcId];
   if (!npc) return '<p>NPC not found.</p>';
+  const comp = _companionForNpc(npc);
   return `
     <div class="section-header">
       <div><h2>${esc(_npcName(npc))}</h2><div class="text-dim" style="font-size:0.85rem">${[npc.role || 'NPC', npc.race, npc.location || 'Unknown location'].filter(Boolean).map(esc).join(' &bull; ')}</div></div>
@@ -1404,12 +1410,14 @@ function renderNpcSheet() {
           <div class="form-row">
             <div class="form-group"><label>AC</label><input type="number" data-field="ac" value="${npc.ac ?? 10}" oninput="npc_field('ac',+this.value)"></div>
             <div class="form-group"><label>Max HP</label><input type="number" data-field="maxHP" value="${npc.maxHP ?? 10}" oninput="npc_field('maxHP',+this.value)"></div>
-            <div class="form-group"><label>Current HP</label><input type="number" data-field="hp" value="${npc.hp ?? 10}" oninput="npc_field('hp',+this.value)"></div>
+            <div class="form-group"><label>Current HP</label><input type="number" data-field="hp" value="${comp ? comp.hp : (npc.hp ?? 10)}" oninput="npc_field('hp',+this.value)"></div>
           </div>
+          ${comp ? `<div class="text-dim" style="font-size:0.78rem;margin-bottom:0.4rem">HP is shared with the companion sheet.</div>` : ''}
           ${npc.statBlock
             ? `<div class="text-dim" style="font-size:0.8rem">Initiative ${_npcInitBonus(npc) >= 0 ? '+' : ''}${_npcInitBonus(npc)} (DEX, from the stat block)</div>`
             : `<div class="form-group"><label>Initiative bonus</label><input type="number" data-field="initBonus" value="${npc.initBonus ?? 0}" oninput="npc_field('initBonus',+this.value)"></div>`}
         </div>
+        ${_renderNpcCompanionPanel(npc, comp)}
       </div>
       <div>
         ${['Personality Traits|personality|How do they speak, act, carry themselves?','Goals & Motivations|goals|What do they want?','Secrets (DM only)|secrets|What are they hiding?','Relationships|relationships|Allies, enemies, family connections...','Notes|notes|Session appearances, dialogue, plot hooks...'].map(s => {
@@ -1431,7 +1439,166 @@ function renderNpcSheet() {
             <button class="btn btn-sm" onclick="openNpcStatBlockPicker('${npc.id}')">Choose stat block</button>`}
         </div>`;
 }
-function npc_field(field, value) { db.npcs[currentNpcId][field] = value; _queueSave(); }
+function npc_field(field, value) {
+  const npc = db.npcs[currentNpcId]; if (!npc) return;
+  const comp = _companionForNpc(npc);
+  if (comp && (field === 'hp' || field === 'tempHP')) { comp[field] = value; _queueSave(); return; }
+  npc[field] = value;
+  _syncCompanionFromNpc(npc);
+  _queueSave();
+}
+// ── Companions (GM side) ─────────────────────────────────────────────────────
+// A companion card (db.companions) holds only what the owning player may see plus play
+// state, and is the source of truth for the companion's HP while the NPC is linked.
+let _confirmEndCompanion = null;   // NPC id awaiting "End companionship?" confirmation
+function _companionForNpc(npc) { return npc?.companionId ? (db.companions || {})[npc.companionId] || null : null; }
+function _newCompanionId() { return 'comp_' + uid(); }
+function _companionOwnerName(comp) { return db.characters[comp?.ownerCharId]?.name || 'Unknown'; }
+function makeCompanion(npcId, charId) {
+  const npc = db.npcs[npcId], ch = db.characters[charId];
+  if (!npc || !ch || _companionForNpc(npc)) return null;
+  db.companions = db.companions || {};
+  const campaignId = currentCampaignId || db.campaigns.find(c => (c.npcs || []).includes(npcId))?.id;
+  const rec = buildCompanionRecord(npc, charId, campaignId, _newCompanionId(), uid() + uid());
+  db.companions[rec.id] = rec;
+  ch.companionIds = [...(ch.companionIds || []), rec.id];
+  npc.companionId = rec.id;
+  saveData(db); renderApp();
+  return rec.id;
+}
+// A new id (and share token) on every reassignment, so the previous owner's browser loses access
+function changeCompanionOwner(npcId, newCharId) {
+  const npc = db.npcs[npcId], old = _companionForNpc(npc), ch = db.characters[newCharId];
+  if (!old || !ch || old.ownerCharId === newCharId) return old?.id || null;
+  const rec = { ...JSON.parse(JSON.stringify(old)), id: _newCompanionId(), shareToken: uid() + uid(), ownerCharId: newCharId };
+  const prev = db.characters[old.ownerCharId];
+  if (prev) prev.companionIds = (prev.companionIds || []).filter(x => x !== old.id);
+  ch.companionIds = [...(ch.companionIds || []), rec.id];
+  delete db.companions[old.id];
+  db.companions[rec.id] = rec;
+  npc.companionId = rec.id;
+  db.campaigns.forEach(c => c.initiative?.combatants?.forEach(cb => { if (cb.companionId === old.id) cb.companionId = rec.id; }));
+  saveData(db); renderApp();
+  return rec.id;
+}
+function endCompanionship(npcId) {
+  const npc = db.npcs[npcId], comp = _companionForNpc(npc);
+  if (!comp) return;
+  npc.hp = comp.hp; npc.tempHP = comp.tempHP || 0;
+  if (comp.portrait) { npc.portrait = comp.portrait; npc.portraitZoom = comp.portraitZoom; npc.portraitX = comp.portraitX; npc.portraitY = comp.portraitY; }
+  const owner = db.characters[comp.ownerCharId];
+  if (owner) owner.companionIds = (owner.companionIds || []).filter(x => x !== comp.id);
+  db.campaigns.forEach(c => c.initiative?.combatants?.forEach(cb => { if (cb.companionId === comp.id) delete cb.companionId; }));
+  delete db.companions[comp.id];
+  delete npc.companionId;
+  _confirmEndCompanion = null;
+  saveData(db); renderApp();
+}
+function _endCompanionsOf(charId) {
+  Object.values(db.npcs).filter(n => _companionForNpc(n)?.ownerCharId === charId).forEach(n => endCompanionship(n.id));
+}
+function setCompanionAccess(npcId, access) {
+  const comp = _companionForNpc(db.npcs[npcId]);
+  if (!comp || !['view', 'play', 'full'].includes(access)) return;
+  comp.playerAccess = access;
+  saveData(db); renderApp();
+}
+// NPC → card: the fields the player may see (the GM edits them on the NPC page)
+const _COMPANION_FROM_NPC = ['name', 'role', 'race', 'location', 'ac', 'maxHP', 'statBlock', 'statSource', 'legendaryMax'];
+function _syncCompanionFromNpc(npc) {
+  const comp = _companionForNpc(npc); if (!comp) return;
+  comp.name = _npcName(npc);
+  for (const k of _COMPANION_FROM_NPC) {
+    if (k === 'name') continue;
+    comp[k] = k === 'statBlock' ? (npc.statBlock ? JSON.parse(JSON.stringify(npc.statBlock)) : null) : (npc[k] ?? comp[k]);
+  }
+  comp.initBonus = companionInitBonus(npc);
+  comp.hp = Math.min(comp.hp, comp.maxHP);
+}
+// Card → NPC: stat and name changes a player made in Full edit (only the keys that changed)
+function _syncNpcFromCompanion(comp, changedKeys) {
+  const npc = db.npcs[comp?.npcId]; if (!npc) return;
+  for (const k of changedKeys) {
+    if (!COMPANION_FULL_FIELDS.includes(k) || COMPANION_PLAY_FIELDS.includes(k)) continue;
+    if (k === 'initBonus') { if (!comp.statBlock) npc.initBonus = comp.initBonus; continue; }
+    npc[k] = k === 'statBlock' ? (comp.statBlock ? JSON.parse(JSON.stringify(comp.statBlock)) : null) : comp[k];
+  }
+}
+// Writes a change to a companion card. The player view narrows it to what the access setting allows (Task 5).
+function _companionWrite(comp, patch) {
+  if (!comp) return;
+  Object.assign(comp, patch);
+  if (IS_PLAYER_VIEW) { _pvSaveCompanion(comp.id, patch); return; }
+  const changed = Object.keys(patch);
+  if (changed.some(k => !COMPANION_PLAY_FIELDS.includes(k))) _syncNpcFromCompanion(comp, changed);
+  saveData(db);
+}
+function _pvSaveCompanion(id, patch) { /* player view only — filled in with the Firestore write */ }
+function setCompanionPortrait(companionId, dataUrl, zoom = 100, x = 50, y = 50) {
+  const comp = (db.companions || {})[companionId]; if (!comp) return;
+  _companionWrite(comp, { portrait: dataUrl, portraitZoom: zoom, portraitX: x, portraitY: y });
+  renderApp();
+}
+function removeCompanionPortrait(companionId) {
+  const comp = (db.companions || {})[companionId]; if (!comp) return;
+  _companionWrite(comp, { portrait: null, portraitZoom: 100, portraitX: 50, portraitY: 50 });
+  renderApp();
+}
+// Art uploads and framing reuse the character portrait tools, aimed at a companion
+let _portraitTarget = null;   // { companionId } while editing a companion's art
+function uploadCompanionPortrait(event, companionId) { _portraitTarget = { companionId }; uploadPortrait(event); }
+function adjustCompanionPortrait(companionId) { _portraitTarget = { companionId }; openPortraitFramer(null); }
+function _companionArtHtml(comp, size = 72) {
+  if (!comp?.portrait) return `<div class="companion-art companion-art-empty" style="width:${size}px;height:${size}px">✦</div>`;
+  const z = comp.portraitZoom || 100, x = comp.portraitX ?? 50, y = comp.portraitY ?? 50;
+  return `<div class="companion-art" style="width:${size}px;height:${size}px"><img src="${esc(comp.portrait)}" alt="${esc(comp.name)}" style="object-position:${x}% ${y}%;transform:scale(${z / 100});transform-origin:${x}% ${y}%"></div>`;
+}
+function _renderNpcCompanionPanel(npc, comp) {
+  const chars = (getCampaign()?.characters || []).map(id => db.characters[id]).filter(Boolean);
+  if (!comp) {
+    if (!chars.length) return `<div class="sheet-panel npc-companion-panel" style="margin-top:0.8rem"><div class="panel-title">Companion</div>
+      <p class="text-dim" style="font-size:0.82rem;margin:0">Add a character to this campaign to give them ${esc(_npcName(npc))} as a companion.</p></div>`;
+    return `<div class="sheet-panel npc-companion-panel" style="margin-top:0.8rem">
+      <div class="panel-title">Companion</div>
+      ${npc.statBlock ? '' : `<p class="text-dim" style="font-size:0.8rem;margin:0 0 0.5rem">Tip: choose a stat block first, so the player sees ${esc(_npcName(npc))}'s actions — without one they only see AC and HP.</p>`}
+      <div class="form-group"><label>Make companion of</label>
+        <select id="npc-companion-owner">${chars.map(c => `<option value="${c.id}">${esc(c.name || 'Unnamed')}</option>`).join('')}</select>
+      </div>
+      <button class="btn btn-sm btn-primary" onclick="makeCompanion('${npc.id}', document.getElementById('npc-companion-owner').value)">Make companion</button>
+    </div>`;
+  }
+  const owner = db.characters[comp.ownerCharId];
+  const others = chars.filter(c => c.id !== comp.ownerCharId);
+  return `<div class="sheet-panel npc-companion-panel" style="margin-top:0.8rem">
+    <div class="panel-title">Companion</div>
+    <div class="npc-companion-head">
+      ${_companionArtHtml(comp)}
+      <div>
+        <div class="npc-companion-owner">Companion of ${esc(_companionOwnerName(comp))}</div>
+        <div class="flex gap-1" style="flex-wrap:wrap;margin-top:0.35rem">
+          <label class="btn btn-sm">${comp.portrait ? 'Change art' : 'Upload art'}<input type="file" accept="image/*" style="display:none" onchange="uploadCompanionPortrait(event,'${comp.id}')"></label>
+          ${comp.portrait ? `<button class="btn btn-sm" onclick="adjustCompanionPortrait('${comp.id}')">Adjust</button><button class="btn btn-sm" onclick="removeCompanionPortrait('${comp.id}')">Remove</button>` : ''}
+        </div>
+      </div>
+    </div>
+    ${owner && !owner.shareToken ? `<p class="npc-companion-note">${esc(owner.name)} isn't shared with their player yet — use <strong>Share</strong> on ${esc(owner.name)}'s card so they can see this companion.</p>` : ''}
+    <div class="form-group"><label>Player access</label>
+      <select data-role="access" onchange="setCompanionAccess('${npc.id}', this.value)">
+        ${[['view', 'View only'], ['play', 'Run in play'], ['full', 'Full edit']].map(([v, l]) => `<option value="${v}"${comp.playerAccess === v ? ' selected' : ''}>${l}</option>`).join('')}
+      </select>
+    </div>
+    ${others.length ? `<div class="form-group"><label>Change owner</label>
+      <select data-role="owner" onchange="if(this.value) changeCompanionOwner('${npc.id}', this.value)">
+        <option value="">Choose a character…</option>${others.map(c => `<option value="${c.id}">${esc(c.name || 'Unnamed')}</option>`).join('')}
+      </select></div>` : ''}
+    ${_confirmEndCompanion === npc.id
+      ? `<div class="npc-companion-confirm">End the companionship? ${esc(_npcName(npc))} keeps their current HP.
+          <button class="btn btn-sm btn-danger" onclick="endCompanionship('${npc.id}')">End it</button>
+          <button class="btn btn-sm" onclick="_confirmEndCompanion=null;renderApp()">Keep</button></div>`
+      : `<button class="btn btn-sm btn-danger" onclick="_confirmEndCompanion='${npc.id}';renderApp()">End companionship</button>`}
+  </div>`;
+}
+
 // Initiative bonus: DEX from the stat block, else the number set on the NPC's page
 function _npcInitBonus(npc) {
   if (!npc) return 0;
@@ -1443,12 +1610,15 @@ function _applyMonsterToNpc(npcId, m) {
   const { statBlock, legendaryMax } = _statBlockFromMonster(m);
   npc.statBlock = statBlock; npc.statSource = m.name; npc.legendaryMax = legendaryMax;
   npc.ac = m.ac || npc.ac; npc.maxHP = m.hp || npc.maxHP; npc.hp = npc.maxHP; npc.tempHP = 0;
+  const comp = _companionForNpc(npc); if (comp) comp.hp = npc.maxHP;
+  _syncCompanionFromNpc(npc);
   _monsterPickNpcId = null;
   saveData(db); closeModal(); renderApp();
 }
 function removeNpcStatBlock(npcId) {
   const npc = db.npcs[npcId]; if (!npc) return;
   delete npc.statBlock; delete npc.statSource; delete npc.legendaryMax;
+  _syncCompanionFromNpc(npc);
   saveData(db); renderApp();
 }
 function saveNpcSheet() {
@@ -2985,9 +3155,9 @@ function renderPortraitCard(ch) {
     <div class="flex gap-1" style="flex-wrap:wrap;justify-content:center">
       <label class="btn btn-sm portrait-upload-btn">
         ${hasPortrait ? 'Change' : 'Upload Portrait'}
-        <input type="file" accept="image/*" onchange="uploadPortrait(event)" style="display:none">
+        <input type="file" accept="image/*" onchange="_portraitTarget=null;uploadPortrait(event)" style="display:none">
       </label>
-      ${hasPortrait ? `<button class="btn btn-sm portrait-upload-btn" onclick="openPortraitFramer(null)">Adjust</button>` : ''}
+      ${hasPortrait ? `<button class="btn btn-sm portrait-upload-btn" onclick="_portraitTarget=null;openPortraitFramer(null)">Adjust</button>` : ''}
       ${hasPortrait ? `<button class="btn btn-sm portrait-upload-btn" onclick="removePortrait()">Remove</button>` : ''}
     </div>
   </div>`;
@@ -3101,6 +3271,8 @@ function openPortraitCropModal(imageSrc) {
     ctx.drawImage(s.img, sx, sy, sw, sh, 0, 0, OUT, OUT);
     const dataUrl = out.toDataURL('image/jpeg', 0.85);
     closeModal();
+    // Companion art is stored on the companion card itself
+    if (_portraitTarget?.companionId) { const id = _portraitTarget.companionId; _portraitTarget = null; setCompanionPortrait(id, dataUrl); return; }
     // Upload to Firebase Storage (async), fall back to base64
     _savePortraitWithUpload(currentCharId, dataUrl);
   };
@@ -3154,7 +3326,7 @@ function openPortraitCropModal(imageSrc) {
 }
 
 function openPortraitFramer(newDataUrl) {
-  const ch = db.characters[currentCharId]; if (!ch) return;
+  const ch = _portraitTarget?.companionId ? (db.companions || {})[_portraitTarget.companionId] : db.characters[currentCharId]; if (!ch) return;
   const src = newDataUrl || ch.portrait;
   if (!src) return;
   const zoom = newDataUrl ? 100 : (ch.portraitZoom || 100);
@@ -3210,6 +3382,13 @@ function pfUpdate() {
 }
 
 function savePortrait() {
+  if (_portraitTarget?.companionId) {
+    const comp = (db.companions || {})[_portraitTarget.companionId]; _portraitTarget = null;
+    closeModal();
+    if (comp) _companionWrite(comp, { portraitZoom: parseInt(document.getElementById('pf-zoom')?.value) || 100,
+      portraitX: parseInt(document.getElementById('pf-x')?.value), portraitY: parseInt(document.getElementById('pf-y')?.value) });
+    renderApp(); return;
+  }
   const ch = db.characters[currentCharId]; if (!ch) return;
   const newSrc = window._pfSrc;
   ch.portraitZoom = parseInt(document.getElementById('pf-zoom')?.value) || 100;
@@ -9197,6 +9376,7 @@ function duplicateCharacter(charId) {
 
 function deleteCharacterFromPanel(charId) {
   showConfirm('Delete this character?', () => {
+    _endCompanionsOf(charId);
     const ch = db.characters[charId];
     if (ch && _isStorageUrl(ch.portrait)) _deletePortraitFromStorage(charId);
     delete db.characters[charId];
