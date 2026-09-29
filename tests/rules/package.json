@@ -1,0 +1,9 @@
+{
+  "name": "dnd-tracker-rules-tests",
+  "private": true,
+  "description": "Firestore security-rule tests (need Java 11+ for the emulator)",
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^4.0.1",
+    "firebase": "^11.0.0"
+  }
+}
