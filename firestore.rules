@@ -54,6 +54,22 @@ service cloud.firestore {
                                     'statBlock', 'statSource', 'legendaryMax']);
       }
       function changed() { return request.resource.data.diff(resource.data).affectedKeys(); }
+      function shortText(d, k) { return d.get(k, '') is string && d.get(k, '').size() <= 200; }
+      // The card a player leaves behind must still be well formed: numbers are numbers, text is
+      // short text, conditions and uses have their shapes, and art is an embedded image.
+      function validCard(d) {
+        return d.hp is number && d.maxHP is number && d.hp >= 0 && d.hp <= d.maxHP
+          && d.tempHP is number && d.tempHP >= 0
+          && d.ac is number && d.get('initBonus', 0) is number && d.get('legendaryMax', 0) is number
+          && shortText(d, 'name') && shortText(d, 'role') && shortText(d, 'race')
+          && shortText(d, 'location') && shortText(d, 'statSource')
+          && (d.get('statBlock', null) == null || d.get('statBlock', null) is map)
+          && d.get('conditions', []) is list && d.get('conditions', []).size() <= 30
+          && d.get('uses', {}) is map && d.get('uses', {}).size() <= 100
+          && (d.get('portrait', null) == null
+              || (d.portrait is string && d.portrait.size() < 300000
+                  && d.portrait.matches('^data:image/(jpeg|png|webp|gif);base64,[A-Za-z0-9+/=]*$')));
+      }
 
       allow get: if request.auth != null && resource.data.shareToken != null;
 
@@ -61,13 +77,7 @@ service cloud.firestore {
                     && resource.data.shareToken != null
                     && ((resource.data.playerAccess == 'play' && changed().hasOnly(playFields()))
                         || (resource.data.playerAccess == 'full' && changed().hasOnly(fullFields())))
-                    && request.resource.data.hp is number
-                    && request.resource.data.hp >= 0
-                    && request.resource.data.hp <= request.resource.data.maxHP
-                    && request.resource.data.tempHP is number
-                    && request.resource.data.tempHP >= 0
-                    && (!('portrait' in request.resource.data) || request.resource.data.portrait == null
-                        || (request.resource.data.portrait is string && request.resource.data.portrait.size() < 300000));
+                    && validCard(request.resource.data);
     }
 
   }

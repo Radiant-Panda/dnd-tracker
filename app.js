@@ -538,8 +538,7 @@ function _setupFirestoreListeners() {
         if (change.type === 'removed') {
           delete db.companions[change.doc.id];
         } else {
-          const comp = change.doc.data();
-          db.companions[comp.id || change.doc.id] = comp;
+          _onCompanionSnapshot(change.doc.data(), change.doc.id);
         }
       });
       _takeSnapshot(db);
@@ -1545,6 +1544,19 @@ function _companionWrite(comp, patch) {
   if (changed.some(k => !COMPANION_PLAY_FIELDS.includes(k))) _syncNpcFromCompanion(comp, changed);
   saveData(db);
 }
+// GM app: a companion card arrived from Firestore (the owning player may have changed it)
+function _onCompanionSnapshot(data, docId) {
+  db.companions = db.companions || {};
+  const id = data.id || docId;
+  const prev = db.companions[id];
+  const comp = sanitizeCompanion({ ...data, id }, CONDITIONS);
+  db.companions[id] = comp;
+  // In Full edit the player may change stats and names; copy what changed onto the NPC
+  if (prev && prev.playerAccess === 'full') {
+    const changed = COMPANION_FULL_FIELDS.filter(k => !COMPANION_PLAY_FIELDS.includes(k) && JSON.stringify(prev[k]) !== JSON.stringify(comp[k]));
+    if (changed.length) _syncNpcFromCompanion(comp, changed);
+  }
+}
 // Player view: send only the changed, allowed fields; the security rules check them again
 function _pvSaveCompanion(id, patch) {
   if (!IS_PLAYER_VIEW || !_firestoreReady || !_pvGmUid) return;
@@ -1566,7 +1578,7 @@ function _pvSyncCompanionListeners(ch) {
     if (_pvCompanionUnsubs[id]) return;
     _pvCompanionUnsubs[id] = _fireDb.doc(`users/${_pvGmUid}/companions/${id}`).onSnapshot(snap => {
       if (snap.metadata.hasPendingWrites) return;
-      if (snap.exists) db.companions[id] = snap.data(); else delete db.companions[id];
+      if (snap.exists) db.companions[id] = sanitizeCompanion({ ...snap.data(), id }, CONDITIONS); else delete db.companions[id];
       renderApp();
     }, () => { delete db.companions[id]; renderApp(); });   // gone or no longer shared
   });
@@ -1681,7 +1693,7 @@ function renderCompanionSheet(comp) {
     }).join('')}</div></div>` : '';
   const conds = comp.conditions || [];
   const condHtml = `<div class="sheet-panel"><div class="cs-section-label">Conditions</div>
-    <div class="condition-row">${conds.map(c => `<span class="condition-tag ${getConditionClass(c)}" onclick="openConditionRef('${condName(c)}')">${getConditionEmoji(c)} ${esc(condName(c))}${hpEdit ? ` <button class="companion-cond-remove" onclick="event.stopPropagation();companionToggleCondition('${id}','${condName(c)}')" title="Remove">×</button>` : ''}</span>`).join('') || '<span class="text-dim" style="font-size:0.8rem">None</span>'}
+    <div class="condition-row">${conds.map(c => `<span class="condition-tag ${getConditionClass(c)}" onclick="openConditionRef('${esc(jsStr(condName(c)))}')">${getConditionEmoji(c)} ${esc(condName(c))}${hpEdit ? ` <button class="companion-cond-remove" onclick="event.stopPropagation();companionToggleCondition('${id}','${esc(jsStr(condName(c)))}')" title="Remove">×</button>` : ''}</span>`).join('') || '<span class="text-dim" style="font-size:0.8rem">None</span>'}
       ${hpEdit ? `<select class="companion-cond-add" onchange="if(this.value){companionToggleCondition('${id}',this.value)}"><option value="">+ Condition</option>${CONDITIONS.filter(c => !conds.some(x => condName(x) === c)).map(c => `<option>${c}</option>`).join('')}</select>` : ''}
     </div></div>`;
   const field = (label, key, type = 'text') => can.has(key) && IS_PLAYER_VIEW
@@ -1704,10 +1716,10 @@ function renderCompanionSheet(comp) {
     </div>
     ${IS_PLAYER_VIEW && comp.playerAccess === 'view' ? `<p class="companion-note">Your GM is tracking this companion — you can view it and roll its attacks.</p>` : ''}
     <div class="sheet-panel companion-vitals">
-      <div class="companion-stat"><span class="stat-label">AC</span><span class="companion-stat-val">${comp.ac}</span></div>
+      <div class="companion-stat"><span class="stat-label">AC</span><span class="companion-stat-val">${esc(comp.ac)}</span></div>
       <div class="companion-stat"><span class="stat-label">Initiative</span><span class="companion-stat-val">${bonus >= 0 ? '+' : ''}${bonus}</span></div>
       ${speed ? `<div class="companion-stat"><span class="stat-label">Speed</span><span class="companion-stat-val companion-speed">${esc(speed)}</span></div>` : ''}
-      <div class="companion-stat companion-hp"><span class="stat-label">HP</span><span class="companion-stat-val">${comp.hp} / ${comp.maxHP}${comp.tempHP ? ` <span class="temp-hp-display">+${comp.tempHP} temp</span>` : ''}</span></div>
+      <div class="companion-stat companion-hp"><span class="stat-label">HP</span><span class="companion-stat-val">${esc(comp.hp)} / ${esc(comp.maxHP)}${comp.tempHP ? ` <span class="temp-hp-display">+${esc(comp.tempHP)} temp</span>` : ''}</span></div>
       ${hpEdit ? `<div class="companion-hp-controls">
         <input type="number" min="0" id="cdmg-${id}" placeholder="0" onkeydown="if(event.key==='Enter')companionDamage('${id}',this.value)"><button class="btn btn-sm btn-danger hp-dmg-btn" onclick="companionDamage('${id}',document.getElementById('cdmg-${id}').value)">Damage</button>
         <input type="number" min="0" id="cheal-${id}" placeholder="0" onkeydown="if(event.key==='Enter')companionHeal('${id}',this.value)"><button class="btn btn-sm" onclick="companionHeal('${id}',document.getElementById('cheal-${id}').value)">Heal</button>
@@ -2082,7 +2094,7 @@ function renderInitiativeTracker(campaign) {
               ${defeated?'<span class="defeated-tag">Defeated</span>':''}
             </div>
             <div class="init-stats">
-              <span>AC <strong>${cb.ac}</strong></span>
+              <span>AC <strong>${esc(cb.ac)}</strong></span>
               ${IS_PLAYER_VIEW
                 ? (hideNumbers ? `<span class="hp-status hp-status-${health.toLowerCase()}">${health}</span>`
                   : `<span>HP <strong>${cb.hp}</strong> / ${cb.maxHP}${cb.tempHP > 0 ? ` (<span class="temp-hp-display">+${cb.tempHP} temp</span>)` : ''}</span>`)
@@ -2723,8 +2735,8 @@ function _conditionRowHtml(i, conditions, opts = {}) {
   const tags = (conditions||[]).map(c=>{
     const name = condName(c);
     const dur = condDuration(c);
-    const durBadge = dur ? `<span class="cond-dur-badge">${dur}rd${dur!==1?'s':''}</span>` : '';
-    return `<span class="condition-tag ${getConditionClass(c)}" onclick="openConditionRef('${name}',${ref})" title="${dur ? dur+' round'+(dur!==1?'s':'')+' remaining' : 'Click to view rules'}">${getConditionEmoji(c)} ${name}${durBadge}</span>`;
+    const durBadge = dur ? `<span class="cond-dur-badge">${esc(dur)}rd${dur!==1?'s':''}</span>` : '';
+    return `<span class="condition-tag ${getConditionClass(c)}" onclick="openConditionRef('${esc(jsStr(name))}',${ref})" title="${dur ? esc(dur)+' round'+(dur!==1?'s':'')+' remaining' : 'Click to view rules'}">${getConditionEmoji(c)} ${esc(name)}${durBadge}</span>`;
   }).join('');
   const exhaustion = opts.exhaustion ? `<span class="condition-tag" onclick="openConditionRef('Exhausted',null)" title="Exhaustion level — set here or on the character sheet">${getConditionEmoji('Exhausted')} Exhaustion ${opts.exhaustion}</span>` : '';
   return `${tags}${exhaustion}${opts.readOnly ? '' : `<button class="btn btn-sm" onclick="openConditionPicker(${i})">+ Condition</button>`}`;
@@ -2753,7 +2765,7 @@ function openConditionRef(cond, combatantIdx) {
       ${ref.rules.map(r=>`<li>${esc(r)}</li>`).join('')}
     </ul>
     <div class="form-actions">
-      ${hasCombatant ? `<button class="btn btn-danger" onclick="removeCondition(${combatantIdx},'${cond}');closeModal()">Remove Condition</button>` : ''}
+      ${hasCombatant ? `<button class="btn btn-danger" onclick="removeCondition(${combatantIdx},'${esc(jsStr(cond))}');closeModal()">Remove Condition</button>` : ''}
       <button class="btn" onclick="closeModal()">Keep</button>
     </div>`);
 }
@@ -3116,25 +3128,25 @@ function renderCombatantStatBlock(sb, combatantIdx, opts = {}) {
   html += `<hr class="stat-block-divider">`;
   const speedStr = typeof sb.speed === 'string'
     ? esc(sb.speed)
-    : Object.entries(sb.speed||{}).map(([k,v])=>`${k} ${v}`).join(', ');
+    : Object.entries(sb.speed||{}).map(([k,v])=>`${esc(k)} ${esc(v)}`).join(', ');
   html += `<div><strong>Speed</strong> ${speedStr}</div>`;
   html += `<hr class="stat-block-divider">`;
   html += `<div class="ability-grid" style="margin:0.5rem 0">`;
   ['strength','dexterity','constitution','intelligence','wisdom','charisma'].forEach(a => {
-    html += `<div class="ability-box"><div class="ability-name">${a.slice(0,3).toUpperCase()}</div><div style="font-size:1rem;font-weight:bold;color:var(--gold)">${sb[a]}</div><div class="ability-mod">${abilityMod(sb[a])}</div></div>`;
+    html += `<div class="ability-box"><div class="ability-name">${a.slice(0,3).toUpperCase()}</div><div style="font-size:1rem;font-weight:bold;color:var(--gold)">${esc(sb[a])}</div><div class="ability-mod">${esc(abilityMod(Number(sb[a]) || 10))}</div></div>`;
   });
   html += `</div><hr class="stat-block-divider">`;
   if (sb.saving_throws) html += `<div><strong>Saving Throws</strong> ${esc(sb.saving_throws)}</div>`;
   if (sb.skills) html += `<div><strong>Skills</strong> ${esc(sb.skills)}</div>`;
-  if (sb.damage_resistances?.length) html += `<div><strong>Damage Resistances</strong> ${sb.damage_resistances.join(', ')}</div>`;
-  if (sb.damage_immunities?.length) html += `<div><strong>Damage Immunities</strong> ${sb.damage_immunities.join(', ')}</div>`;
+  if (sb.damage_resistances?.length) html += `<div><strong>Damage Resistances</strong> ${esc([].concat(sb.damage_resistances).join(', '))}</div>`;
+  if (sb.damage_immunities?.length) html += `<div><strong>Damage Immunities</strong> ${esc([].concat(sb.damage_immunities).join(', '))}</div>`;
   if (sb.damage_vulnerabilities?.length) html += `<div><strong>Damage Vulnerabilities</strong> ${esc(sb.damage_vulnerabilities.join(', '))}</div>`;
-  if (sb.condition_immunities?.length) html += `<div><strong>Condition Immunities</strong> ${sb.condition_immunities.join(', ')}</div>`;
+  if (sb.condition_immunities?.length) html += `<div><strong>Condition Immunities</strong> ${esc([].concat(sb.condition_immunities).join(', '))}</div>`;
   // Older combatants stored senses as { passive_perception }; newer ones keep the full text
-  const senseStr = typeof sb.senses === 'string' ? esc(sb.senses) : Object.entries(sb.senses||{}).map(([k,v])=>`${k.replace(/_/g,' ')} ${v}`).join(', ');
+  const senseStr = typeof sb.senses === 'string' ? esc(sb.senses) : Object.entries(sb.senses||{}).map(([k,v])=>`${esc(k.replace(/_/g,' '))} ${esc(v)}`).join(', ');
   if (senseStr) html += `<div><strong>Senses</strong> ${senseStr}</div>`;
   if (sb.languages) html += `<div><strong>Languages</strong> ${esc(sb.languages)}</div>`;
-  if (sb.challenge_rating !== undefined) html += `<div><strong>CR</strong> ${sb.challenge_rating} (${(sb.xp||0).toLocaleString()} XP)</div>`;
+  if (sb.challenge_rating !== undefined) html += `<div><strong>CR</strong> ${esc(sb.challenge_rating)} (${(Number(sb.xp)||0).toLocaleString()} XP)</div>`;
   html += `<hr class="stat-block-divider">`;
   if (sb.traits?.length) {
     html += `<div class="stat-block-section"><strong>Traits</strong>`;
@@ -3980,7 +3992,7 @@ function renderCombatSection(ch) {
     ${(ch.combat.conditions || []).length ? `<div class="sheet-conditions">
       <span class="cs-field-label">Conditions</span>
       ${ch.combat.conditions.map(c => { const n = condName(c), d = condDuration(c);
-        return `<span class="condition-tag ${getConditionClass(c)}" onclick="openConditionRef('${n}')" title="${d ? `${d} round${d !== 1 ? 's' : ''} left` : 'Click to view rules'}">${getConditionEmoji(c)} ${n}${d ? `<span class="cond-dur-badge">${d}rd${d !== 1 ? 's' : ''}</span>` : ''}</span>`; }).join('')}
+        return `<span class="condition-tag ${getConditionClass(c)}" onclick="openConditionRef('${esc(jsStr(n))}')" title="${d ? `${d} round${d !== 1 ? 's' : ''} left` : 'Click to view rules'}">${getConditionEmoji(c)} ${n}${d ? `<span class="cond-dur-badge">${d}rd${d !== 1 ? 's' : ''}</span>` : ''}</span>`; }).join('')}
     </div>` : ''}
     <div class="death-saves-row">
       <span class="cs-field-label">Death Saves</span>

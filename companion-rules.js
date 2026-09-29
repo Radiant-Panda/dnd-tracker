@@ -87,7 +87,30 @@ function buildCompanionRecord(npc, ownerCharId, campaignId, id, shareToken) {
   };
 }
 
+// A companion card can be written by a player, so treat what arrives as untrusted: numbers become
+// numbers, text becomes text, conditions must be known names, and art must be an embedded image.
+function sanitizeCompanion(data, conditionNames) {
+  const c = { ...(data || {}) };
+  const num = (v, dflt, min = -Infinity) => { const n = Number(v); return Number.isFinite(n) ? Math.max(min, n) : dflt; };
+  const str = v => (v === undefined || v === null ? '' : String(v)).slice(0, 200);
+  c.ac = num(c.ac, 10); c.maxHP = num(c.maxHP, 10, 0); c.hp = num(c.hp, 0, 0); c.tempHP = num(c.tempHP, 0, 0);
+  c.initBonus = num(c.initBonus, 0); c.legendaryMax = num(c.legendaryMax, 0, 0);
+  c.portraitZoom = num(c.portraitZoom, 100); c.portraitX = num(c.portraitX, 50); c.portraitY = num(c.portraitY, 50);
+  for (const k of ['name', 'role', 'race', 'location', 'statSource']) c[k] = str(c[k]);
+  if (!['view', 'play', 'full'].includes(c.playerAccess)) c.playerAccess = 'view';
+  const known = new Set(conditionNames || []);
+  c.conditions = (Array.isArray(c.conditions) ? c.conditions : []).map(x => {
+    if (typeof x === 'string') return known.has(x) ? x : null;
+    if (x && typeof x === 'object' && known.has(x.name)) { const d = num(x.duration, 0, 0); return d > 0 ? { name: x.name, duration: d } : x.name; }
+    return null;
+  }).filter(Boolean);
+  c.uses = Object.fromEntries(Object.entries(c.uses && typeof c.uses === 'object' ? c.uses : {}).map(([k, v]) => [k, num(v, 0, 0)]));
+  c.portrait = typeof c.portrait === 'string' && /^data:image\/(jpeg|png|webp|gif);base64,[A-Za-z0-9+/=]*$/.test(c.portrait) ? c.portrait : null;
+  if (c.statBlock !== null && typeof c.statBlock !== 'object') c.statBlock = null;
+  return c;
+}
+
 if (typeof module !== 'undefined') {
   module.exports = { COMPANION_PLAY_FIELDS, COMPANION_FULL_FIELDS, companionFieldsFor, cleanAbilityName, parseUses,
-    restoreUses, rechargeRoll, companionInitBonus, buildCompanionRecord };
+    restoreUses, rechargeRoll, companionInitBonus, buildCompanionRecord, sanitizeCompanion };
 }

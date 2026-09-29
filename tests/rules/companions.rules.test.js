@@ -44,6 +44,11 @@ const { doc, getDoc, setDoc, updateDoc, deleteDoc, collection, getDocs } = requi
   await test('a player cannot list companions', () => assertFails(getDocs(collection(env.authenticatedContext('anon').firestore(), 'users/gm/companions'))));
   await test('signed-out visitors cannot read it', () => assertFails(getDoc(doc(env.unauthenticatedContext().firestore(), 'users/gm/companions/c1'))));
 
+  await test('conditions must be a short list', () => assertFails(updateDoc(player(), { conditions: 'Prone' })));
+  await test('conditions list is capped', () => assertFails(updateDoc(player(), { conditions: Array(40).fill('Prone') })));
+  await test('uses must be a map', () => assertFails(updateDoc(player(), { uses: 'x' })));
+  await test('art must be an embedded image', () => assertFails(updateDoc(player(), { portrait: 'https://tracker.example/p.png' })));
+
   // View only
   await seed({ playerAccess: 'view' });
   await test('View only: player can still read', () => assertSucceeds(getDoc(player())));
@@ -56,6 +61,10 @@ const { doc, getDoc, setDoc, updateDoc, deleteDoc, collection, getDocs } = requi
   await test('Full edit: player can swap the stat block', () => assertSucceeds(updateDoc(player(), { statBlock: { actions: [] }, statSource: 'Knight', legendaryMax: 0, initBonus: 1 })));
   await test('Full edit: player still cannot change links or access', () => assertFails(updateDoc(player(), { ownerCharId: 'b' })));
   await test('Full edit: HP still capped at the new max', () => assertFails(updateDoc(player(), { maxHP: 12, hp: 15 })));
+  await test('Full edit: AC must be a number', () => assertFails(updateDoc(player(), { ac: '<img src=x onerror=alert(1)>' })));
+  await test('Full edit: initiative bonus must be a number', () => assertFails(updateDoc(player(), { initBonus: 'x' })));
+  await test('Full edit: names have a length limit', () => assertFails(updateDoc(player(), { name: 'x'.repeat(201) })));
+  await test('Full edit: the stat block must be a map', () => assertFails(updateDoc(player(), { statBlock: 'nope' })));
 
   // Not shared
   await seed({ shareToken: null });
