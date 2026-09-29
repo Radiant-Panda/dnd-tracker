@@ -22,7 +22,8 @@ This is stage 1 of three. Later stages build on the same companion record:
 | Topic | Decision |
 |---|---|
 | Kinds of companion wanted | NPC allies, class companions, sidekicks — built in that order |
-| Player control | "Run it in play": HP, temp HP, conditions, limited-use abilities, rolls. GM owns stats. |
+| Player control | Three settings per companion, chosen by the GM: **View only**, **Run in play** (default), **Full edit** — see "Player access settings". |
+| Art | Both the GM and the owning player can add and frame art for the companion (not in View only). |
 | What the player can see | Name; role, race and location; AC, HP; the stat block. **Not** personality, goals, relationships, secrets or notes. |
 | Storage approach | A separate companion record holding only shareable fields + play state (approach A). Can be revisited later. |
 | Owners | One owning character at a time; a character can have several companions. |
@@ -39,10 +40,12 @@ This is stage 1 of three. Later stages build on the same companion record:
 |---|---|---|
 | `id`, `campaignId`, `npcId`, `ownerCharId`, `createdAt` | GM app | links |
 | `shareToken` | GM app | random; must be non-null for players to read it (same model as shared characters) |
-| `name`, `role`, `race`, `location` | GM app | copied from the NPC |
-| `statSource`, `statBlock`, `legendaryMax` | GM app | copied from the NPC (`statBlock` has the combat tracker's shape) |
-| `ac`, `maxHP`, `initBonus` | GM app | copied from the NPC; `initBonus` = DEX mod from the stat block, else the NPC's initiative bonus |
-| `hp`, `tempHP`, `conditions`, `uses` | GM app **and owning player** | play state; `uses` = `{ [useKey]: usedCount }` |
+| `name`, `role`, `race`, `location` | GM app; player in `full` | copied from the NPC |
+| `statSource`, `statBlock`, `legendaryMax` | GM app; player in `full` | copied from the NPC (`statBlock` has the combat tracker's shape) |
+| `ac`, `maxHP`, `initBonus` | GM app; player in `full` | copied from the NPC; `initBonus` = DEX mod from the stat block, else the NPC's initiative bonus |
+| `playerAccess` | GM app | `'view'`, `'play'` (default) or `'full'` |
+| `hp`, `tempHP`, `conditions`, `uses` | GM app; player in `play` / `full` | play state; `uses` = `{ [useKey]: usedCount }` |
+| `portrait`, `portraitZoom`, `portraitX`, `portraitY` | GM app; player in `play` / `full` | art: a 400×400 JPEG data URL from the existing crop tool, plus the framing values |
 
 The NPC's private fields (`personality`, `goals`, `relationships`, `secrets`, `notes`) are never copied.
 
@@ -65,20 +68,34 @@ local storage, the initial Firestore load, the diff-based batch save (`_takeSnap
 
 ```
 match /users/{gmId}/companions/{companionId} {
+  function playFields() {
+    return ['hp', 'tempHP', 'conditions', 'uses', 'portrait', 'portraitZoom', 'portraitX', 'portraitY'];
+  }
+  function fullFields() {
+    return playFields().concat(['name', 'role', 'race', 'location', 'ac', 'maxHP', 'initBonus',
+                                'statBlock', 'statSource', 'legendaryMax']);
+  }
+  function changed() { return request.resource.data.diff(resource.data).affectedKeys(); }
+
   allow get: if request.auth != null && resource.data.shareToken != null;
   allow update: if request.auth != null
     && resource.data.shareToken != null
-    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['hp', 'tempHP', 'conditions', 'uses'])
+    && ((resource.data.playerAccess == 'play' && changed().hasOnly(playFields()))
+        || (resource.data.playerAccess == 'full' && changed().hasOnly(fullFields())))
     && request.resource.data.hp is number
     && request.resource.data.hp >= 0
-    && request.resource.data.hp <= resource.data.maxHP
+    && request.resource.data.hp <= request.resource.data.maxHP
     && request.resource.data.tempHP is number
-    && request.resource.data.tempHP >= 0;
+    && request.resource.data.tempHP >= 0
+    && (!('portrait' in request.resource.data) || request.resource.data.portrait == null
+        || (request.resource.data.portrait is string && request.resource.data.portrait.size() < 300000));
 }
 ```
 
 - The GM keeps full access through the existing `users/{gmId}/{document=**}` owner rule.
-- Players cannot create, delete, list, rename, change stats, or read NPC secrets (those never leave the NPC).
+- In **View only** (`playerAccess == 'view'`) players cannot change anything.
+- Players can never create, delete or list companions, change `playerAccess`, the links or the
+  `shareToken`, or read NPC secrets (those never leave the NPC). Stats and names change only in `full`.
 - As with shared characters today, a companion is reachable only by its long random ID. Reassignment
   therefore issues a **new ID** (see below) so a previous owner's remembered ID stops working.
 
@@ -89,18 +106,22 @@ match /users/{gmId}/companions/{companionId} {
 - Not a companion: **Make companion of** `[campaign character ▾]`. Suggests choosing a stat block first
   if the NPC has none (allowed without one; the player then sees AC and HP only).
 - Companion: "Companion of Aria" with **Change owner** `[▾]` and **End companionship** (in-page confirm).
+- **Player access** control with three options: *View only* / *Run in play* / *Full edit* (default *Run in play*).
+- **Art**: shows the companion's art with **Upload** / **Adjust** / **Remove**, using the character
+  sheet's crop and framing tools.
 - If the owner's character has no share link yet: a note to use **Share** on that character.
 - The NPC page's HP fields read and write the companion record while it is a companion.
 - Editing the NPC's name, role, race, location, AC, max HP, initiative bonus or stat block updates the
-  companion record's copies.
+  companion record's copies. In **Full edit**, the player's changes to those fields are copied back onto
+  the NPC by the GM app when it sees them. Whichever change is made last wins.
 
 ### Lifecycle (all done by the GM app, record and links changed together)
 
 | Action | Effect |
 |---|---|
-| Make companion | Create record (copy public fields; `hp`/`tempHP` from the NPC; `conditions: []`; `uses: {}`); add id to owner's `companionIds`; set `npc.companionId`. |
-| Change owner | Create a **new** record with a new id and `shareToken`, copying everything incl. play state; delete the old record; move the id between the two characters' `companionIds`; update `npc.companionId` and any combatant `companionId`. |
-| End companionship | Copy `hp`/`tempHP` back to the NPC; delete the record; remove from owner's `companionIds`; clear `npc.companionId`; tracker rows keep their current numbers but lose the link. |
+| Make companion | Create record (copy public fields and any NPC art; `hp`/`tempHP` from the NPC; `conditions: []`; `uses: {}`; `playerAccess: 'play'`); add id to owner's `companionIds`; set `npc.companionId`. |
+| Change owner | Create a **new** record with a new id and `shareToken`, copying everything incl. play state, art and `playerAccess`; delete the old record; move the id between the two characters' `companionIds`; update `npc.companionId` and any combatant `companionId`. |
+| End companionship | Copy `hp`/`tempHP` and the art back to the NPC; delete the record; remove from owner's `companionIds`; clear `npc.companionId`; tracker rows keep their current numbers but lose the link. |
 | Delete the NPC | End companionship first, then delete. |
 | Delete the owning character | End each of its companionships first (HP back to the NPCs). |
 
@@ -116,7 +137,7 @@ match /users/{gmId}/companions/{companionId} {
 - The player view listens to its character live; when `companionIds` changes it attaches or detaches
   companion listeners, so a reassigned companion disappears / appears without a reload.
 - **Companion sheet** (play-focused, not a full character sheet):
-  - Header: name, role • race • location, "Companion of Aria".
+  - Header: art, name, role • race • location, "Companion of Aria".
   - Vitals: AC, speed, initiative bonus, HP current / max / temp with Damage / Heal / Temp HP controls.
     Damage uses temp HP first. At 0 HP: **Down** marker.
   - Conditions: add / remove tags with the rules pop-up; durations count down in combat as today.
@@ -124,8 +145,17 @@ match /users/{gmId}/companions/{companionId} {
     each attack with **roll to hit** and **roll damage**.
   - Limited-use abilities as pips (next section).
   - **Long Rest** (HP to max, all uses back) and **Short Rest** (short-rest uses back).
-- Stats, name and stat block are not editable; player writes contain only `hp`, `tempHP`,
-  `conditions`, `uses`.
+
+### Player access settings
+
+| Setting | On the companion sheet the player can… |
+|---|---|
+| **View only** | view everything and roll dice. HP, conditions, pips, rest buttons and art controls are shown read-only, with a note that the GM is tracking this companion. |
+| **Run in play** | also change HP / temp HP, conditions and pips, use the rest buttons, and upload / adjust / remove art. |
+| **Full edit** | also edit name, role, race, location, AC, max HP and initiative bonus, and choose or remove the stat block from the monster search — the same fields as the GM's NPC page, minus the private ones. |
+
+The sheet updates live when the GM changes the setting. Writes from the player contain only the fields
+their setting allows, and the security rules reject anything else.
 
 ## Combat
 
@@ -163,17 +193,22 @@ New pure module `companion-rules.js` (loaded before `app.js`, unit-tested in Nod
   cleanup; rest restoration; building a companion record from an NPC (private fields excluded).
 - **Browser (puppeteer, from disk):** make / change owner (new id, play state kept, combatant relinked) /
   end companionship; delete NPC or owner ends it; player-view tabs appear and disappear on
-  reassignment; companion sheet hides private fields and has no stat editing; damage / heal / rests /
+  reassignment; companion sheet hides private fields; each access setting shows and hides the right
+  controls and switches live; art upload / adjust / remove by GM and player; Full edit changes copied back
+  to the NPC; damage / heal / rests /
   pips; combat sync both ways; quick add group; "Add all PCs" excludes companions; exact HP in player
   view; Down at 0 HP and not skipped.
 - **Security rules:** Firebase emulator tests (needs Java — check first; if missing, the user installs
-  it): player can update play fields, cannot change stats or name, cannot set `hp` above `maxHP` or
-  below 0, cannot create or delete; GM full access.
+  it): per setting — View only rejects every player write; Run in play allows play fields and art but not
+  stats or names; Full edit allows stats and names but never `playerAccess`, links or `shareToken`;
+  `hp` never above `maxHP` or below 0; art over the size limit rejected; players cannot create or delete;
+  GM full access.
 - Nothing is deployed or pushed without the user's go-ahead.
 
 ## Out of scope for stage 1
 
 Class companions and level scaling; sidekicks, levelling and death saves; companions acting on the
-owner's turn; companion portraits; players editing stats or seeing GM-private NPC fields; spell slots
+owner's turn; portraits for NPCs that are not companions (art is kept on the NPC for later); players
+seeing GM-private NPC fields; editing individual stat block entries (Full edit swaps whole stat blocks); spell slots
 for spellcasting NPCs beyond N/Day uses; fixing the other monster-data text glitches
 ("to hit to hit", "m,r +4").
