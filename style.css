@@ -185,6 +185,12 @@ main {
 .companion-art { position: relative; flex-shrink: 0; overflow: hidden; border-radius: 8px; border: 1px solid rgba(var(--accent-rgb),0.35); background: var(--tint-bg); }
 .companion-art img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .companion-art-empty { display: grid; place-items: center; color: var(--text-dim); font-size: 1.4rem; }
+/* Player view: character / companion tabs */
+.pv-tabs { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.8rem; }
+.pv-tab { background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 99px; padding: 0.35rem 0.9rem;
+  font-family: inherit; font-size: 0.85rem; cursor: pointer; }
+.pv-tab.active { background: var(--gold); color: var(--bg); border-color: var(--gold); }
+.pv-tab:focus-visible { outline: 2px solid var(--gold-lt); outline-offset: 2px; }
 .companion-sheet { display: grid; gap: 0.8rem; max-width: 900px; }
 .companion-head { display: flex; align-items: center; gap: 1rem; }
 .companion-head-text { display: grid; gap: 0.2rem; min-width: 0; }

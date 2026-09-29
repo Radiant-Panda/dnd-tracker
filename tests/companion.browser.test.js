@@ -148,6 +148,45 @@ const { launch, openApp } = require('./browser');
     } catch (e) { check('companion sheet runs', false, e.message + ' ' + (e.stack || '').split('\n')[1]); }
   });
 
+  // Task 5: player view
+  await pg.evaluate(() => {
+    const realSave = _pvSaveCompanion;
+    try {
+      const { aria, sildar } = setup();
+      const id = makeCompanion(sildar.id, aria.id); const comp = db.companions[id];
+      const writes = []; _pvSaveCompanion = (cid, patch) => writes.push({ cid, patch });
+      IS_PLAYER_VIEW = true; currentCharId = aria.id; currentView = 'character'; renderApp();
+      const tabs = () => document.querySelector('.pv-tabs')?.textContent || '';
+      check('tabs show the character and its companion', /Aria/.test(tabs()) && /Sildar \(companion\)/.test(tabs()), tabs());
+      pvShowTab(id);
+      check('the companion tab shows the companion sheet', !!document.querySelector('.companion-sheet') && !document.querySelector('.cs-header'), null);
+      companionDamage(id, 3);
+      check('a player write sends only play fields', writes.length === 1 && Object.keys(writes[0].patch).every(k => COMPANION_PLAY_FIELDS.includes(k)), writes);
+      check('…to this companion', writes[0]?.cid === id, writes[0]);
+      comp.playerAccess = 'view'; renderApp();
+      check('View only hides the controls', !document.querySelector('.companion-sheet .hp-dmg-btn') && /GM is tracking/.test(document.querySelector('.companion-sheet')?.textContent || ''), null);
+      const hpBefore = comp.hp; companionDamage(id, 3);
+      check('View only sends no writes and changes nothing', writes.length === 1 && comp.hp === hpBefore, { writes: writes.length, hp: comp.hp });
+      companionSetField(id, 'ac', 20);
+      check('Run in play / View only cannot change stats', comp.ac !== 20 && writes.length === 1, comp.ac);
+      comp.playerAccess = 'full'; renderApp();
+      check('Full edit shows the stat fields', !!document.querySelector('.companion-sheet [data-cfield="ac"]'), null);
+      companionSetField(id, 'ac', 20);
+      check('Full edit writes stats', comp.ac === 20 && writes.at(-1)?.patch?.ac === 20, writes.at(-1));
+      check('the player view never shows the NPC page or its secrets', !/marker/.test(document.getElementById('app').textContent), null);
+      // Review focus: a player's character save must not write back a stale companion list
+      const saved = []; const realFire = _fireDb, realReady = _firestoreReady, realGm = _pvGmUid;
+      _fireDb = { doc: () => ({ update: data => { saved.push(data); return Promise.resolve(); } }) }; _firestoreReady = true; _pvGmUid = 'gm';
+      _pvSaveCharacter();
+      _fireDb = realFire; _firestoreReady = realReady; _pvGmUid = realGm;
+      check('player character saves leave the companion list to the GM', saved.length === 1 && !('companionIds' in saved[0]), saved[0] && Object.keys(saved[0]).includes('companionIds'));
+      // Review focus: companion removed (reassigned or ended) while its tab is open
+      aria.companionIds = []; delete db.companions[id]; renderApp();
+      check('a removed companion drops its tab without errors', !/Sildar/.test(tabs()) && !!document.querySelector('.cs-header'), tabs());
+    } catch (e) { check('player view runs', false, e.message + ' ' + (e.stack || '').split('\n')[1]); }
+    finally { IS_PLAYER_VIEW = false; _pvSaveCompanion = realSave; }
+  });
+
   const out = await pg.evaluate(() => out);
   out.forEach(l => console.log(l));
   if (errs.length) console.log('PAGE ERRORS:', errs);
