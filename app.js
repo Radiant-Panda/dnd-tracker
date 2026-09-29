@@ -1534,6 +1534,146 @@ function _companionWrite(comp, patch) {
   saveData(db);
 }
 function _pvSaveCompanion(id, patch) { /* player view only — filled in with the Firestore write */ }
+
+// Fields the viewer may change on this companion: everything for the GM, the access setting's fields for a player
+function _companionEditable(comp) {
+  return new Set(IS_PLAYER_VIEW ? companionFieldsFor(comp?.playerAccess) : COMPANION_FULL_FIELDS);
+}
+function _companionById(id) { return (db.companions || {})[id] || null; }
+function companionDamage(id, amt) {
+  const comp = _companionById(id); amt = parseInt(amt) || 0; if (!comp || amt <= 0) return;
+  let remaining = amt, temp = comp.tempHP || 0;
+  if (temp > 0) { const absorbed = Math.min(temp, remaining); temp -= absorbed; remaining -= absorbed; }
+  _companionWrite(comp, { tempHP: temp, hp: Math.max(0, comp.hp - remaining) });
+  renderApp();
+}
+function companionHeal(id, amt) {
+  const comp = _companionById(id); amt = parseInt(amt) || 0; if (!comp || amt <= 0) return;
+  _companionWrite(comp, { hp: Math.min(comp.maxHP, comp.hp + amt) });
+  renderApp();
+}
+function companionSetTemp(id, amt) {
+  const comp = _companionById(id); if (!comp) return;
+  _companionWrite(comp, { tempHP: Math.max(0, parseInt(amt) || 0) });
+  renderApp();
+}
+function companionToggleCondition(id, cond) {
+  const comp = _companionById(id); if (!comp) return;
+  const has = (comp.conditions || []).some(c => condName(c) === cond);
+  _companionWrite(comp, { conditions: has ? comp.conditions.filter(c => condName(c) !== cond) : [...(comp.conditions || []), cond] });
+  renderApp();
+}
+// Tapping pip i: an unused pip spends up to it; a spent pip gives back it and those after it
+function companionToggleUse(id, key, pipIndex) {
+  const comp = _companionById(id); if (!comp) return;
+  const used = (comp.uses || {})[key] || 0;
+  _companionWrite(comp, { uses: { ...(comp.uses || {}), [key]: pipIndex < used ? pipIndex : pipIndex + 1 } });
+  renderApp();
+}
+function companionRollRecharge(id, key) {
+  const comp = _companionById(id); if (!comp) return false;
+  const def = parseUses(comp.statBlock).find(d => d.key === key); if (!def) return false;
+  const d6 = Math.floor(Math.random() * 6) + 1, ok = rechargeRoll(def, d6);
+  if (ok) _companionWrite(comp, { uses: { ...(comp.uses || {}), [key]: 0 } });
+  showToast(`${esc(comp.name)} — ${esc(def.label)}: rolled <strong>${d6}</strong> — ${ok ? 'recharged!' : 'not yet'}`);
+  renderApp();
+  return ok;
+}
+function companionRest(id, rest) {
+  const comp = _companionById(id); if (!comp) return;
+  const uses = restoreUses(comp.uses, parseUses(comp.statBlock), rest);
+  _companionWrite(comp, rest === 'long' ? { uses, hp: comp.maxHP, tempHP: 0 } : { uses });
+  renderApp();
+}
+function companionResetUse(id, key) {
+  const comp = _companionById(id); if (!comp) return;
+  _companionWrite(comp, { uses: { ...(comp.uses || {}), [key]: 0 } });
+  renderApp();
+}
+// Full edit: name, role, race, location, AC, max HP, initiative bonus
+function companionSetField(id, field, value) {
+  const comp = _companionById(id); if (!comp || !_companionEditable(comp).has(field)) return;
+  const v = ['ac', 'maxHP', 'initBonus'].includes(field) ? (parseInt(value) || 0) : String(value);
+  const patch = { [field]: v };
+  if (field === 'maxHP') patch.hp = Math.min(comp.hp, Math.max(0, v));
+  _companionWrite(comp, patch);
+}
+let _monsterPickCompanionId = null;   // set when a player (Full edit) or GM picks a stat block for a companion
+async function companionChooseStatBlock(id) { await openMonsterSearchModal(null, id); }
+function _applyMonsterToCompanion(id, m) {
+  const comp = _companionById(id); if (!comp || !m) return;
+  const { statBlock, legendaryMax } = _statBlockFromMonster(m);
+  _companionWrite(comp, { statBlock, statSource: m.name, legendaryMax, ac: m.ac || comp.ac, maxHP: m.hp || comp.maxHP,
+    hp: m.hp || comp.maxHP, initBonus: Math.floor(((statBlock.dexterity || 10) - 10) / 2), uses: {} });
+  _monsterPickCompanionId = null;
+  closeModal(); renderApp();
+}
+function renderCompanionSheet(comp) {
+  if (!comp) return '';
+  const can = _companionEditable(comp);
+  const id = comp.id, sb = comp.statBlock;
+  const bonus = comp.initBonus || 0;
+  const speed = sb ? (typeof sb.speed === 'string' ? sb.speed : Object.entries(sb.speed || {}).map(([k, v]) => `${k} ${v}`).join(', ')) : '';
+  const sub = [comp.role, comp.race, comp.location].filter(Boolean).map(esc).join(' &bull; ');
+  const down = comp.hp <= 0;
+  const hpEdit = can.has('hp');
+  const defs = parseUses(sb);
+  const uses = comp.uses || {};
+  const usesHtml = defs.length ? `<div class="sheet-panel"><div class="cs-section-label">Limited Uses</div>
+    <div class="use-pips">${defs.map(d => {
+      const used = Math.min(uses[d.key] || 0, d.max);
+      const rest = { long: 'Long rest', short: 'Short or long rest', recharge: `Recharge ${d.rechargeMin === 6 ? '6' : d.rechargeMin + '–6'}`, manual: 'Reset by hand' }[d.restore];
+      return `<div class="use-row"><span class="use-label">${esc(d.label)}</span>
+        <span class="use-pip-group">${Array.from({ length: d.max }, (_, i) => `<button class="use-pip${i < used ? ' spent' : ''}"${hpEdit ? ` onclick="companionToggleUse('${id}','${jsStr(d.key)}',${i})"` : ' disabled'} title="${i < used ? 'Used — tap to restore' : 'Available — tap to use'}"></button>`).join('')}</span>
+        <span class="use-rest text-dim">${rest}</span>
+        ${hpEdit && d.restore === 'recharge' && used ? `<button class="btn btn-sm" onclick="companionRollRecharge('${id}','${jsStr(d.key)}')">Roll recharge</button>` : ''}
+        ${hpEdit && d.restore === 'manual' && used ? `<button class="btn btn-sm" onclick="companionResetUse('${id}','${jsStr(d.key)}')">Reset</button>` : ''}
+      </div>`;
+    }).join('')}</div></div>` : '';
+  const conds = comp.conditions || [];
+  const condHtml = `<div class="sheet-panel"><div class="cs-section-label">Conditions</div>
+    <div class="condition-row">${conds.map(c => `<span class="condition-tag ${getConditionClass(c)}" onclick="openConditionRef('${condName(c)}')">${getConditionEmoji(c)} ${esc(condName(c))}${hpEdit ? ` <button class="companion-cond-remove" onclick="event.stopPropagation();companionToggleCondition('${id}','${condName(c)}')" title="Remove">×</button>` : ''}</span>`).join('') || '<span class="text-dim" style="font-size:0.8rem">None</span>'}
+      ${hpEdit ? `<select class="companion-cond-add" onchange="if(this.value){companionToggleCondition('${id}',this.value)}"><option value="">+ Condition</option>${CONDITIONS.filter(c => !conds.some(x => condName(x) === c)).map(c => `<option>${c}</option>`).join('')}</select>` : ''}
+    </div></div>`;
+  const field = (label, key, type = 'text') => can.has(key) && IS_PLAYER_VIEW
+    ? `<label class="companion-field">${label}<input type="${type}" data-cfield="${key}" value="${esc(comp[key] ?? '')}" onchange="companionSetField('${id}','${key}',this.value)"></label>` : '';
+  const fullEdit = IS_PLAYER_VIEW && can.has('statBlock') ? `<div class="sheet-panel companion-full-edit"><div class="cs-section-label">Edit companion</div>
+      <div class="companion-field-grid">${field('Name', 'name')}${field('Role', 'role')}${field('Race', 'race')}${field('Location', 'location')}${field('AC', 'ac', 'number')}${field('Max HP', 'maxHP', 'number')}${sb ? '' : field('Initiative bonus', 'initBonus', 'number')}</div>
+      <button class="btn btn-sm" onclick="companionChooseStatBlock('${id}')">${sb ? 'Change stat block' : 'Choose stat block'}</button></div>` : '';
+  const artEdit = can.has('portrait') ? `<div class="flex gap-1" style="flex-wrap:wrap;margin-top:0.4rem">
+      <label class="btn btn-sm">${comp.portrait ? 'Change art' : 'Upload art'}<input type="file" accept="image/*" style="display:none" onchange="uploadCompanionPortrait(event,'${id}')"></label>
+      ${comp.portrait ? `<button class="btn btn-sm" onclick="adjustCompanionPortrait('${id}')">Adjust</button><button class="btn btn-sm" onclick="removeCompanionPortrait('${id}')">Remove</button>` : ''}</div>` : '';
+  return `<div class="companion-sheet">
+    <div class="sheet-panel companion-head">
+      ${_companionArtHtml(comp, 96)}
+      <div class="companion-head-text">
+        <h2 class="companion-name">${esc(comp.name)}${down ? ' <span class="defeated-tag">Down</span>' : ''}</h2>
+        ${sub ? `<div class="card-sub">${sub}</div>` : ''}
+        <div class="companion-owner">Companion of ${esc(_companionOwnerName(comp))}${comp.statSource ? ` &middot; ${esc(comp.statSource)} stats` : ''}</div>
+        ${artEdit}
+      </div>
+    </div>
+    ${IS_PLAYER_VIEW && comp.playerAccess === 'view' ? `<p class="companion-note">Your GM is tracking this companion — you can view it and roll its attacks.</p>` : ''}
+    <div class="sheet-panel companion-vitals">
+      <div class="companion-stat"><span class="stat-label">AC</span><span class="companion-stat-val">${comp.ac}</span></div>
+      <div class="companion-stat"><span class="stat-label">Initiative</span><span class="companion-stat-val">${bonus >= 0 ? '+' : ''}${bonus}</span></div>
+      ${speed ? `<div class="companion-stat"><span class="stat-label">Speed</span><span class="companion-stat-val companion-speed">${esc(speed)}</span></div>` : ''}
+      <div class="companion-stat companion-hp"><span class="stat-label">HP</span><span class="companion-stat-val">${comp.hp} / ${comp.maxHP}${comp.tempHP ? ` <span class="temp-hp-display">+${comp.tempHP} temp</span>` : ''}</span></div>
+      ${hpEdit ? `<div class="companion-hp-controls">
+        <input type="number" min="0" id="cdmg-${id}" placeholder="0" onkeydown="if(event.key==='Enter')companionDamage('${id}',this.value)"><button class="btn btn-sm btn-danger hp-dmg-btn" onclick="companionDamage('${id}',document.getElementById('cdmg-${id}').value)">Damage</button>
+        <input type="number" min="0" id="cheal-${id}" placeholder="0" onkeydown="if(event.key==='Enter')companionHeal('${id}',this.value)"><button class="btn btn-sm" onclick="companionHeal('${id}',document.getElementById('cheal-${id}').value)">Heal</button>
+        <input type="number" min="0" id="ctemp-${id}" placeholder="Temp" value="${comp.tempHP || ''}" onchange="companionSetTemp('${id}',this.value)">
+      </div>
+      <div class="companion-rests"><button class="btn btn-sm" onclick="companionRest('${id}','short')">Short Rest</button><button class="btn btn-sm" onclick="companionRest('${id}','long')">Long Rest</button></div>` : ''}
+    </div>
+    ${condHtml}
+    ${usesHtml}
+    ${fullEdit}
+    <div class="sheet-panel"><div class="cs-section-label">Stat Block</div>
+      ${sb ? `<div class="npc-sb-body">${renderCombatantStatBlock(sb, null, { quickBar: true, source: 'c:' + id })}</div>` : `<p class="text-dim" style="font-size:0.82rem;margin:0">No stat block yet.</p>`}
+    </div>
+  </div>`;
+}
 function setCompanionPortrait(companionId, dataUrl, zoom = 100, x = 50, y = 50) {
   const comp = (db.companions || {})[companionId]; if (!comp) return;
   _companionWrite(comp, { portrait: dataUrl, portraitZoom: zoom, portraitX: x, portraitY: y });
@@ -2561,9 +2701,11 @@ const MONSTER_BOOK_COLORS = {
 };
 
 let _monsterPickNpcId = null;   // set when choosing a stat block for an NPC
-async function openMonsterSearchModal(pickForNpcId = null) {
+async function openMonsterSearchModal(pickForNpcId = null, pickForCompanionId = null) {
   _monsterPickNpcId = pickForNpcId && db.npcs[pickForNpcId] ? pickForNpcId : null;
-  const title = _monsterPickNpcId ? `Choose a stat block for ${esc(_npcName(db.npcs[_monsterPickNpcId]))}` : '&#128269; Monster Search';
+  _monsterPickCompanionId = pickForCompanionId && _companionById(pickForCompanionId) ? pickForCompanionId : null;
+  const pickName = _monsterPickNpcId ? _npcName(db.npcs[_monsterPickNpcId]) : _monsterPickCompanionId ? _companionById(_monsterPickCompanionId).name : null;
+  const title = pickName ? `Choose a stat block for ${esc(pickName)}` : '&#128269; Monster Search';
   openModal(`<h2>${title}</h2>
     <div class="flex gap-1" style="margin-bottom:0.5rem">
       <input type="text" id="monster-query" placeholder="Search monsters..." style="flex:1" oninput="searchMonsters()">
@@ -2706,7 +2848,7 @@ function renderMonsterStatBlock(m) {
 
     const _section = (title, arr) => {
       if (!arr?.length) return '';
-      return sectionDivider + `<div class="stat-section-title">${title}</div>` + arr.map(t => `<div class="stat-entry"><strong>${esc(t.name)}.</strong> ${esc(t.desc)}</div>`).join('');
+      return sectionDivider + `<div class="stat-section-title">${title}</div>` + arr.map(t => `<div class="stat-entry"><strong>${esc(cleanAbilityName(t.name))}.</strong> ${esc(t.desc)}</div>`).join('');
     };
     body += _section('Traits', m.traits);
     body += _section('Actions', m.actions);
@@ -2729,7 +2871,9 @@ function renderMonsterStatBlock(m) {
       <div class="sb-body">${body}</div>
     </div>
     <div class="sb-footer">
-      ${_monsterPickNpcId && db.npcs[_monsterPickNpcId]
+      ${_monsterPickCompanionId && _companionById(_monsterPickCompanionId)
+        ? `<button class="btn btn-primary" style="width:100%" onclick="_applyMonsterToCompanion(_monsterPickCompanionId, _pendingMonster)">Use for ${esc(_companionById(_monsterPickCompanionId).name)}</button>`
+        : _monsterPickNpcId && db.npcs[_monsterPickNpcId]
         ? `<button class="btn btn-primary" style="width:100%" onclick="_applyMonsterToNpc(_monsterPickNpcId, _pendingMonster)">Use for ${esc(_npcName(db.npcs[_monsterPickNpcId]))}</button>`
         : `<button class="btn btn-primary" style="width:100%" onclick="addMonsterToCombat(_pendingMonster)">+ Add to Initiative</button>`}
     </div>`;
@@ -2814,7 +2958,10 @@ function showActionPopover(combatantIdx, actionIdx, actionType) {
   // Close any existing popover
   document.querySelectorAll('.action-popover').forEach(el => el.remove());
 
-  const sb = getInitiative().combatants[combatantIdx].statBlock;
+  const sb = typeof combatantIdx === 'string' && combatantIdx.startsWith('c:')
+    ? (db.companions || {})[combatantIdx.slice(2)]?.statBlock
+    : getInitiative().combatants[combatantIdx]?.statBlock;
+  if (!sb) return;
   const actionList = actionType === 'legendary' ? sb.legendary_actions :
                      actionType === 'reaction' ? sb.reactions :
                      actionType === 'bonus' ? sb.bonus_actions : sb.actions;
@@ -2825,7 +2972,7 @@ function showActionPopover(combatantIdx, actionIdx, actionType) {
   const btn = document.getElementById(`action-btn-${combatantIdx}-${actionType}-${actionIdx}`);
 
   let popHtml = `<div class="action-popover" id="action-popover-${combatantIdx}">`;
-  popHtml += `<div class="action-popover-header"><strong>${esc(action.name)}</strong><button class="action-popover-close" onclick="this.closest('.action-popover').remove()">&times;</button></div>`;
+  popHtml += `<div class="action-popover-header"><strong>${esc(cleanAbilityName(action.name))}</strong><button class="action-popover-close" onclick="this.closest('.action-popover').remove()">&times;</button></div>`;
 
   if (attack.attackBonus || attack.damageDice) {
     popHtml += `<div class="action-popover-attack">`;
@@ -2880,7 +3027,8 @@ function renderCombatantStatBlock(sb, combatantIdx, opts = {}) {
     allActions.forEach(a => {
       const atk = parseAttackInfo(a.desc||'');
       const badge = atk.attackBonus ? ` <span class="action-badge">${atk.attackBonus}</span>` : '';
-      html += `<button class="btn btn-sm action-quick-btn" id="action-btn-${combatantIdx}-${a.type}-${a.idx}" onclick="showActionPopover(${combatantIdx},${a.idx},'${a.type}')">${esc(a.name)}${badge}</button>`;
+      const src = opts.source ? `'${opts.source}'` : combatantIdx;
+      html += `<button class="btn btn-sm action-quick-btn" id="action-btn-${opts.source || combatantIdx}-${a.type}-${a.idx}" onclick="showActionPopover(${src},${a.idx},'${a.type}')">${esc(cleanAbilityName(a.name))}${badge}</button>`;
     });
     html += `</div><hr class="stat-block-divider">`;
   }
@@ -2911,27 +3059,27 @@ function renderCombatantStatBlock(sb, combatantIdx, opts = {}) {
   html += `<hr class="stat-block-divider">`;
   if (sb.traits?.length) {
     html += `<div class="stat-block-section"><strong>Traits</strong>`;
-    sb.traits.forEach(a => { html += `<div class="stat-block-entry"><em>${esc(a.name)}.</em> ${esc(a.desc||'')}</div>`; });
+    sb.traits.forEach(a => { html += `<div class="stat-block-entry"><em>${esc(cleanAbilityName(a.name))}.</em> ${esc(a.desc||'')}</div>`; });
     html += `</div>`;
   }
   if (sb.actions?.length) {
     html += `<div class="stat-block-section"><strong>Actions</strong>`;
-    sb.actions.forEach(a => { html += `<div class="stat-block-entry"><em>${esc(a.name)}.</em> ${esc(a.desc||'')}</div>`; });
+    sb.actions.forEach(a => { html += `<div class="stat-block-entry"><em>${esc(cleanAbilityName(a.name))}.</em> ${esc(a.desc||'')}</div>`; });
     html += `</div>`;
   }
   if (sb.bonus_actions?.length) {
     html += `<div class="stat-block-section"><strong>Bonus Actions</strong>`;
-    sb.bonus_actions.forEach(a => { html += `<div class="stat-block-entry"><em>${esc(a.name)}.</em> ${esc(a.desc||'')}</div>`; });
+    sb.bonus_actions.forEach(a => { html += `<div class="stat-block-entry"><em>${esc(cleanAbilityName(a.name))}.</em> ${esc(a.desc||'')}</div>`; });
     html += `</div>`;
   }
   if (sb.reactions?.length) {
     html += `<div class="stat-block-section"><strong>Reactions</strong>`;
-    sb.reactions.forEach(a => { html += `<div class="stat-block-entry"><em>${esc(a.name)}.</em> ${esc(a.desc||'')}</div>`; });
+    sb.reactions.forEach(a => { html += `<div class="stat-block-entry"><em>${esc(cleanAbilityName(a.name))}.</em> ${esc(a.desc||'')}</div>`; });
     html += `</div>`;
   }
   if (sb.legendary_actions?.length) {
     html += `<div class="stat-block-section"><strong>Legendary Actions</strong>`;
-    sb.legendary_actions.forEach(a => { html += `<div class="stat-block-entry"><em>${esc(a.name)}.</em> ${esc(a.desc||'')}</div>`; });
+    sb.legendary_actions.forEach(a => { html += `<div class="stat-block-entry"><em>${esc(cleanAbilityName(a.name))}.</em> ${esc(a.desc||'')}</div>`; });
     html += `</div>`;
   }
   return html;
