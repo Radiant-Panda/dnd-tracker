@@ -69,4 +69,22 @@ test('fields allowed per access setting', () => {
   assert.deepStrictEqual(C.companionFieldsFor('play'), C.COMPANION_PLAY_FIELDS);
   assert.ok(C.companionFieldsFor('full').includes('statBlock') && !C.companionFieldsFor('full').includes('playerAccess'));
 });
+test('sanitizeCompanion forces numbers, strings and known access values', () => {
+  const c = C.sanitizeCompanion({ id: 'c', ac: '<b>', maxHP: '30', hp: 'x', tempHP: -3, initBonus: null, legendaryMax: 'y',
+    name: 42, role: undefined, playerAccess: 'admin', portraitZoom: 'z' }, ['Prone']);
+  assert.deepStrictEqual({ ac: c.ac, maxHP: c.maxHP, hp: c.hp, tempHP: c.tempHP, initBonus: c.initBonus, legendaryMax: c.legendaryMax, name: c.name, role: c.role, playerAccess: c.playerAccess, portraitZoom: c.portraitZoom },
+    { ac: 10, maxHP: 30, hp: 0, tempHP: 0, initBonus: 0, legendaryMax: 0, name: '42', role: '', playerAccess: 'view', portraitZoom: 100 });
+});
+test('sanitizeCompanion keeps only known conditions and numeric uses', () => {
+  const c = C.sanitizeCompanion({ conditions: ['Prone', "x'); alert(1); ('", { name: 'Poisoned', duration: '3' }, { name: '<img>', duration: 2 }, 5],
+    uses: { a: 1, b: '<x>', c: -2 } }, ['Prone', 'Poisoned']);
+  assert.deepStrictEqual(c.conditions, ['Prone', { name: 'Poisoned', duration: 3 }]);
+  assert.deepStrictEqual(c.uses, { a: 1, b: 0, c: 0 });
+});
+test('sanitizeCompanion only accepts embedded image art', () => {
+  assert.strictEqual(C.sanitizeCompanion({ portrait: 'https://example.com/p.png' }, []).portrait, null);
+  assert.strictEqual(C.sanitizeCompanion({ portrait: 'javascript:alert(1)' }, []).portrait, null);
+  assert.strictEqual(C.sanitizeCompanion({ portrait: 'data:image/jpeg;base64,AAAA' }, []).portrait, 'data:image/jpeg;base64,AAAA');
+});
+
 console.log(`\n${passed} passed`);

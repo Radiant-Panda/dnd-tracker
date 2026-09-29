@@ -224,6 +224,39 @@ const { launch, openApp } = require('./browser');
     } catch (e) { check('combat runs', false, e.message + ' ' + (e.stack || '').split('\n')[1]); }
   });
 
+  // Final review fixes: data a player can write is treated as untrusted
+  await pg.evaluate(() => {
+    try {
+      const { aria, sildar } = setup();
+      const id = makeCompanion(sildar.id, aria.id);
+      window.__pwn = 0;
+      const evil = '<img src=x onerror="window.__pwn=1">';
+      // What a hostile player could write straight to Firestore, as the GM's app receives it
+      _onCompanionSnapshot({ ...db.companions[id], ac: evil, maxHP: 52, initBonus: evil, name: evil,
+        conditions: ["Prone'); window.__pwn=1; ('", { name: evil, duration: 2 }, 'Poisoned'],
+        statBlock: { ...db.companions[id].statBlock, damage_resistances: [evil], condition_immunities: [evil], challenge_rating: evil, strength: evil, senses: { [evil]: evil } },
+        portrait: 'https://tracker.example/pixel.png' });
+      const comp = db.companions[id];
+      check('numbers from a player are forced to numbers', typeof comp.ac === 'number' && typeof comp.initBonus === 'number', { ac: comp.ac, init: comp.initBonus });
+      check('only real condition names are kept', JSON.stringify(comp.conditions.map(c => typeof c === 'string' ? c : c.name)) === '["Poisoned"]', comp.conditions);
+      check('art must be an embedded image', comp.portrait === null, comp.portrait);
+      quickAddCombatant(id, 'companion'); _confirmQuickAdd(); showCampaign('cC', 'initiative');
+      document.querySelectorAll('.initiative-row .condition-tag').forEach(t => { try { t.click(); } catch (e) {} }); closeModal();
+      const ci = getInitiative().combatants.findIndex(c => c.companionId === id); toggleStatBlock(ci);
+      showNpc(sildar.id);
+      document.getElementById('app').insertAdjacentHTML('beforeend', renderCompanionSheet(comp) + renderCombatantStatBlock(comp.statBlock, null, { quickBar: false }));
+      check('no injected elements anywhere', !document.querySelector('#app img[src="x"]'), document.querySelector('#app img[src="x"]')?.outerHTML);
+      check('no injected script ran', window.__pwn === 0, window.__pwn);
+      // Full edit changes made by the player reach the NPC page when the GM's app receives them
+      setCompanionAccess(sildar.id, 'full');
+      _onCompanionSnapshot({ ...db.companions[id], ac: 19, role: 'Veteran', name: 'Sir Sildar' });
+      check('player Full edit changes are copied onto the NPC', sildar.ac === 19 && sildar.role === 'Veteran' && sildar.name === 'Sir Sildar', { ac: sildar.ac, role: sildar.role, name: sildar.name });
+      setCompanionAccess(sildar.id, 'play');
+      _onCompanionSnapshot({ ...db.companions[id], ac: 11 });
+      check('stat changes are not copied onto the NPC outside Full edit', sildar.ac === 19, sildar.ac);
+    } catch (e) { check('untrusted data checks run', false, e.message + ' ' + (e.stack || '').split('\n')[1]); }
+  });
+
   const out = await pg.evaluate(() => out);
   out.forEach(l => console.log(l));
   if (errs.length) console.log('PAGE ERRORS:', errs);
