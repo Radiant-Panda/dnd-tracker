@@ -41,5 +41,34 @@ service cloud.firestore {
                     && request.resource.data.id == resource.data.id;
     }
 
+    // Companions: the shareable part of an NPC plus its play state, run by the owning player.
+    // "get" only (no listing). What a player may change depends on the GM's playerAccess setting:
+    //   'view' — nothing; 'play' — HP, temp HP, conditions, uses and art; 'full' — also stats and names.
+    // Links (owner, NPC, campaign), the share token and playerAccess itself are GM-only.
+    match /users/{gmId}/companions/{companionId} {
+      function playFields() {
+        return ['hp', 'tempHP', 'conditions', 'uses', 'portrait', 'portraitZoom', 'portraitX', 'portraitY'];
+      }
+      function fullFields() {
+        return playFields().concat(['name', 'role', 'race', 'location', 'ac', 'maxHP', 'initBonus',
+                                    'statBlock', 'statSource', 'legendaryMax']);
+      }
+      function changed() { return request.resource.data.diff(resource.data).affectedKeys(); }
+
+      allow get: if request.auth != null && resource.data.shareToken != null;
+
+      allow update: if request.auth != null
+                    && resource.data.shareToken != null
+                    && ((resource.data.playerAccess == 'play' && changed().hasOnly(playFields()))
+                        || (resource.data.playerAccess == 'full' && changed().hasOnly(fullFields())))
+                    && request.resource.data.hp is number
+                    && request.resource.data.hp >= 0
+                    && request.resource.data.hp <= request.resource.data.maxHP
+                    && request.resource.data.tempHP is number
+                    && request.resource.data.tempHP >= 0
+                    && (!('portrait' in request.resource.data) || request.resource.data.portrait == null
+                        || (request.resource.data.portrait is string && request.resource.data.portrait.size() < 300000));
+    }
+
   }
 }
