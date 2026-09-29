@@ -26,7 +26,7 @@ const _FS_DEBOUNCE = 1500;   // ms to wait before writing to Firestore
 let _FS_USER = 'local';      // authenticated user's UID (set on sign-in)
 
 // Snapshot of each doc's JSON — used for change detection
-let _dbSnap = { campaigns: {}, characters: {}, npcs: {} };
+let _dbSnap = { campaigns: {}, characters: {}, npcs: {}, companions: {} };
 
 // Flag to suppress Firestore re-writes when we're applying a Firestore snapshot
 let _fromFirestore = false;
@@ -104,7 +104,7 @@ function signOut() {
   _pvListeners = [];
   // Clear local state
   _FS_USER = 'local';
-  db = { campaigns: [], characters: {}, npcs: {} };
+  db = { campaigns: [], characters: {}, npcs: {}, companions: {} };
   currentView = 'campaigns';
   currentCampaignId = null;
   currentCharId = null;
@@ -148,10 +148,11 @@ async function _initDataForUser(hasLocalData) {
   }
   const base = `users/${_FS_USER}`;
   try {
-    const [campSnap, charSnap, npcSnap] = await Promise.all([
+    const [campSnap, charSnap, npcSnap, compSnap] = await Promise.all([
       _fireDb.collection(`${base}/campaigns`).get(),
       _fireDb.collection(`${base}/characters`).get(),
       _fireDb.collection(`${base}/npcs`).get(),
+      _fireDb.collection(`${base}/companions`).get(),
     ]);
 
     const hasRemoteData = !campSnap.empty || !charSnap.empty || !npcSnap.empty;
@@ -177,6 +178,8 @@ async function _initDataForUser(hasLocalData) {
       db.campaigns  = remoteCampaigns;
       db.characters = remoteChars;
       db.npcs       = remoteNpcs;
+      db.companions = {};
+      compSnap.forEach(doc => { const c = doc.data(); db.companions[c.id || doc.id] = c; });
       try { localStorage.setItem(STORAGE_KEY, JSON.stringify(db)); } catch (_) {}
 
       renderApp();
@@ -213,7 +216,7 @@ async function _initDataForUser(hasLocalData) {
 
 async function _migrateLocalToCloud() {
   if (!_firestoreReady) return;
-  _takeSnapshot({ campaigns: [], characters: {}, npcs: {} });
+  _takeSnapshot({ campaigns: [], characters: {}, npcs: {}, companions: {} });
   await _writeChangesToFirestore(db);
   showToast('<span style="color:#22c55e">&#10003; Data synced to cloud!</span>', 3000);
 }
@@ -318,10 +321,11 @@ function _queuePortraitMigration(charId) {
 
 // Take a snapshot of the current db state for change detection
 function _takeSnapshot(data) {
-  _dbSnap = { campaigns: {}, characters: {}, npcs: {} };
+  _dbSnap = { campaigns: {}, characters: {}, npcs: {}, companions: {} };
   (data.campaigns || []).forEach(c => { _dbSnap.campaigns[c.id] = JSON.stringify(c); });
   Object.entries(data.characters || {}).forEach(([id, ch]) => { _dbSnap.characters[id] = JSON.stringify(ch); });
   Object.entries(data.npcs || {}).forEach(([id, npc]) => { _dbSnap.npcs[id] = JSON.stringify(npc); });
+  Object.entries(data.companions || {}).forEach(([id, c]) => { _dbSnap.companions[id] = JSON.stringify(c); });
   window._dbSnap = _dbSnap; // keep window reference in sync for player listeners
 }
 
@@ -384,6 +388,20 @@ async function _writeChangesToFirestore(data) {
   });
   Object.keys(_dbSnap.npcs).forEach(id => {
     if (!curNpcs[id]) { batch.delete(_fireDb.doc(`${base}/npcs/${id}`)); changeCount++; }
+  });
+
+  // ── Companions ──
+  const curComps = {};
+  Object.entries(data.companions || {}).forEach(([id, comp]) => {
+    const json = JSON.stringify(comp);
+    curComps[id] = json;
+    if (_dbSnap.companions[id] !== json) {
+      batch.set(_fireDb.doc(`${base}/companions/${id}`), JSON.parse(json));
+      changeCount++;
+    }
+  });
+  Object.keys(_dbSnap.companions || {}).forEach(id => {
+    if (!curComps[id]) { batch.delete(_fireDb.doc(`${base}/companions/${id}`)); changeCount++; }
   });
 
   if (changeCount === 0) return;
@@ -509,6 +527,27 @@ function _setupFirestoreListeners() {
       renderApp();
     }, err => console.warn('[Firestore] NPCs listener error:', err))
   );
+
+  // Companions listener (players change HP, conditions, uses and art from their view)
+  _snapshotUnsubs.push(
+    _fireDb.collection(`${base}/companions`).onSnapshot(snap => {
+      if (snap.metadata.hasPendingWrites) return;
+      _fromFirestore = true;
+      db.companions = db.companions || {};
+      snap.docChanges().forEach(change => {
+        if (change.type === 'removed') {
+          delete db.companions[change.doc.id];
+        } else {
+          const comp = change.doc.data();
+          db.companions[comp.id || change.doc.id] = comp;
+        }
+      });
+      _takeSnapshot(db);
+      saveData(db);
+      _fromFirestore = false;
+      renderApp();
+    }, err => console.warn('[Firestore] Companions listener error:', err))
+  );
 }
 
 // ── Async init — sets up Firebase and auth listener ─────────────────────────
@@ -581,6 +620,7 @@ async function _initPlayerView() {
     db.campaigns = [camp];
     db.characters = { [ch.id]: ch };
     db.npcs = {};
+    db.companions = {};
 
     currentCampaignId = camp.id || _PV_CAMPAIGN;
     currentCharId = ch.id || _PV_PLAYER;
@@ -872,12 +912,13 @@ function migrateCharacter(ch) {
 function loadData() {
   try {
     const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) || localStorage.getItem(STORAGE_KEY_BACKUP));
-    if (!raw) return { campaigns: [], characters: {}, npcs: {} };
+    if (!raw) return { campaigns: [], characters: {}, npcs: {}, companions: {} };
     if (!raw.npcs) raw.npcs = {};
+    if (!raw.companions) raw.companions = {};
     raw.campaigns.forEach(c => migrateCampaign(c));
     Object.values(raw.characters).forEach(ch => migrateCharacter(ch));
     return raw;
-  } catch { return { campaigns: [], characters: {}, npcs: {} }; }
+  } catch { return { campaigns: [], characters: {}, npcs: {}, companions: {} }; }
 }
 
 function saveData(data) {
@@ -1053,11 +1094,15 @@ function updateCampaign(id) {
 }
 function deleteCampaign(id) {
   showConfirm('Delete this campaign and all its characters & NPCs?', () => {
-    const c = db.campaigns.find(c => c.id === id);
-    if (c) { (c.characters||[]).forEach(cid => delete db.characters[cid]); (c.npcs||[]).forEach(nid => delete db.npcs[nid]); }
-    db.campaigns = db.campaigns.filter(c => c.id !== id);
+    _deleteCampaignData(id);
     saveData(db); renderApp();
   });
+}
+function _deleteCampaignData(id) {
+  const c = db.campaigns.find(c => c.id === id);
+  if (c) { (c.characters||[]).forEach(cid => delete db.characters[cid]); (c.npcs||[]).forEach(nid => delete db.npcs[nid]); }
+  Object.values(db.companions || {}).filter(comp => comp.campaignId === id).forEach(comp => delete db.companions[comp.id]);
+  db.campaigns = db.campaigns.filter(c => c.id !== id);
 }
 
 // ── Campaign Detail ───────────────────────────────────────────────────────────
@@ -9842,7 +9887,7 @@ async function _setupWizardFinish() {
   if (wizardData.raceData?.speed) ch.combat.speed = wizardData.raceData.speed;
 
   // Apply class resources, spell slots, share token via the in-memory db
-  db = db || { characters: {}, campaigns: [], npcs: {} };
+  db = db || { characters: {}, campaigns: [], npcs: {}, companions: {} };
   db.characters[ch.id] = ch;
   try { syncClassResources(ch); } catch (e) { console.warn('[Setup] syncClassResources failed:', e); }
   try { if (wizardData.subclass) syncSubclassFeatures(ch.id); } catch (e) { console.warn('[Setup] syncSubclassFeatures failed:', e); }
@@ -10026,6 +10071,11 @@ function exportData() {
   const url=URL.createObjectURL(blob);
   const a=document.createElement('a'); a.href=url; a.download='dnd-tracker-'+new Date().toISOString().slice(0,10)+'.json'; a.click(); URL.revokeObjectURL(url);
 }
+function _normalizeImportedDb(data) {
+  if (!data.npcs) data.npcs = {};
+  if (!data.companions) data.companions = {};
+  return data;
+}
 function importData(event) {
   const file=event.target.files[0]; if(!file) return;
   const reader=new FileReader();
@@ -10034,10 +10084,10 @@ function importData(event) {
       const imported=JSON.parse(e.target.result);
       if(!imported.campaigns||!imported.characters) throw new Error('Invalid');
       showConfirm('This will replace all current data. Continue?', ()=>{
-        db=imported; if(!db.npcs) db.npcs={};
+        db=_normalizeImportedDb(imported);
         Object.values(db.characters).forEach(ch=>migrateCharacter(ch));
         // Reset snapshot so Firestore sees everything as new/changed
-        _takeSnapshot({ campaigns: [], characters: {}, npcs: {} });
+        _takeSnapshot({ campaigns: [], characters: {}, npcs: {}, companions: {} });
         saveData(db); showCampaigns(); showAlert('Import successful!', true);
       });
     } catch { showAlert('Invalid file.'); }
@@ -10436,7 +10486,7 @@ async function _setupBootstrap() {
   }
 
   // Initialize an in-memory db so the wizard can operate
-  db = db || { characters: {}, campaigns: [], npcs: {} };
+  db = db || { characters: {}, campaigns: [], npcs: {}, companions: {} };
 
   // Show a friendly intro then open the wizard
   appEl.innerHTML = `
