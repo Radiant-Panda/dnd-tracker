@@ -187,6 +187,43 @@ const { launch, openApp } = require('./browser');
     finally { IS_PLAYER_VIEW = false; _pvSaveCompanion = realSave; }
   });
 
+  // Task 6: combat
+  await pg.evaluate(() => {
+    try {
+      const { aria, sildar } = setup();
+      const id = makeCompanion(sildar.id, aria.id); const comp = db.companions[id];
+      openAddCombatantModal();
+      check('quick add lists companions', /Sildar · Aria/.test(document.getElementById('modal-overlay').textContent), null);
+      closeModal();
+      addAllPcsToInitiative();
+      check('Add all PCs does not add companions', !getInitiative().combatants.some(c => c.companionId), getInitiative().combatants.map(c => c.name));
+      const rnd = Math.random; Math.random = () => 0.5;
+      quickAddCombatant(id, 'companion'); const qa = document.getElementById('qa-init').value; _confirmQuickAdd();
+      Math.random = rnd;
+      check('companion initiative uses its bonus (10 + 3)', qa === String(10 + comp.initBonus) && comp.initBonus === 3, { qa, bonus: comp.initBonus });
+      const ci = () => getInitiative().combatants.findIndex(c => c.companionId === id);
+      check('the combatant is linked to the companion card', ci() >= 0 && getInitiative().combatants[ci()].type === 'companion', getInitiative().combatants.map(c => c.name + ':' + c.companionId));
+      damageCombatant(ci(), 10);
+      check('tracker damage writes to the companion', comp.hp === comp.maxHP - 10, comp.hp);
+      healCombatant(ci(), 4);
+      check('tracker healing writes to the companion', comp.hp === comp.maxHP - 6, comp.hp);
+      comp.hp = 5; comp.conditions = ['Prone']; showCampaign('cC', 'initiative');
+      const row = () => [...document.querySelectorAll('.initiative-row')][ci()];
+      check('the row shows the companion\'s HP and conditions', row().querySelector('.hp-input').value === '5' && /Prone/.test(row().textContent), row().textContent.replace(/\s+/g, ' ').slice(0, 140));
+      check('the row is labelled with the owner', /Companion · Aria/.test(row().textContent), null);
+      openConditionPicker(ci()); toggleCondition(ci(), 'Poisoned'); closeModal();
+      check('conditions set in the tracker reach the companion', comp.conditions.includes('Poisoned'), comp.conditions);
+      IS_PLAYER_VIEW = true; renderApp();
+      check('players see the companion\'s exact HP', /5\s*\/\s*52/.test(row().textContent), row().textContent.replace(/\s+/g, ' ').slice(0, 140));
+      IS_PLAYER_VIEW = false; renderApp();
+      damageCombatant(ci(), 50);
+      check('a companion at 0 shows Down', /Down/.test(row().textContent) && comp.hp === 0, comp.hp);
+      check('…and is not skipped', !_isDefeated(getInitiative().combatants[ci()]), null);
+      const newId = changeCompanionOwner(sildar.id, db.campaigns.find(c => c.id === 'cC').characters[1]);
+      check('reassigning relinks the combat row', getInitiative().combatants.some(c => c.companionId === newId), getInitiative().combatants.map(c => c.companionId));
+    } catch (e) { check('combat runs', false, e.message + ' ' + (e.stack || '').split('\n')[1]); }
+  });
+
   const out = await pg.evaluate(() => out);
   out.forEach(l => console.log(l));
   if (errs.length) console.log('PAGE ERRORS:', errs);
