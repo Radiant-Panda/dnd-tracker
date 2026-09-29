@@ -99,6 +99,55 @@ const { launch, openApp } = require('./browser');
     } catch (e) { check('lifecycle runs', false, e.message); }
   });
 
+  // Task 4: companion sheet
+  await pg.evaluate(() => {
+    try {
+      const { aria, sildar, wyrm, plain } = setup();
+      const comp = db.companions[makeCompanion(sildar.id, aria.id)];
+      const app = document.getElementById('app');
+      app.innerHTML = renderCompanionSheet(comp);
+      const text = app.textContent;
+      check('the sheet shows name, role line and owner', /Sildar/.test(text) && /Knight/.test(text) && /Companion of Aria/.test(text), text.slice(0, 160));
+      check('the sheet never shows private fields', !/marker/.test(text), null);
+      check('the sheet shows the stat block actions', /Actions/.test(text) && /Scimitar/.test(text), null);
+      check('ability names are cleaned in stat blocks', !/\{@recharge/.test(renderCombatantStatBlock(monsterBlock('Adult Red Dragon'), 0)) && /Recharge 5–6/.test(renderCombatantStatBlock(monsterBlock('Adult Red Dragon'), 0)), null);
+      companionDamage(comp.id, 5);
+      check('damage lowers HP', comp.hp === 47, comp.hp);
+      comp.tempHP = 4; companionDamage(comp.id, 6);
+      check('damage uses temp HP first', comp.tempHP === 0 && comp.hp === 45, { hp: comp.hp, temp: comp.tempHP });
+      comp.hp = 0; app.innerHTML = renderCompanionSheet(comp);
+      check('0 HP shows Down', /Down/.test(app.textContent), null);
+      companionHeal(comp.id, 999);
+      check('healing is capped at max HP', comp.hp === comp.maxHP, comp.hp);
+      companionToggleCondition(comp.id, 'Prone');
+      check('conditions can be added', comp.conditions.includes('Prone'), comp.conditions);
+      companionToggleCondition(comp.id, 'Prone');
+      check('…and removed', !comp.conditions.includes('Prone'), comp.conditions);
+      const dragon = db.companions[makeCompanion(wyrm.id, aria.id)];
+      const fire = parseUses(dragon.statBlock).find(u => /Fire Breath/.test(u.label));
+      app.innerHTML = renderCompanionSheet(dragon);
+      check('limited-use abilities show as pips', app.querySelectorAll('.use-pip').length >= 4 && /Fire Breath/.test(app.querySelector('.use-pips')?.textContent || ''), null);
+      companionToggleUse(dragon.id, fire.key, 0);
+      check('ticking a pip marks it used', dragon.uses[fire.key] === 1, dragon.uses);
+      const rnd = Math.random; Math.random = () => 0.9; const ok = companionRollRecharge(dragon.id, fire.key); Math.random = rnd;
+      check('a recharge roll of 6 restores it', ok === true && dragon.uses[fire.key] === 0, dragon.uses);
+      companionToggleUse(dragon.id, fire.key, 0); dragon.hp = 10;
+      companionRest(dragon.id, 'short');
+      check('a short rest keeps recharge uses spent', dragon.uses[fire.key] === 1 && dragon.hp === 10, dragon.uses);
+      companionRest(dragon.id, 'long');
+      check('a long rest restores uses and HP', dragon.uses[fire.key] === 0 && dragon.hp === dragon.maxHP, { uses: dragon.uses, hp: dragon.hp });
+      // Review focus: no stat block, and old object-shaped senses
+      const p = db.companions[makeCompanion(plain.id, aria.id)];
+      check('a companion without a stat block renders AC and HP', /AC/.test(renderCompanionSheet(p)) && /HP/.test(renderCompanionSheet(p)), null);
+      const oldSenses = { ...monsterBlock('Goblin'), senses: { passive_perception: 9 } };
+      check('old object-shaped senses still render', /passive perception 9/.test(renderCombatantStatBlock(oldSenses, null, { quickBar: false })), null);
+      app.innerHTML = renderCompanionSheet(comp);
+      const atkBtn = [...app.querySelectorAll('.action-quick-btn')].find(b => b.querySelector('.action-badge'));
+      atkBtn?.click();
+      check('attack buttons open the roll pop-up', !!document.querySelector('.action-popover .attack-roll-btn'), document.querySelector('.action-popover')?.innerHTML?.slice(0, 120));
+    } catch (e) { check('companion sheet runs', false, e.message + ' ' + (e.stack || '').split('\n')[1]); }
+  });
+
   const out = await pg.evaluate(() => out);
   out.forEach(l => console.log(l));
   if (errs.length) console.log('PAGE ERRORS:', errs);
