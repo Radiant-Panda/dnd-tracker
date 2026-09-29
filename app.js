@@ -1993,17 +1993,21 @@ function _syncLinkedCombatants(init) {
   (init?.combatants || []).forEach(cb => {
     const ch = cb.charId && db.characters[cb.charId];
     if (ch?.combat) { cb.hp = ch.combat.currentHP; cb.tempHP = ch.combat.tempHP || 0; cb.maxHP = ch.combat.maxHP; cb.ac = ch.combat.ac; return; }
+    const comp = cb.companionId && (db.companions || {})[cb.companionId];
+    if (comp) { cb.hp = comp.hp; cb.tempHP = comp.tempHP || 0; cb.maxHP = comp.maxHP; cb.ac = comp.ac; cb.conditions = JSON.parse(JSON.stringify(comp.conditions || [])); return; }
     const npc = cb.npcId && db.npcs[cb.npcId];
     if (npc) { cb.hp = npc.hp ?? cb.hp; cb.maxHP = npc.maxHP ?? cb.maxHP; cb.ac = npc.ac ?? cb.ac; cb.tempHP = npc.tempHP || 0; }
   });
 }
-// After the tracker changes a linked NPC's HP, write it back to the NPC
-function _pushToNpc(cb) {
+// After the tracker changes a linked NPC's or companion's HP (or a companion's conditions), write it back
+function _pushLinked(cb) {
+  const comp = cb?.companionId && (db.companions || {})[cb.companionId];
+  if (comp) { comp.hp = cb.hp; comp.tempHP = cb.tempHP || 0; comp.conditions = JSON.parse(JSON.stringify(cb.conditions || [])); return; }
   const npc = cb?.npcId && db.npcs[cb.npcId];
   if (npc) { npc.hp = cb.hp; npc.tempHP = cb.tempHP || 0; }
 }
-// Monsters and NPCs at 0 HP are out of the fight; characters at 0 HP still take turns (death saves)
-function _isDefeated(cb) { return !cb.charId && cb.type !== 'player' && cb.maxHP > 0 && cb.hp <= 0; }
+// Monsters and NPCs at 0 HP are out of the fight; characters and companions at 0 HP still take turns
+function _isDefeated(cb) { return !cb.charId && !cb.companionId && cb.type !== 'player' && cb.maxHP > 0 && cb.hp <= 0; }
 function _combatStarted(init) { return (init.round || 1) > 1 || (init.currentIndex || 0) > 0; }
 // Places a combatant by initiative (after any ties) without moving the current turn
 function _insertCombatant(init, cb) {
@@ -2062,7 +2066,8 @@ function renderInitiativeTracker(campaign) {
         const hpPct = cb.maxHP>0?Math.round((cb.hp/cb.maxHP)*100):100;
         const defeated = _isDefeated(cb);
         // Players see how a monster is doing, not its numbers
-        const hideNumbers = IS_PLAYER_VIEW && !cb.charId && cb.type !== 'player';
+        const hideNumbers = IS_PLAYER_VIEW && !cb.charId && !cb.companionId && cb.type !== 'player';
+        const cbComp = cb.companionId && (db.companions || {})[cb.companionId];
         const health = defeated ? 'Defeated' : (cb.maxHP > 0 && cb.hp / cb.maxHP <= 0.5 ? 'Bloodied' : 'Healthy');
         return `<div class="initiative-row ${isActive?'active':''}${defeated?' defeated':''}">
           <div class="init-order">${IS_PLAYER_VIEW ? `<span class="init-order-input" style="text-align:center">${cb.initiative}</span>` : `<input type="number" class="init-order-input" value="${cb.initiative}" min="1" max="30" title="Click to edit initiative" oninput="updateCombatantInitiative(${i},+this.value)"><button class="btn-reroll-init" onclick="rerollCombatantInitiative(${i})" title="Re-roll initiative">🎲</button>`}</div>
@@ -2070,6 +2075,8 @@ function renderInitiativeTracker(campaign) {
             <div class="init-top">
               <span class="init-name">${esc(cb.name)}</span>
               <span class="init-type ${cb.type}">${cb.type}</span>
+              ${cb.companionId ? `<span class="companion-tag">Companion · ${esc(cbComp ? _companionOwnerName(cbComp) : 'party')}</span>` : ''}
+              ${cb.companionId && cb.hp <= 0 ? '<span class="defeated-tag">Down</span>' : ''}
               ${(()=>{ const cs = _getConcentrationSpell(cb); const canClear = !IS_PLAYER_VIEW || cb.charId === _PV_PLAYER; return cs ? `<span class="conc-badge" title="Concentrating on ${esc(cs)}">C: ${esc(cs)}</span>${canClear ? `<button class="btn btn-sm conc-clear-combat" onclick="clearConcentrationForCombatant('${cb.charId}')" title="End concentration" style="font-size:0.6rem;padding:0.1rem 0.3rem;margin-left:0.25rem;opacity:0.7">&times;</button>` : ''}` : ''; })()}
               ${isActive?'<span class="active-arrow">&#9654; Active</span>':''}
               ${defeated?'<span class="defeated-tag">Defeated</span>':''}
@@ -2140,6 +2147,7 @@ function openAddCombatantModal() {
   const campaign = getCampaign();
   const pcs = (campaign.characters||[]).map(id=>db.characters[id]).filter(Boolean);
   const npcs = (campaign.npcs||[]).map(id=>db.npcs[id]).filter(Boolean);
+  const comps = Object.values(db.companions || {}).filter(c => c.campaignId === campaign.id);
   openModal(`<h2>Add Combatant</h2>
     <div class="form-row">
       <div class="form-group"><label>Name</label><input type="text" id="cb-name" placeholder="Goblin Archer"></div>
@@ -2150,11 +2158,13 @@ function openAddCombatantModal() {
       <div class="form-group"><label>Max HP</label><input type="number" id="cb-hp" value="10" min="1"></div>
       <div class="form-group"><label>Type</label><select id="cb-type"><option value="monster">Monster</option><option value="player">Player</option><option value="npc">NPC</option></select></div>
     </div>
-    ${pcs.length>0||npcs.length>0?`<hr class="divider"><div class="panel-title" style="margin-bottom:0.5rem">Quick Add from Campaign</div>
+    ${pcs.length>0||npcs.length>0||comps.length>0?`<hr class="divider"><div class="panel-title" style="margin-bottom:0.5rem">Quick Add from Campaign</div>
     <div class="flex gap-1 flex-wrap">
       ${pcs.map(ch=>`<button class="btn btn-sm" onclick="quickAddCombatant('${ch.id}','player')">${esc(ch.name)}</button>`).join('')}
-      ${npcs.map(n=>`<button class="btn btn-sm" onclick="quickAddCombatant('${n.id}','npc')">${esc(_npcName(n))}</button>`).join('')}
-    </div>`:''}
+      ${npcs.filter(n => !_companionForNpc(n)).map(n=>`<button class="btn btn-sm" onclick="quickAddCombatant('${n.id}','npc')">${esc(_npcName(n))}</button>`).join('')}
+    </div>
+    ${comps.length ? `<div class="panel-title" style="margin:0.6rem 0 0.4rem">Companions</div>
+    <div class="flex gap-1 flex-wrap">${comps.map(c => `<button class="btn btn-sm" onclick="quickAddCombatant('${c.id}','companion')">${esc(c.name)} · ${esc(_companionOwnerName(c))}'s companion</button>`).join('')}</div>` : ''}`:''}
     <div class="form-actions"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="addCombatant()">Add</button></div>`);
   document.getElementById('cb-name').focus();
 }
@@ -2169,7 +2179,13 @@ function addCombatant() {
 let _quickAddState = null; // State for quick add initiative modal
 function quickAddCombatant(entityId, type) {
   let name, ac, maxHP, hp, charId = null;
-  if (type==='player') {
+  // An NPC who is a companion joins through its companion card
+  if (type === 'npc' && _companionForNpc(db.npcs[entityId])) { entityId = db.npcs[entityId].companionId; type = 'companion'; }
+  const comp = type === 'companion' ? (db.companions || {})[entityId] : null;
+  if (type === 'companion' && !comp) return;
+  if (comp) {
+    name = comp.name; ac = comp.ac; maxHP = comp.maxHP; hp = comp.hp;
+  } else if (type==='player') {
     const ch=db.characters[entityId];
     name=ch.name; ac=ch.combat.ac; maxHP=ch.combat.maxHP; hp=ch.combat.currentHP;
     charId=entityId;
@@ -2177,11 +2193,11 @@ function quickAddCombatant(entityId, type) {
     const npc=db.npcs[entityId]; name=_npcName(npc); ac=npc.ac ?? 10; maxHP=npc.maxHP ?? 10; hp=npc.hp ?? maxHP;
   }
   const d20 = Math.ceil(Math.random()*20);
-  const initBonus = type === 'player' ? initiativeBonus(db.characters[entityId]) : type === 'npc' ? _npcInitBonus(db.npcs[entityId]) : 0;
+  const initBonus = comp ? (comp.initBonus || 0) : type === 'player' ? initiativeBonus(db.characters[entityId]) : type === 'npc' ? _npcInitBonus(db.npcs[entityId]) : 0;
   const rolled = d20 + initBonus;
 
   // Store state and open modal
-  _quickAddState = { charId, npcId: type === 'npc' ? entityId : null, name, type, ac, hp, maxHP, rolled };
+  _quickAddState = { charId, npcId: type === 'npc' ? entityId : null, companionId: comp ? comp.id : null, name, type, ac, hp, maxHP, rolled };
   openModal(`
     <div class="panel surface2">
       <div class="panel-title">Add to Initiative</div>
@@ -2207,6 +2223,13 @@ function _confirmQuickAdd() {
   const init = getInitiative();
   const name = _uniqueCombatantName(init, _quickAddState.name);
   const cb = { id:uid(), charId, name, initiative, ac, hp, maxHP, type, conditions:[], notes:'', tempHP:0 };
+  const comp = _quickAddState.companionId && (db.companions || {})[_quickAddState.companionId];
+  if (comp) {
+    // Only one row per companion is linked; another copy keeps its own numbers
+    if (!init.combatants.some(c => c.companionId === comp.id)) { cb.companionId = comp.id; cb.tempHP = comp.tempHP || 0; cb.conditions = JSON.parse(JSON.stringify(comp.conditions || [])); }
+    if (comp.statBlock) cb.statBlock = JSON.parse(JSON.stringify(comp.statBlock));
+    if (comp.legendaryMax) { cb.legendaryMax = comp.legendaryMax; cb.legendaryUsed = 0; }
+  }
   const npc = npcId && db.npcs[npcId];
   if (npc) {
     // The first copy is the NPC itself; extra copies ("Guard 2") keep their own HP
@@ -2339,6 +2362,7 @@ function nextTurn() {
     if (prev.charId && db.characters[prev.charId]) {
       db.characters[prev.charId].combat.conditions = [...prev.conditions];
     }
+    if (prev.companionId) _pushLinked(prev);
   }
   // Advance, skipping defeated monsters (at most one full lap, so it can't hang)
   for (let step = 0; step < init.combatants.length; step++) {
@@ -2425,7 +2449,7 @@ function _damageCombatant(i, amt) {
     let remaining = amt;
     if (cb.tempHP > 0) { const absorbed = Math.min(cb.tempHP, remaining); cb.tempHP -= absorbed; remaining -= absorbed; }
     cb.hp = Math.max(0, cb.hp - remaining);
-    _pushToNpc(cb);
+    _pushLinked(cb);
   }
   _syncLinkedCombatants(init);
   combatLog(`${cb.name} took ${amt} damage (HP ${oldHP}→${cb.hp})${_isDefeated(cb) ? ' — defeated' : ''}`);
@@ -2441,7 +2465,7 @@ function healCombatant(i,amt) {
   const oldHP = cb.hp;
   const ch = cb.charId && db.characters[cb.charId];
   if (ch) _heal(ch, amt);
-  else { cb.hp = Math.min(cb.maxHP, cb.hp + amt); _pushToNpc(cb); }
+  else { cb.hp = Math.min(cb.maxHP, cb.hp + amt); _pushLinked(cb); }
   _syncLinkedCombatants(init);
   combatLog(`${cb.name} healed ${amt} HP (HP ${oldHP}→${cb.hp})`);
   saveData(db); renderApp();
@@ -2628,18 +2652,22 @@ function openConditionPicker(i) {
 function toggleCondition(i, cond) {
   const cb=getInitiative().combatants[i]; cb.conditions=cb.conditions||[];
   const existIdx = cb.conditions.findIndex(c => condName(c) === cond);
+  let logText;
   if (existIdx >= 0) {
     cb.conditions.splice(existIdx, 1);
-    combatLog(`${cb.name}: ${cond} removed`);
+    logText = `${cb.name}: ${cond} removed`;
   } else {
     const durInput = document.querySelector(`.cond-dur-input[data-cond="${cond}"]`);
     const dur = durInput ? parseInt(durInput.value) : 0;
     cb.conditions.push(dur > 0 ? { name: cond, duration: dur } : cond);
-    combatLog(`${cb.name}: ${cond} applied${dur>0?` (${dur} rounds)`:''}`);
+    logText = `${cb.name}: ${cond} applied${dur>0?` (${dur} rounds)`:''}`;
   }
   if (cb.charId && db.characters[cb.charId]) {
     db.characters[cb.charId].combat.conditions = [...cb.conditions];
   }
+  // Write to a linked companion before logging: combatLog re-syncs linked rows from their cards
+  if (cb.companionId) _pushLinked(cb);
+  combatLog(logText);
   saveData(db);
   const isActive = cb.conditions.some(c => condName(c) === cond);
   document.querySelectorAll('.condition-option').forEach(el => {
@@ -2680,6 +2708,7 @@ function setConditionDuration(i, cond, dur) {
   if (cb.charId && db.characters[cb.charId]) {
     db.characters[cb.charId].combat.conditions = [...cb.conditions];
   }
+  if (cb.companionId) _pushLinked(cb);
   saveData(db);
   const row=document.querySelectorAll('.initiative-row')[i];
   if(row) { const cr=row.querySelector('.condition-row'); if(cr) cr.innerHTML=_conditionRowHtml(i, cb.conditions, _condOpts(cb)); }
@@ -2706,6 +2735,7 @@ function removeCondition(i,cond) {
   if (cb.charId && db.characters[cb.charId]) {
     db.characters[cb.charId].combat.conditions = [...cb.conditions];
   }
+  if (cb.companionId) _pushLinked(cb);
   combatLog(`${cb.name}: ${cond} removed`);
   saveData(db); renderApp();
 }
@@ -3199,7 +3229,7 @@ const CharacterStore = {
     if (!cb) return;
     cb.hp = Math.max(0, Math.min(newHP, cb.maxHP));
     cb.tempHP = Math.max(0, newTempHP || 0);
-    _pushToNpc(cb);
+    _pushLinked(cb);
     if (cb.type === 'player' && cb.charId) {
       const ch = db.characters[cb.charId];
       if (ch) {
