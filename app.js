@@ -631,6 +631,7 @@ async function _initPlayerView() {
 
     renderBreadcrumb();
     renderApp();
+    _pvSyncCompanionListeners(ch);
 
     // Set up real-time listeners
     _pvListeners.push(
@@ -649,6 +650,7 @@ async function _initPlayerView() {
         const updated = snap.data();
         migrateCharacter(updated);
         db.characters[updated.id || _PV_PLAYER] = updated;
+        _pvSyncCompanionListeners(updated);
         if (currentView === 'character') renderApp();
       }, err => console.warn('[PlayerView] Character listener error:', err))
     );
@@ -685,10 +687,13 @@ function _pvUpdateHeader(charName) {
 // Player view saves — write the full character back to GM's Firestore
 function _pvSaveCharacter() {
   if (!IS_PLAYER_VIEW || !_firestoreReady || !_pvGmUid) return;
-  const ch = db.characters[_PV_PLAYER];
+  const charId = _PV_PLAYER || currentCharId;
+  const ch = db.characters[charId];
   if (!ch) return;
   const base = `users/${_pvGmUid}`;
-  _fireDb.doc(`${base}/characters/${_PV_PLAYER}`).update(ch).catch(e => {
+  // The companion list belongs to the GM; never write back a copy that may be out of date
+  const { companionIds, ...data } = ch;
+  _fireDb.doc(`${base}/characters/${charId}`).update(data).catch(e => {
     console.warn('[PlayerView] Save failed:', e.message);
   });
 }
@@ -1024,7 +1029,7 @@ function renderApp() {
   const app = appEl;
   if      (currentView === 'campaigns')  app.innerHTML = renderCampaignList();
   else if (currentView === 'campaign')   app.innerHTML = renderCampaignDetail();
-  else if (currentView === 'character')  app.innerHTML = renderCharacterSheet();
+  else if (currentView === 'character')  app.innerHTML = IS_PLAYER_VIEW ? _pvCharacterViewHtml() : renderCharacterSheet();
   else if (currentView === 'npc')        app.innerHTML = renderNpcSheet();
   if (currentView === 'character') {
     window.scrollTo(0, scrollY);
@@ -1527,13 +1532,57 @@ function _syncNpcFromCompanion(comp, changedKeys) {
 // Writes a change to a companion card. The player view narrows it to what the access setting allows (Task 5).
 function _companionWrite(comp, patch) {
   if (!comp) return;
+  if (IS_PLAYER_VIEW) {
+    const allowed = new Set(companionFieldsFor(comp.playerAccess));
+    const kept = Object.fromEntries(Object.entries(patch).filter(([k]) => allowed.has(k)));
+    if (!Object.keys(kept).length) return;
+    Object.assign(comp, kept);
+    _pvSaveCompanion(comp.id, kept);
+    return;
+  }
   Object.assign(comp, patch);
-  if (IS_PLAYER_VIEW) { _pvSaveCompanion(comp.id, patch); return; }
   const changed = Object.keys(patch);
   if (changed.some(k => !COMPANION_PLAY_FIELDS.includes(k))) _syncNpcFromCompanion(comp, changed);
   saveData(db);
 }
-function _pvSaveCompanion(id, patch) { /* player view only — filled in with the Firestore write */ }
+// Player view: send only the changed, allowed fields; the security rules check them again
+function _pvSaveCompanion(id, patch) {
+  if (!IS_PLAYER_VIEW || !_firestoreReady || !_pvGmUid) return;
+  _fireDb.doc(`users/${_pvGmUid}/companions/${id}`).update(patch).catch(e => {
+    console.warn('[PlayerView] Companion save failed:', e.message);
+  });
+}
+// Player view: follow the companions listed on the player's character; drop ones that are removed
+let _pvCompanionUnsubs = {};
+function _pvSyncCompanionListeners(ch) {
+  if (!IS_PLAYER_VIEW || !_fireDb || !_pvGmUid || !ch) return;
+  db.companions = db.companions || {};
+  const want = new Set(ch.companionIds || []);
+  Object.keys(_pvCompanionUnsubs).forEach(id => {
+    if (want.has(id)) return;
+    _pvCompanionUnsubs[id](); delete _pvCompanionUnsubs[id]; delete db.companions[id];
+  });
+  want.forEach(id => {
+    if (_pvCompanionUnsubs[id]) return;
+    _pvCompanionUnsubs[id] = _fireDb.doc(`users/${_pvGmUid}/companions/${id}`).onSnapshot(snap => {
+      if (snap.metadata.hasPendingWrites) return;
+      if (snap.exists) db.companions[id] = snap.data(); else delete db.companions[id];
+      renderApp();
+    }, () => { delete db.companions[id]; renderApp(); });   // gone or no longer shared
+  });
+}
+let _pvTab = 'character';   // 'character' or a companion id
+function pvShowTab(tab) { _pvTab = tab; renderApp(); }
+function _pvCharacterViewHtml() {
+  const ch = db.characters[currentCharId];
+  const comps = (ch?.companionIds || []).map(id => (db.companions || {})[id]).filter(Boolean);
+  if (_pvTab !== 'character' && !comps.some(c => c.id === _pvTab)) _pvTab = 'character';
+  const tabs = comps.length ? `<div class="pv-tabs" role="tablist">
+      <button class="pv-tab${_pvTab === 'character' ? ' active' : ''}" role="tab" aria-selected="${_pvTab === 'character'}" onclick="pvShowTab('character')">${esc(ch?.name || 'Character')}</button>
+      ${comps.map(c => `<button class="pv-tab${_pvTab === c.id ? ' active' : ''}" role="tab" aria-selected="${_pvTab === c.id}" onclick="pvShowTab('${c.id}')">${esc(c.name)} (companion)</button>`).join('')}
+    </div>` : '';
+  return tabs + (_pvTab === 'character' ? renderCharacterSheet() : renderCompanionSheet((db.companions || {})[_pvTab]));
+}
 
 // Fields the viewer may change on this companion: everything for the GM, the access setting's fields for a player
 function _companionEditable(comp) {
