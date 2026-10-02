@@ -4155,3 +4155,9 @@ header::after {
 .own-companion-open { flex:1; display:flex; align-items:center; gap:0.4rem; flex-wrap:wrap; background:none; border:0; color:inherit; text-align:left; cursor:pointer; font:inherit; }
 .own-companion-hp { margin-left:auto; font-size:0.8rem; color:var(--text-dim); }
 .pv-tab-add { min-width:2rem; }
+.own-field { display:flex; align-items:center; gap:0.4rem; flex-wrap:wrap; padding:0.2rem 0; }
+.own-formula-note { flex-basis:100%; font-size:0.75rem; color:var(--text-dim); }
+.own-gm-edited { font-size:0.68rem; padding:1px 6px; border-radius:99px; border:1px solid var(--gold); color:var(--gold); }
+.own-field input { width:5rem; }
+.own-rename-row { display:flex; gap:0.5rem; align-items:center; justify-content:space-between; flex-wrap:wrap; margin-bottom:0.4rem; }
+.own-revive { margin-top:0.4rem; font-size:0.8rem; }

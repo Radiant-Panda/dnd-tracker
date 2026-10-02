@@ -94,6 +94,39 @@ const { launch, openApp } = require('./browser');
     } catch (err) { check('task 5 block ran', false, err.message + err.stack); }
   });
 
+  // Task 6: sheet extras
+  await pg.evaluate(() => {
+    try {
+      const ch = setup('Artificer', 7, 'Battle Smith');
+      const oc = addOwnCompanion(ch.id, 'Steel Defender|TCE');
+      const html = () => renderCompanionSheet(_companionById(oc.id));
+      check('formula note under HP', /40 = 2 \+ INT 3 \+ 5 × Artificer 7/.test(html()), null);
+      check('hit dice shown', /7 \/ 7d8/.test(html()), null);
+      setOwnOverride(oc.id, 'maxHP', 55);
+      check('GM edit changes max HP', _companionById(oc.id).maxHP === 55, _companionById(oc.id).maxHP);
+      check('GM edited mark shows', /GM edited/.test(html()), null);
+      ch.classes[0].level = 9; ch.level = 9; migrateCharacter(ch);
+      check('override survives a level-up', _companionById(oc.id).maxHP === 55, _companionById(oc.id).maxHP);
+      resetOwnOverride(oc.id, 'maxHP');
+      check('reset to calculated', _companionById(oc.id).maxHP === 50, _companionById(oc.id).maxHP);
+      setOwnOverride(oc.id, 'attackBonus', 11);
+      check('attack bonus override reaches the stat block', /\+11 to hit/.test(JSON.stringify(_companionById(oc.id).statBlock.actions)), null);
+      renameOwnCompanion(oc.id, 'Clank');
+      check('rename', ch.ownCompanions[0].name === 'Clank' && _companionById(oc.id).name === 'Clank', ch.ownCompanions[0].name);
+      companionDamage(oc.id, 999);
+      check('revive rule text shows when Down', /Down/.test(html()) && /returns to life/i.test(html()), null);
+      IS_PLAYER_VIEW = true;
+      check('players do not get GM edit controls', !/data-own-edit/.test(html()), null);
+      check('players can rename and dismiss', /own-rename/.test(html()) && /Dismiss/.test(html()), null);
+      IS_PLAYER_VIEW = false;
+      companionHeal(oc.id, 10);
+      ownSpendHitDie(oc.id);
+      check('spending a hit die is tracked', ch.ownCompanions[0].hitDiceUsed === 1, ch.ownCompanions[0].hitDiceUsed);
+      companionRest(oc.id, 'long');
+      check('long rest restores HP and hit dice', ch.ownCompanions[0].hp === _companionById(oc.id).maxHP && ch.ownCompanions[0].hitDiceUsed === 0, ch.ownCompanions[0]);
+    } catch (err) { check('task 6 block ran', false, err.message + err.stack); }
+  });
+
   const results = await pg.evaluate(() => out);
   results.forEach(r => console.log(r));
   if (errs.length) console.log('PAGE ERRORS:', errs);
