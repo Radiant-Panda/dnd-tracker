@@ -65,4 +65,59 @@ test('fillTokens replaces {{expr}} and signed {{+expr}}', () => {
   assert.strictEqual(R.fillTokens('{{NOPE}}', V), '?');
 });
 
+// ── Generated templates (data/build-companion-templates.js) ──
+const T = require(path.join(__dirname, '..', 'data', 'companion_templates.js'));
+test('templates include every formula creature, familiars, steeds and mounts', () => {
+  for (const k of ['Steel Defender|TCE', 'Steel Defender|EFA', 'Beast of the Land|TCE', 'Beast of the Sky|XPHB', 'Bestial Spirit|TCE',
+    'Bestial Spirit|XPHB', 'Celestial Spirit|XPHB', 'Animated Object|XPHB', 'Otherworldly Steed|XPHB', 'Drake Companion|FTD',
+    'Wildfire Spirit|TCE', 'Hound of Ill Omen|XGE', 'Homunculus Servant|TCE', 'Homunculus Servant|EFA'])
+    assert.ok(T[k], 'missing ' + k);
+  assert.ok(Object.values(T).filter(t => t.kind === 'class' || (t.kind === 'summon' && t.source !== 'MM')).length >= 37);
+  assert.ok(Object.values(T).some(t => t.kind === 'familiar' && t.name === 'Owl' && t.edition === '2014'));
+  assert.ok(Object.values(T).some(t => t.kind === 'familiar' && t.name === 'Owl' && t.edition === '2024'));
+  assert.ok(Object.values(T).some(t => t.kind === 'familiar' && t.group === 'Pact of the Chain' && t.name === 'Imp'));
+  assert.ok(Object.values(T).some(t => t.kind === 'mount' && t.name === 'Riding Horse'));
+});
+test('template metadata', () => {
+  const sd = T['Steel Defender|TCE'];
+  assert.deepStrictEqual([sd.kind, sd.grantedBy.cls, sd.grantedBy.subclass, sd.grantedBy.level, sd.offer, sd.atZero, sd.turn, sd.edition],
+    ['class', 'Artificer', 'Battle Smith', 3, true, 'down', 'afterOwner', '2014']);
+  const bs = T['Bestial Spirit|XPHB'];
+  assert.deepStrictEqual([bs.kind, bs.grantedBy.spell, bs.grantedBy.spellLevel, bs.concentration, bs.atZero, bs.turn, bs.variants],
+    ['summon', 'Summon Beast', 2, true, 'vanish', 'afterOwner', ['Air', 'Land', 'Water']]);
+  assert.strictEqual(T['Hound of Ill Omen|XGE'].offer, false);
+  assert.strictEqual(T['Owl|MM'].kind, 'familiar');
+  assert.strictEqual(T['Owl|MM'].turn, 'own');
+});
+test('attack text keeps formula tokens the app can fill', () => {
+  const rend = T['Steel Defender|TCE'].monster.actions.find(a => a.name === 'Force-Empowered Rend');
+  assert.match(rend.desc, /\{\{\+SPELLATK\}\} to hit/);
+  assert.match(rend.desc, /1d8 \+ \{\{PB\}\} force damage/);
+  assert.match(T['Bestial Spirit|XPHB'].monster.actions.find(a => a.name === 'Rend').desc, /1d8 \+ \{\{4 \+ SL\}\}/);
+  for (const t of Object.values(T)) assert.ok(!JSON.stringify(t.monster).includes('{@'), 'raw 5etools tag in ' + t.key);
+  // The app finds attack bonuses by "+N to hit" — 2024 wording ("Attack Roll: +5, reach") needs it added
+  assert.match(T['Bestial Spirit|XPHB'].monster.actions.find(a => a.name === 'Rend').desc, /Attack Roll: \{\{\+SPELLATK\}\} to hit, reach/);
+  assert.match(T['Owl|XMM'].monster.actions.find(a => /Talons/.test(a.name)).desc, /\+\d+ to hit/);
+});
+test('variants carry their own data', () => {
+  const vd = T['Bestial Spirit|XPHB'].variantData;
+  assert.ok(vd.Air && vd.Land && vd.Water);
+  assert.ok(vd.Air.traits.some(t => t.name === 'Flyby'));
+  assert.ok(!vd.Air.traits.some(t => /Pack Tactics/.test(t.name)));
+});
+test('every token in every template fills to a number', () => {
+  const vars = { PB: 3, SL: 9, LVL: 10, STR: 1, DEX: 1, CON: 1, INT: 1, WIS: 1, CHA: 1, SPELLATK: 7, SPELLDC: 15 };
+  const bad = [];
+  for (const t of Object.values(T)) {
+    for (const m of JSON.stringify({ m: t.monster, v: t.variantData }).matchAll(/\{\{\+?([^{}]+)\}\}/g))
+      if (R.evalExpr(m[1], vars) === null) bad.push(t.key + ': ' + m[1]);
+  }
+  assert.deepStrictEqual(bad, []);
+});
+test('Review focus: no template is silently unresolved', () => {
+  const allowed = new Set([]);   // add a key here only with a comment saying why the sheet's manual box is fine
+  const bad = Object.values(T).filter(t => t.unresolved.length && !allowed.has(t.key)).map(t => t.key + ': ' + t.unresolved.join(','));
+  assert.deepStrictEqual(bad, []);
+});
+
 console.log(`\n${passed} passed`);
