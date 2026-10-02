@@ -53,6 +53,47 @@ const { launch, openApp } = require('./browser');
     } catch (err) { check('task 4 block ran', false, err.message + err.stack); }
   });
 
+  // Task 5: panel, picker, modal, player tabs
+  await pg.evaluate(() => {
+    try {
+      const ch = setup('Artificer', 7, 'Battle Smith');
+      ch.spells.known = [{ name: 'Find Familiar', level_int: 1 }];
+      const groups = _ownCompanionChoices(ch);
+      const names = g => (groups.find(x => x.group === g)?.items || []).map(i => i.name);
+      check('class group offers the Steel Defender for a Battle Smith', names('From your class').includes('Steel Defender'), groups.map(g => g.group));
+      check('class group hides other classes\' companions', !names('From your class').includes('Drake Companion'), names('From your class'));
+      check('familiar forms come from a known Find Familiar', names('Familiars').includes('Owl'), names('Familiars'));
+      check('no Pact of the Chain forms without the pact', !names('Familiars').includes('Imp'), names('Familiars'));
+      check('mounts are always offered', names('Mounts & pets').includes('Riding Horse'), names('Mounts & pets'));
+      openAddOwnCompanionModal(ch.id);
+      check('picker modal opens', /Add companion/.test(document.getElementById('modal-content').innerHTML), null);
+      confirmAddOwnCompanion(ch.id, 'Steel Defender|TCE');
+      renderApp();
+      const panel = document.querySelector('.own-companions-panel');
+      check('GM character page shows the panel with the companion', panel && /Steel Defender/.test(panel.textContent), panel?.textContent);
+      const oc = ch.ownCompanions[0];
+      openOwnCompanionModal(ch.id, oc.id);
+      check('clicking opens the sheet in a modal', /companion-sheet/.test(document.getElementById('modal-content').innerHTML), null);
+      closeModal();
+      askDismissOwnCompanion(ch.id, oc.id);
+      check('dismiss asks first', ch.ownCompanions.length === 1 && /Dismiss Steel Defender\?/.test(document.querySelector('.own-companions-panel').textContent), null);
+      dismissOwnCompanion(ch.id, oc.id); _confirmDismissOwn = null;
+      // Variant picker for a template with forms
+      ch.spells.known.push({ name: 'Summon Beast', level_int: 2 });
+      confirmAddOwnCompanion(ch.id, 'Bestial Spirit|TCE');
+      check('a template with forms asks for form and spell level', !!document.getElementById('own-variant') && !!document.getElementById('own-sl'), null);
+      closeModal();
+      // Player view tabs
+      const oc2 = addOwnCompanion(ch.id, 'Owl|MM');
+      IS_PLAYER_VIEW = true; renderApp();
+      const tabs = [...document.querySelectorAll('.pv-tab')].map(t => t.textContent);
+      check('player view has a tab per own companion', tabs.some(t => /Owl \(familiar\)/.test(t)), tabs);
+      pvShowTab(oc2.id);
+      check('own companion tab renders its sheet', !!document.querySelector('.companion-sheet'), null);
+      IS_PLAYER_VIEW = false; _pvTab = 'character';
+    } catch (err) { check('task 5 block ran', false, err.message + err.stack); }
+  });
+
   const results = await pg.evaluate(() => out);
   results.forEach(r => console.log(r));
   if (errs.length) console.log('PAGE ERRORS:', errs);

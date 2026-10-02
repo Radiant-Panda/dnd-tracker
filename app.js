@@ -1602,12 +1602,17 @@ function pvShowTab(tab) { _pvTab = tab; renderApp(); }
 function _pvCharacterViewHtml() {
   const ch = db.characters[currentCharId];
   const comps = (ch?.companionIds || []).map(id => (db.companions || {})[id]).filter(Boolean);
-  if (_pvTab !== 'character' && !comps.some(c => c.id === _pvTab)) _pvTab = 'character';
-  const tabs = comps.length ? `<div class="pv-tabs" role="tablist">
-      <button class="pv-tab${_pvTab === 'character' ? ' active' : ''}" role="tab" aria-selected="${_pvTab === 'character'}" onclick="pvShowTab('character')">${esc(ch?.name || 'Character')}</button>
-      ${comps.map(c => `<button class="pv-tab${_pvTab === c.id ? ' active' : ''}" role="tab" aria-selected="${_pvTab === c.id}" onclick="pvShowTab('${c.id}')">${esc(c.name)} (companion)</button>`).join('')}
+  const own = (ch?.ownCompanions || []).map(oc => _ownCompanionView(ch, oc));
+  if (_pvTab !== 'character' && !comps.some(c => c.id === _pvTab) && !own.some(c => c.id === _pvTab)) _pvTab = 'character';
+  const tab = (id, label) => `<button class="pv-tab${_pvTab === id ? ' active' : ''}" role="tab" aria-selected="${_pvTab === id}" onclick="pvShowTab('${id}')">${label}</button>`;
+  // Always shown: the "+" lets the player add their own companions
+  const tabs = ch ? `<div class="pv-tabs" role="tablist">
+      ${tab('character', esc(ch.name || 'Character'))}
+      ${comps.map(c => tab(c.id, `${esc(c.name)} (companion)`)).join('')}
+      ${own.map(c => tab(c.id, `${esc(c.name)} (${esc(c.role)})`)).join('')}
+      <button class="pv-tab pv-tab-add" onclick="openAddOwnCompanionModal('${ch.id}')" title="Add companion" aria-label="Add companion">+</button>
     </div>` : '';
-  return tabs + (_pvTab === 'character' ? renderCharacterSheet() : renderCompanionSheet((db.companions || {})[_pvTab]));
+  return tabs + (_pvTab === 'character' ? renderCharacterSheet() : renderCompanionSheet(_companionById(_pvTab)));
 }
 
 // Fields the viewer may change on this companion: everything for the GM, the access setting's fields for a player
@@ -1670,6 +1675,88 @@ function addOwnCompanion(charId, templateKey, opts = {}) {
   oc.hp = r && r.maxHP !== null ? r.maxHP : 0;
   saveData(db);
   return oc;
+}
+// What a character may add: their class's companions, summons from spells they know or have prepared,
+// familiar forms (Pact of the Chain adds more), and mounts & pets. Templates match the character's edition.
+function _ownCompanionChoices(ch) {
+  const T = typeof COMPANION_TEMPLATES !== 'undefined' ? Object.values(COMPANION_TEMPLATES) : [];
+  const ed = ch.edition === '2014' ? '2014' : '2024';
+  const classes = (ch.classes && ch.classes.length) ? ch.classes : [{ class: ch.class, subclass: ch.subclass, level: ch.level }];
+  const spellNames = new Set([...(ch.spells?.known || []), ...(ch.spells?.prepared || [])].map(s => (s && s.name) || s));
+  const hasPact = (ch.featuresList || []).some(f => f.name === 'Pact of the Chain');
+  // Prefer the character's edition; fall back to the other one when a creature has no version in it
+  const byEdition = list => {
+    const seen = new Map();
+    list.forEach(t => { const cur = seen.get(t.name); if (!cur || (cur.edition !== ed && t.edition === ed)) seen.set(t.name, t); });
+    return [...seen.values()];
+  };
+  const item = t => ({ key: t.key, name: t.name, variants: t.variants, spellLevel: t.grantedBy.spellLevel || null, group: t.group });
+  const fromClass = byEdition(T.filter(t => t.kind === 'class' && classes.some(c => c.class === t.grantedBy.cls
+    && (parseInt(c.level) || 1) >= (t.grantedBy.level || 1) && (!t.grantedBy.subclass || String(c.subclass || '').includes(t.grantedBy.subclass)))));
+  const summons = byEdition(T.filter(t => t.kind === 'summon' && spellNames.has(t.grantedBy.spell)));
+  const familiars = spellNames.has('Find Familiar') || hasPact
+    ? byEdition(T.filter(t => t.kind === 'familiar' && (t.group === 'Find Familiar' || hasPact))) : [];
+  const mounts = byEdition(T.filter(t => t.kind === 'mount'));
+  return [
+    { group: 'From your class', items: fromClass.map(item) },
+    { group: 'Summon spells', items: summons.map(item) },
+    { group: 'Familiars', items: familiars.map(item) },
+    { group: 'Mounts & pets', items: mounts.map(item) },
+  ].filter(g => g.items.length);
+}
+let _confirmDismissOwn = null;   // own companion id while the in-page "Dismiss?" confirm is shown
+function openAddOwnCompanionModal(charId) {
+  const ch = db.characters[charId]; if (!ch) return;
+  const groups = _ownCompanionChoices(ch);
+  openModal(`<h2>Add companion</h2>
+    ${groups.length ? groups.map(g => `<div class="panel-title" style="margin:0.6rem 0 0.4rem">${esc(g.group)}</div>
+      <div class="flex gap-1 flex-wrap">${g.items.map(i => `<button class="btn btn-sm" onclick="confirmAddOwnCompanion('${charId}','${jsStr(i.key)}')">${esc(i.name)}${g.group === 'Summon spells' && i.group !== i.name ? ` <span class="text-dim">· ${esc(i.group)}</span>` : ''}</button>`).join('')}</div>`).join('')
+      : `<p class="text-dim">Nothing to add yet — learn a summon spell or Find Familiar, or reach your class's companion feature.</p>`}
+    <div class="form-actions"><button class="btn" onclick="closeModal()">Cancel</button></div>`);
+}
+// Templates with forms or a spell level are asked about in a second step
+function confirmAddOwnCompanion(charId, key, variant, spellLevel) {
+  const t = _ownTemplate({ templateKey: key }); if (!t) return;
+  const needLevel = t.kind === 'summon' && t.concentration && spellLevel === undefined;
+  if ((t.variants && variant === undefined) || needLevel) { _openOwnFormPicker(charId, key, { variant, spellLevel }); return; }
+  addOwnCompanion(charId, key, { variant: variant || null, spellLevel: spellLevel || null,
+    concentrationSpell: null });
+  closeModal(); renderApp();
+}
+function _openOwnFormPicker(charId, key, sel, extra = {}) {
+  const t = _ownTemplate({ templateKey: key }); if (!t) return;
+  const min = t.kind === 'summon' ? t.grantedBy.spellLevel || 0 : 0;
+  const levels = min ? Array.from({ length: 10 - min }, (_, i) => min + i) : [];
+  openModal(`<h2>${esc(extra.title || t.name)}</h2>
+    ${levels.length && !extra.fixedLevel ? `<div class="form-group"><label>Spell level</label><select id="own-sl">${levels.map(l => `<option value="${l}"${l === (sel.spellLevel || min) ? ' selected' : ''}>${_ORD[l]}</option>`).join('')}</select></div>` : ''}
+    ${t.variants ? `<div class="form-group"><label>Form</label><select id="own-variant">${t.variants.map(v => `<option${v === sel.variant ? ' selected' : ''}>${esc(v)}</option>`).join('')}</select></div>` : ''}
+    ${extra.combatBox || ''}
+    <div class="form-actions"><button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="${extra.onConfirm || `confirmAddOwnCompanion('${charId}','${jsStr(key)}', document.getElementById('own-variant')?.value || null, parseInt(document.getElementById('own-sl')?.value) || null)`}">Add</button></div>`);
+}
+function askDismissOwnCompanion(charId, ocId) { _confirmDismissOwn = ocId; renderApp(); }
+function openOwnCompanionModal(charId, ocId) {
+  const comp = _companionById(ocId); if (!comp) return;
+  openModal(`<div class="own-companion-modal">${renderCompanionSheet(comp)}</div>
+    <div class="form-actions"><button class="btn" onclick="closeModal()">Close</button></div>`);
+}
+function renderOwnCompanionsPanel(ch) {
+  const list = (ch.ownCompanions || []).map(oc => _ownCompanionView(ch, oc));
+  return `<div class="sheet-panel own-companions-panel">
+    <div class="cs-section-label">Companions</div>
+    ${list.map(c => `<div class="own-companion-row">
+      ${_companionArtHtml(c, 40)}
+      <button class="own-companion-open" onclick="openOwnCompanionModal('${ch.id}','${c.id}')">
+        <strong>${esc(c.name)}</strong> <span class="text-dim">(${esc(c.role)})</span>
+        ${c.hp <= 0 ? '<span class="defeated-tag">Down</span>' : ''}
+        <span class="own-companion-hp">${esc(c.hp)} / ${esc(c.maxHP)} HP</span>
+      </button>
+      ${_confirmDismissOwn === c.id
+        ? `<span class="npc-companion-confirm">Dismiss ${esc(c.name)}? <button class="btn btn-sm btn-danger" onclick="_confirmDismissOwn=null;dismissOwnCompanion('${ch.id}','${c.id}');renderApp()">Dismiss</button><button class="btn btn-sm" onclick="_confirmDismissOwn=null;renderApp()">Keep</button></span>`
+        : `<button class="btn btn-sm" onclick="askDismissOwnCompanion('${ch.id}','${c.id}')">Dismiss</button>`}
+    </div>`).join('') || '<p class="text-dim" style="font-size:0.82rem;margin:0">No companions.</p>'}
+    <button class="btn btn-sm" style="margin-top:0.5rem" onclick="openAddOwnCompanionModal('${ch.id}')">+ Add companion</button>
+  </div>`;
 }
 function dismissOwnCompanion(charId, ocId, reason) {
   const ch = db.characters[charId]; if (!ch) return;
@@ -8403,6 +8490,7 @@ function renderCharacterSheet() {
       </div>
       <div class="cs-col-mid">
         ${renderCombatSection(ch)}
+        ${!IS_PLAYER_VIEW ? renderOwnCompanionsPanel(ch) : ''}
         <div class="floral-divider">✾ ✿ ✾</div>
         ${renderResourcesPanel(ch)}
         ${renderAttacksSection(ch)}
