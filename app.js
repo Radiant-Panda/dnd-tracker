@@ -1758,6 +1758,64 @@ function renderOwnCompanionsPanel(ch) {
     <button class="btn btn-sm" style="margin-top:0.5rem" onclick="openAddOwnCompanionModal('${ch.id}')">+ Add companion</button>
   </div>`;
 }
+// GM edits: stored as overrides, kept through level-ups, cleared by "Reset to calculated"
+function setOwnOverride(ocId, field, value) {
+  const f = _findOwnCompanion(ocId); if (!f || !OWN_COMPANION_OVERRIDES.includes(field)) return;
+  if (value === '' || value === null || value === undefined) { resetOwnOverride(ocId, field); return; }
+  f.oc.overrides = { ...(f.oc.overrides || {}), [field]: field === 'speed' ? String(value).slice(0, 100) : (parseInt(value) || 0) };
+  _syncOwnCompanions(f.ch); saveData(db); renderApp();
+}
+function resetOwnOverride(ocId, field) {
+  const f = _findOwnCompanion(ocId); if (!f) return;
+  const o = { ...(f.oc.overrides || {}) }; delete o[field]; f.oc.overrides = o;
+  _syncOwnCompanions(f.ch); saveData(db); renderApp();
+}
+function renameOwnCompanion(ocId, name) {
+  const f = _findOwnCompanion(ocId); if (!f) return;
+  f.oc.name = String(name || '').trim().slice(0, 200) || _ownTemplate(f.oc)?.name || 'Companion';
+  saveData(db); renderApp();
+}
+function ownSpendHitDie(ocId) {
+  const f = _findOwnCompanion(ocId); if (!f) return;
+  const r = _ownResolve(f.ch, f.oc); if (!r?.hitDice) return;
+  if ((f.oc.hitDiceUsed || 0) >= r.hitDice.count) { showToast('No hit dice left.'); return; }
+  const roll = rollDice('1' + r.hitDice.die);
+  const gain = Math.max(1, roll.total + Math.floor(((r.monster.con || 10) - 10) / 2));
+  f.oc.hitDiceUsed = (f.oc.hitDiceUsed || 0) + 1;
+  f.oc.hp = Math.min(r.maxHP ?? f.oc.hp, f.oc.hp + gain);
+  showToast(`${esc(f.oc.name)} spends a hit die: <strong>+${gain}</strong> HP`);
+  saveData(db); renderApp();
+}
+// Name, GM edits with formula notes, hit dice, and the creature's own revive rule when Down
+function renderOwnSheetExtras(comp) {
+  const f = _findOwnCompanion(comp.id); if (!f) return '';
+  const { ch, oc } = f;
+  const dismiss = `<button class="btn btn-sm btn-danger" onclick="dismissOwnCompanion('${ch.id}','${oc.id}');closeModal();renderApp()">Dismiss</button>`;
+  if (comp._missing) return `<div class="sheet-panel"><p class="text-dim">This creature's data is no longer available.</p>${dismiss}</div>`;
+  const r = comp._res, t = comp._tpl, gm = !IS_PLAYER_VIEW;
+  const fieldRow = (label, field, value, note) => {
+    const edited = r.edited.includes(field), unresolved = r.unresolved.includes(field);
+    return `<div class="own-field">
+      <span class="stat-label">${label}</span> <strong>${esc(value ?? '—')}</strong>
+      ${edited ? `<span class="own-gm-edited">GM edited</span>${gm ? ` <button class="btn btn-sm" onclick="resetOwnOverride('${oc.id}','${field}')">Reset to calculated</button>` : ''}` : ''}
+      ${gm && !unresolved ? `<input type="${field === 'speed' ? 'text' : 'number'}" class="own-edit" data-own-edit="${field}" placeholder="Edit" aria-label="Edit ${label}" onchange="setOwnOverride('${oc.id}','${field}',this.value)">` : ''}
+      ${note && !edited ? `<div class="own-formula-note">${esc(note)}</div>` : ''}
+      ${unresolved ? `<div class="own-formula-note">${esc(r.formulaText[field === 'maxHP' ? 'hp' : 'ac'] || '')} — enter the number:
+        <input type="number" class="own-manual" aria-label="${label}" onchange="setOwnOverride('${oc.id}','${field}',this.value)"></div>` : ''}
+    </div>`;
+  };
+  const o = oc.overrides || {}, hd = r.hitDice;
+  return `<div class="sheet-panel own-sheet-extras">
+    <div class="own-rename-row"><label>Name <input class="own-rename" value="${esc(oc.name)}" onchange="renameOwnCompanion('${oc.id}',this.value)"></label>${dismiss}</div>
+    ${fieldRow('AC', 'ac', comp.ac, r.notes.ac)}
+    ${fieldRow('Max HP', 'maxHP', comp.maxHP, r.notes.hp)}
+    ${gm ? fieldRow('Speed', 'speed', r.speed) + fieldRow('Initiative bonus', 'initBonus', r.initBonus)
+      + fieldRow('Attack bonus', 'attackBonus', o.attackBonus) + fieldRow('Save DC', 'saveDC', o.saveDC) : ''}
+    ${hd ? `<div class="own-field"><span class="stat-label">Hit Dice</span> <strong>${hd.count - (oc.hitDiceUsed || 0)} / ${hd.count}${esc(hd.die)}</strong>
+      <button class="btn btn-sm" onclick="ownSpendHitDie('${oc.id}')">Spend</button></div>` : ''}
+    ${comp.hp <= 0 && t.revive ? `<div class="own-revive"><span class="defeated-tag">Down</span> ${esc(t.revive)}</div>` : ''}
+  </div>`;
+}
 function dismissOwnCompanion(charId, ocId, reason) {
   const ch = db.characters[charId]; if (!ch) return;
   const oc = (ch.ownCompanions || []).find(c => c.id === ocId); if (!oc) return;
@@ -1808,6 +1866,12 @@ function companionRest(id, rest) {
   const comp = _companionById(id); if (!comp) return;
   const uses = restoreUses(comp.uses, parseUses(comp.statBlock), rest);
   _companionWrite(comp, rest === 'long' ? { uses, hp: comp.maxHP, tempHP: 0 } : { uses });
+  // Own companions' hit dice come back like the owner's: all in 2024, half (minimum 1) in 2014
+  const f = rest === 'long' && comp._own && _findOwnCompanion(id), hd = f && comp._res?.hitDice;
+  if (hd) {
+    const back = f.ch.edition === '2014' ? Math.max(1, Math.floor(hd.count / 2)) : hd.count;
+    _companionWrite(comp, { hitDiceUsed: Math.max(0, (f.oc.hitDiceUsed || 0) - back) });
+  }
   renderApp();
 }
 function companionResetUse(id, key) {
@@ -1874,7 +1938,7 @@ function renderCompanionSheet(comp) {
       <div class="companion-head-text">
         <h2 class="companion-name">${esc(comp.name)}${down ? ' <span class="defeated-tag">Down</span>' : ''}</h2>
         ${sub ? `<div class="card-sub">${sub}</div>` : ''}
-        <div class="companion-owner">Companion of ${esc(_companionOwnerName(comp))}${comp.statSource ? ` &middot; ${esc(comp.statSource)} stats` : ''}</div>
+        <div class="companion-owner">${comp._own ? `${esc(comp.role)} &middot; ${esc(_companionOwnerName(comp))}'s` : `Companion of ${esc(_companionOwnerName(comp))}`}${comp.statSource ? ` &middot; ${esc(comp.statSource)} stats` : ''}</div>
         ${artEdit}
       </div>
     </div>
@@ -1891,6 +1955,7 @@ function renderCompanionSheet(comp) {
       </div>
       <div class="companion-rests"><button class="btn btn-sm" onclick="companionRest('${id}','short')">Short Rest</button><button class="btn btn-sm" onclick="companionRest('${id}','long')">Long Rest</button></div>` : ''}
     </div>
+    ${comp._own ? renderOwnSheetExtras(comp) : ''}
     ${condHtml}
     ${usesHtml}
     ${fullEdit}
