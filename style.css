@@ -4149,3 +4149,9 @@ header::after {
 .prof-add-row input { flex: 1; min-width: 0; font-size: 0.78rem; }
 .lang-hint { font-size: 0.7rem; color: var(--gold-lt); margin-top: 0.3rem; }
 .mc-skill-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 0.3rem; margin-bottom: 0.8rem; font-size: 0.82rem; }
+
+/* Own companions (class companions, summons, familiars, mounts) */
+.own-companion-row { display:flex; align-items:center; gap:0.5rem; padding:0.3rem 0; border-bottom:1px solid var(--border); }
+.own-companion-open { flex:1; display:flex; align-items:center; gap:0.4rem; flex-wrap:wrap; background:none; border:0; color:inherit; text-align:left; cursor:pointer; font:inherit; }
+.own-companion-hp { margin-left:auto; font-size:0.8rem; color:var(--text-dim); }
+.pv-tab-add { min-width:2rem; }
