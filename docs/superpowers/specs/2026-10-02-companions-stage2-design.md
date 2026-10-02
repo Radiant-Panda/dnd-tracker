@@ -187,7 +187,8 @@ add (same picker), dismiss, rename and set art.
   each place. A toast says "Bestial Spirit vanished (concentration ended)".
 - Familiars, steeds, class companions and mounts stay until dismissed.
 - **Class features**: when `_syncSubclassFeaturesFor` / level-up gives a character a feature whose
-  template has `kind: 'class'` and `persistent: true` and the key isn't in `ch.companionOffers`, show "Add your Steel
+  template has `kind: 'class'` and `offer: true` (Steel Defender, Primal Companion beasts, Drake Companion —
+  not the Homunculus Servant infusion, which is a choice) and its group isn't in `ch.companionOffers`, show "Add your Steel
   Defender?" (Add / Not now). Either answer records the offer. Ranger Beast Master (2014 Primal Companion
   TCE, 2024 XPHB) offers the beast picker with Land / Sea / Sky.
 - Temporary class creatures (Hound of Ill Omen, Wildfire Spirit, Dancing Item, Homunculus Servant EFA)
