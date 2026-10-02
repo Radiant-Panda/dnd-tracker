@@ -767,6 +767,11 @@ function migrateCharacter(ch) {
   if (ch.attunedItems === undefined) ch.attunedItems = [];
   if (ch.activeConcentration === undefined) ch.activeConcentration = null;
   if (typeof ch.activeConcentration === 'string') ch.activeConcentration = { spellName: ch.activeConcentration, castLevel: 0 };
+  // Own companions (class companions, summons, familiars, mounts) — player-writable, so cleaned on every load
+  if (!Array.isArray(ch.ownCompanions)) ch.ownCompanions = [];
+  ch.ownCompanions = ch.ownCompanions.map(c => sanitizeOwnCompanion(c, CONDITIONS)).filter(Boolean);
+  if (!Array.isArray(ch.companionOffers)) ch.companionOffers = [];
+  _syncOwnCompanions(ch);
   if (ch.exhaustionLevel === undefined) ch.exhaustionLevel = 0;
   if (ch.portraitZoom === undefined) ch.portraitZoom = 100;
   if (ch.portraitX    === undefined) ch.portraitX    = 50;
@@ -1531,6 +1536,15 @@ function _syncNpcFromCompanion(comp, changedKeys) {
 // Writes a change to a companion card. The player view narrows it to what the access setting allows (Task 5).
 function _companionWrite(comp, patch) {
   if (!comp) return;
+  // Own companions live on the character record; only play state, art and the name are stored
+  if (comp._own) {
+    const f = _findOwnCompanion(comp.id); if (!f) return;
+    const allowed = ['hp', 'tempHP', 'conditions', 'uses', 'portrait', 'portraitZoom', 'portraitX', 'portraitY', 'name', 'hitDiceUsed'];
+    for (const [k, v] of Object.entries(patch)) if (allowed.includes(k)) f.oc[k] = v;
+    Object.assign(comp, patch);
+    saveData(db);
+    return;
+  }
   if (IS_PLAYER_VIEW) {
     const allowed = new Set(companionFieldsFor(comp.playerAccess));
     const kept = Object.fromEntries(Object.entries(patch).filter(([k]) => allowed.has(k)));
@@ -1598,9 +1612,72 @@ function _pvCharacterViewHtml() {
 
 // Fields the viewer may change on this companion: everything for the GM, the access setting's fields for a player
 function _companionEditable(comp) {
+  if (comp?._own) return new Set(COMPANION_PLAY_FIELDS);
   return new Set(IS_PLAYER_VIEW ? companionFieldsFor(comp?.playerAccess) : COMPANION_FULL_FIELDS);
 }
-function _companionById(id) { return (db.companions || {})[id] || null; }
+function _companionById(id) {
+  const c = (db.companions || {})[id]; if (c) return c;
+  const f = _findOwnCompanion(id);
+  return f ? _ownCompanionView(f.ch, f.oc) : null;
+}
+
+// ── Own companions (Stage 2): class companions, summons, familiars, mounts — stored on the character ──
+// Numbers are never stored: they are worked out from the template and the owner on every view.
+function _ownTemplate(oc) { return typeof COMPANION_TEMPLATES !== 'undefined' ? COMPANION_TEMPLATES[oc?.templateKey] || null : null; }
+function _ownResolve(ch, oc) {
+  const t = _ownTemplate(oc); if (!t) return null;
+  return resolveCompanion(t, oc, companionContext(ch, t, oc));
+}
+// Keeps HP inside the live maximum (a level-down or a removed GM edit can lower it)
+function _syncOwnCompanions(ch) {
+  (ch.ownCompanions || []).forEach(oc => {
+    const r = _ownResolve(ch, oc);
+    if (r && r.maxHP !== null && oc.hp > r.maxHP) oc.hp = r.maxHP;
+  });
+}
+const _ORD = ['', '1st', '2nd', '3rd', '4th', '5th', '6th', '7th', '8th', '9th'];
+function _ownCompanionLabel(t, oc) {
+  if (!t) return 'unknown creature';
+  if (t.kind === 'summon') return oc.spellLevel ? `summoned, ${_ORD[oc.spellLevel]} level` : 'summoned';
+  if (t.kind === 'familiar') return 'familiar';
+  if (t.kind === 'mount') return 'mount';
+  return t.group || t.name;
+}
+// A Stage-1-shaped companion card for an own companion, so the companion sheet and its controls work unchanged
+function _ownCompanionView(ch, oc) {
+  const t = _ownTemplate(oc), r = t && _ownResolve(ch, oc);
+  const common = { id: oc.id, _own: { charId: ch.id }, ownerCharId: ch.id, name: oc.name || t?.name || 'Unknown creature',
+    tempHP: oc.tempHP || 0, conditions: oc.conditions || [], uses: oc.uses || {}, portrait: oc.portrait, portraitZoom: oc.portraitZoom,
+    portraitX: oc.portraitX, portraitY: oc.portraitY, playerAccess: 'play', location: '', race: '', legendaryMax: 0 };
+  if (!r) return { ...common, _missing: true, role: 'unknown creature', ac: 10, maxHP: 1, hp: 0, statBlock: null, statSource: '', initBonus: 0 };
+  return { ...common, _tpl: t, _res: r, role: _ownCompanionLabel(t, oc), ac: r.ac ?? 10, maxHP: r.maxHP ?? 1,
+    hp: Math.min(oc.hp, r.maxHP ?? oc.hp), statBlock: _statBlockFromMonster(r.monster).statBlock, statSource: t.name,
+    initBonus: r.initBonus };
+}
+function _findOwnCompanion(id) {
+  for (const ch of Object.values(db.characters || {})) {
+    const oc = (ch.ownCompanions || []).find(c => c.id === id);
+    if (oc) return { ch, oc };
+  }
+  return null;
+}
+function addOwnCompanion(charId, templateKey, opts = {}) {
+  const ch = db.characters[charId], t = _ownTemplate({ templateKey }); if (!ch || !t) return null;
+  const oc = newOwnCompanion(t, { ...opts, id: uid() });
+  ch.ownCompanions = ch.ownCompanions || [];
+  ch.ownCompanions.push(oc);
+  const r = _ownResolve(ch, oc);
+  oc.hp = r && r.maxHP !== null ? r.maxHP : 0;
+  saveData(db);
+  return oc;
+}
+function dismissOwnCompanion(charId, ocId, reason) {
+  const ch = db.characters[charId]; if (!ch) return;
+  const oc = (ch.ownCompanions || []).find(c => c.id === ocId); if (!oc) return;
+  ch.ownCompanions = ch.ownCompanions.filter(c => c.id !== ocId);
+  if (reason) showToast(`<strong>${esc(oc.name)}</strong> ${esc(reason)}`);
+  saveData(db);
+}
 function companionDamage(id, amt) {
   const comp = _companionById(id); amt = parseInt(amt) || 0; if (!comp || amt <= 0) return;
   let remaining = amt, temp = comp.tempHP || 0;
@@ -1736,12 +1813,12 @@ function renderCompanionSheet(comp) {
   </div>`;
 }
 function setCompanionPortrait(companionId, dataUrl, zoom = 100, x = 50, y = 50) {
-  const comp = (db.companions || {})[companionId]; if (!comp) return;
+  const comp = _companionById(companionId); if (!comp) return;
   _companionWrite(comp, { portrait: dataUrl, portraitZoom: zoom, portraitX: x, portraitY: y });
   renderApp();
 }
 function removeCompanionPortrait(companionId) {
-  const comp = (db.companions || {})[companionId]; if (!comp) return;
+  const comp = _companionById(companionId); if (!comp) return;
   _companionWrite(comp, { portrait: null, portraitZoom: 100, portraitX: 50, portraitY: 50 });
   renderApp();
 }
@@ -3565,7 +3642,7 @@ function openPortraitCropModal(imageSrc) {
 }
 
 function openPortraitFramer(newDataUrl) {
-  const ch = _portraitTarget?.companionId ? (db.companions || {})[_portraitTarget.companionId] : db.characters[currentCharId]; if (!ch) return;
+  const ch = _portraitTarget?.companionId ? _companionById(_portraitTarget.companionId) : db.characters[currentCharId]; if (!ch) return;
   const src = newDataUrl || ch.portrait;
   if (!src) return;
   const zoom = newDataUrl ? 100 : (ch.portraitZoom || 100);
@@ -3622,7 +3699,7 @@ function pfUpdate() {
 
 function savePortrait() {
   if (_portraitTarget?.companionId) {
-    const comp = (db.companions || {})[_portraitTarget.companionId]; _portraitTarget = null;
+    const comp = _companionById(_portraitTarget.companionId); _portraitTarget = null;
     closeModal();
     if (comp) _companionWrite(comp, { portraitZoom: parseInt(document.getElementById('pf-zoom')?.value) || 100,
       portraitX: parseInt(document.getElementById('pf-x')?.value), portraitY: parseInt(document.getElementById('pf-y')?.value) });
