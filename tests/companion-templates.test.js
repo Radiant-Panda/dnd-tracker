@@ -120,4 +120,77 @@ test('Review focus: no template is silently unresolved', () => {
   assert.deepStrictEqual(bad, []);
 });
 
+// ── Resolving against the owner ──
+const mkCh = (cls, level, abil = {}, extra = {}) => ({ edition: '2014', level, classes: [{ class: cls, subclass: extra.subclass || '', level }],
+  abilities: { str: 10, dex: 14, con: 12, int: 16, wis: 14, cha: 10, ...abil }, spellBonus: {}, ...extra });
+const resolve = (key, ch, oc = {}) => { const t = T[key]; const c = R.newOwnCompanion(t, oc); return R.resolveCompanion(t, c, R.companionContext(ch, t, c)); };
+
+test('Steel Defender (TCE) HP scales with artificer level', () => {
+  for (const [lvl, hp] of [[3, 20], [7, 40], [15, 80]]) assert.strictEqual(resolve('Steel Defender|TCE', mkCh('Artificer', lvl)).maxHP, hp, 'level ' + lvl);
+  const r = resolve('Steel Defender|TCE', mkCh('Artificer', 7));
+  assert.strictEqual(r.ac, 15);
+  assert.deepStrictEqual(r.hitDice, { count: 7, die: 'd8' });
+  assert.strictEqual(r.notes.hp, '40 = 2 + INT 3 + 5 × Artificer 7');
+  const rend = r.monster.actions.find(a => a.name === 'Force-Empowered Rend').desc;
+  assert.match(rend, /\+6 to hit/);              // PB 3 + INT 3
+  assert.match(rend, /1d8 \+ 3 force damage/);
+});
+test('Beast of the Sky vs Land and 2024 AC from Wisdom', () => {
+  const ch = mkCh('Ranger', 5, { wis: 16 }, { edition: '2024' });
+  assert.strictEqual(resolve('Beast of the Sky|XPHB', ch).maxHP, 24);
+  assert.strictEqual(resolve('Beast of the Land|XPHB', ch).maxHP, 30);
+  assert.strictEqual(resolve('Beast of the Land|XPHB', ch).ac, 16);
+});
+test('Bestial Spirit variants at 2nd and 5th level', () => {
+  const ch = mkCh('Druid', 9, { wis: 16 }, { edition: '2024' });
+  assert.strictEqual(resolve('Bestial Spirit|XPHB', ch, { variant: 'Air', spellLevel: 2 }).maxHP, 20);
+  assert.strictEqual(resolve('Bestial Spirit|XPHB', ch, { variant: 'Land', spellLevel: 5 }).maxHP, 45);
+  assert.strictEqual(resolve('Bestial Spirit|XPHB', ch, { variant: 'Land', spellLevel: 5 }).ac, 16);
+  const air = resolve('Bestial Spirit|XPHB', ch, { variant: 'Air', spellLevel: 2 });
+  assert.ok(air.monster.traits.some(t => t.name === 'Flyby'));
+  assert.match(air.monster.actions.find(a => a.name === 'Rend').desc, /1d8 \+ 6/);
+});
+test('Celestial Spirit Defender AC and Animated Object sizes', () => {
+  const ch = mkCh('Cleric', 9, { wis: 16 }, { edition: '2024' });
+  assert.strictEqual(resolve('Celestial Spirit|XPHB', ch, { variant: 'Defender', spellLevel: 5 }).ac, 18);
+  assert.strictEqual(resolve('Celestial Spirit|XPHB', ch, { variant: 'Avenger', spellLevel: 5 }).ac, 16);
+  assert.strictEqual(resolve('Animated Object|XPHB', mkCh('Wizard', 9, {}, { edition: '2024' }), { variant: 'Large', spellLevel: 5 }).maxHP, 20);
+});
+test('GM overrides win and survive a level change', () => {
+  const t = T['Steel Defender|TCE'];
+  const oc = R.newOwnCompanion(t, {}); oc.overrides = { maxHP: 99, attackBonus: 9 };
+  for (const lvl of [3, 10]) {
+    const r = R.resolveCompanion(t, oc, R.companionContext(mkCh('Artificer', lvl), t, oc));
+    assert.strictEqual(r.maxHP, 99);
+    assert.match(r.monster.actions.find(a => a.name === 'Force-Empowered Rend').desc, /\+9 to hit/);
+    assert.deepStrictEqual(r.edited.sort(), ['attackBonus', 'maxHP']);
+  }
+});
+test('Review focus: no casting class falls back to INT for spell attack', () => {
+  const ch = mkCh('Fighter', 5, { int: 12 }, { edition: '2024' });
+  const v = R.companionContext(ch, T['Bestial Spirit|XPHB'], { spellLevel: 2 });
+  assert.strictEqual(v.SPELLATK, 3 + 1);
+});
+test('newOwnCompanion starts with defaults', () => {
+  const t = T['Bestial Spirit|XPHB'];
+  const oc = R.newOwnCompanion(t, { variant: 'Air', spellLevel: 3, concentrationSpell: 'Summon Beast', hp: 25, id: 'x' });
+  assert.deepStrictEqual([oc.id, oc.templateKey, oc.name, oc.variant, oc.spellLevel, oc.hp, oc.tempHP, oc.turnMode, oc.concentrationSpell],
+    ['x', 'Bestial Spirit|XPHB', 'Bestial Spirit', 'Air', 3, 25, 0, 'afterOwner', 'Summon Beast']);
+});
+test('Review focus: sanitizeOwnCompanion cleans player-written junk', () => {
+  const oc = R.sanitizeOwnCompanion({ id: 'a', templateKey: 'Steel Defender|TCE', name: '<b>x</b>'.repeat(100), hp: '12', tempHP: -4,
+    conditions: ['Prone', 'Bogus', { name: 'Stunned', duration: 2 }], overrides: { maxHP: '30', evil: 1, ac: 'x' }, uses: { a: '2' },
+    portrait: 'javascript:alert(1)', turnMode: 'sideways' }, ['Prone', 'Stunned']);
+  assert.strictEqual(oc.name.length, 200);
+  assert.deepStrictEqual([oc.hp, oc.tempHP, oc.conditions, oc.overrides, oc.uses, oc.portrait, oc.turnMode],
+    [12, 0, ['Prone', { name: 'Stunned', duration: 2 }], { maxHP: 30 }, { a: 2 }, null, 'own']);
+  assert.strictEqual(R.sanitizeOwnCompanion({ name: 'no key' }, []), null);
+});
+test('staleConcentrationCompanions finds summons whose spell ended', () => {
+  const ch = { activeConcentration: { spellName: 'Summon Fey' }, ownCompanions: [
+    { id: 'a', concentrationSpell: 'Summon Beast' }, { id: 'b', concentrationSpell: 'Summon Fey' }, { id: 'c', concentrationSpell: null }] };
+  assert.deepStrictEqual(R.staleConcentrationCompanions(ch).map(c => c.id), ['a']);
+  assert.deepStrictEqual(R.staleConcentrationCompanions({ ...ch, activeConcentration: null }).map(c => c.id), ['a', 'b']);
+});
+
 console.log(`\n${passed} passed`);
