@@ -1816,6 +1816,67 @@ function renderOwnSheetExtras(comp) {
     ${comp.hp <= 0 && t.revive ? `<div class="own-revive"><span class="defeated-tag">Down</span> ${esc(t.revive)}</div>` : ''}
   </div>`;
 }
+// ── Summoning by casting ──
+// Summon templates for a spell, preferring the character's edition
+function _summonTemplatesFor(ch, spellName) {
+  if (typeof COMPANION_TEMPLATES === 'undefined') return [];
+  const ed = ch.edition === '2014' ? '2014' : '2024';
+  const all = Object.values(COMPANION_TEMPLATES).filter(t => t.kind === 'summon' && t.grantedBy.spell === spellName);
+  const mine = all.filter(t => t.edition === ed);
+  return mine.length ? mine : all;
+}
+// After a spell is cast: offer the creature it summons. Returns true when a picker opened.
+function _afterCastCompanion(ch, spellName, level) {
+  if (typeof COMPANION_TEMPLATES === 'undefined') return false;
+  if (spellName === 'Find Familiar') { _openFamiliarPicker(ch); return true; }
+  const ts = _summonTemplatesFor(ch, spellName);
+  if (!ts.length) return false;
+  if (ts.length === 1) {
+    const t = ts[0];
+    _openOwnFormPicker(ch.id, t.key, { spellLevel: level }, { fixedLevel: true,
+      title: `${t.name} summoned${t.concentration ? ` (${_ORD[level] || level} level)` : ''}${t.variants ? ' — choose form' : ''}`,
+      onConfirm: `confirmSummon('${ch.id}','${jsStr(t.key)}',${level},document.getElementById('own-variant')?.value||null)`,
+      combatBox: _summonCombatBox() });
+    return true;
+  }
+  // Several creatures (Find Steed 2014 forms): pick one
+  openModal(`<h2>${esc(spellName)} — choose a form</h2>
+    <div class="form-group"><select id="own-summon-form">${ts.map(t => `<option value="${esc(t.key)}">${esc(t.name)}</option>`).join('')}</select></div>
+    ${_summonCombatBox()}
+    <div class="form-actions"><button class="btn" onclick="closeModal()">Not now</button>
+      <button class="btn btn-primary" onclick="confirmSummon('${ch.id}',document.getElementById('own-summon-form').value,${level})">Add</button></div>`);
+  return true;
+}
+function _summonCombatBox() { return ''; }   // filled in with combat (Task 9)
+function confirmSummon(charId, key, level, variant) {
+  const ch = db.characters[charId], t = _ownTemplate({ templateKey: key }); if (!ch || !t) return null;
+  // Casting the same summon again replaces the earlier one from that spell
+  ch.ownCompanions = (ch.ownCompanions || []).filter(c => _ownTemplate(c)?.grantedBy?.spell !== t.grantedBy.spell);
+  const usesLevel = t.concentration || /\bSL\b/.test(JSON.stringify([t.acF, t.hpF]));
+  const oc = addOwnCompanion(charId, key, { variant: variant || null, spellLevel: usesLevel ? level : null,
+    concentrationSpell: t.concentration ? t.grantedBy.spell : null });
+  closeModal(); renderApp();
+  return oc;
+}
+function _openFamiliarPicker(ch) {
+  const hasPact = (ch.featuresList || []).some(f => f.name === 'Pact of the Chain');
+  const ed = ch.edition === '2014' ? '2014' : '2024';
+  let forms = Object.values(COMPANION_TEMPLATES).filter(t => t.kind === 'familiar' && (t.group === 'Find Familiar' || hasPact));
+  const mine = forms.filter(t => t.edition === ed); if (mine.length) forms = mine;
+  openModal(`<h2>Find Familiar — choose a form</h2>
+    <div class="form-group"><select id="own-familiar-form">${forms.map(t => `<option value="${esc(t.key)}">${esc(t.name)}${t.group === 'Pact of the Chain' ? ' (Pact of the Chain)' : ''}</option>`).join('')}</select></div>
+    ${_summonCombatBox()}
+    <div class="form-actions"><button class="btn" onclick="closeModal()">Not now</button>
+      <button class="btn btn-primary" onclick="confirmFamiliar('${ch.id}',document.getElementById('own-familiar-form').value)">Add</button></div>`);
+}
+// One familiar at a time: a new one replaces the old
+function confirmFamiliar(charId, key) {
+  const ch = db.characters[charId]; if (!ch || !_ownTemplate({ templateKey: key })) return null;
+  ch.ownCompanions = (ch.ownCompanions || []).filter(c => _ownTemplate(c)?.kind !== 'familiar');
+  const oc = addOwnCompanion(charId, key);
+  closeModal(); renderApp();
+  return oc;
+}
 function dismissOwnCompanion(charId, ocId, reason) {
   const ch = db.characters[charId]; if (!ch) return;
   const oc = (ch.ownCompanions || []).find(c => c.id === ocId); if (!oc) return;
@@ -5316,6 +5377,7 @@ function confirmCastPact(spellName) {
     saveData(db);
     closeModal();
     _preserveScroll(() => renderApp());
+    _afterCastCompanion(ch, spellName, pactLvl);
   };
   if (isConc && ch.activeConcentration && ch.activeConcentration.spellName !== spellName) {
     showConfirm(`This will end your concentration on ${esc(ch.activeConcentration.spellName)}. Continue?`, docast);
@@ -5336,6 +5398,7 @@ function confirmCastRitual(spellName) {
     closeModal();
     showToast(`<strong>${esc(spellName)}</strong> cast as a ritual`);
     _preserveScroll(() => renderApp());
+    _afterCastCompanion(ch, spellName, fullSpellData(spellName, ch)?.level_int || 1);
   };
   if (isConc && ch.activeConcentration && ch.activeConcentration.spellName !== spellName) {
     showConfirm(`This will end your concentration on ${esc(ch.activeConcentration.spellName)}. Continue?`, docast);
@@ -5387,6 +5450,7 @@ function confirmCast(spellName, slotLevel) {
     saveData(db);
     closeModal();
     _preserveScroll(() => renderApp()); // refresh slots, combat pill, everything
+    _afterCastCompanion(ch, spellName, slotLevel);
   };
   if (isConc && ch.activeConcentration && ch.activeConcentration.spellName !== spellName) {
     showConfirm(`This will end your concentration on ${esc(ch.activeConcentration.spellName)}. Continue?`, docast);

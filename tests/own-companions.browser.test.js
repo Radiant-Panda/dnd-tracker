@@ -127,6 +127,46 @@ const { launch, openApp } = require('./browser');
     } catch (err) { check('task 6 block ran', false, err.message + err.stack); }
   });
 
+  // Task 7: cast hooks
+  await pg.evaluate(() => {
+    try {
+      const ch = setup('Druid', 9, 'Circle of the Land'); ch.edition = '2024';
+      ch.spells.slots = { 1: 4, 2: 3, 3: 3, 4: 3, 5: 1 }; ch.spells.known = [{ name: 'Summon Beast', level_int: 2 }, { name: 'Find Familiar', level_int: 1 }];
+      // closeModal only hides the modal; clear it so a check never sees an older picker
+      const cast = (n, l) => { document.getElementById('modal-content').innerHTML = ''; confirmCast(n, l); };
+      cast('Summon Beast', 4);
+      const m = document.getElementById('modal-content').innerHTML;
+      check('casting a summon asks for the form', /Bestial Spirit/.test(m) && !!document.getElementById('own-variant'), m.slice(0, 200));
+      document.getElementById('own-variant').value = 'Land';
+      document.querySelector('#modal-content .btn-primary').click();
+      const s = ch.ownCompanions.find(c => c.templateKey === 'Bestial Spirit|XPHB');
+      check('summon added at the cast level with its concentration spell', s && s.spellLevel === 4 && s.variant === 'Land' && s.concentrationSpell === 'Summon Beast', s);
+      check('summon HP uses the cast level', s && s.hp === 40, s?.hp);
+      cast('Summon Beast', 3);
+      document.querySelector('#modal-content .btn-primary').click();
+      const beasts = ch.ownCompanions.filter(c => c.templateKey === 'Bestial Spirit|XPHB');
+      check('casting it again replaces the earlier summon', beasts.length === 1 && beasts[0].spellLevel === 3, ch.ownCompanions);
+      cast('Find Familiar', 1);
+      check('Find Familiar asks which form', !!document.getElementById('own-familiar-form'), null);
+      const pick = re => { const sel = document.getElementById('own-familiar-form'); sel.value = [...sel.options].find(o => re.test(o.textContent)).value; document.querySelector('#modal-content .btn-primary').click(); };
+      pick(/^Owl/);
+      cast('Find Familiar', 1);
+      pick(/^Cat/);
+      const fams = ch.ownCompanions.filter(c => COMPANION_TEMPLATES[c.templateKey]?.kind === 'familiar');
+      check('only one familiar at a time', fams.length === 1 && /^Cat\|/.test(fams[0].templateKey), fams.map(f => f.templateKey));
+      check('a 2024 character gets 2024 forms', /\|XMM$/.test(fams[0].templateKey), fams[0].templateKey);
+      // Pact of the Chain adds forms
+      ch.featuresList.push({ name: 'Pact of the Chain', desc: '' });
+      cast('Find Familiar', 1);
+      check('Pact of the Chain forms offered', /Imp/.test(document.getElementById('own-familiar-form').innerHTML), null);
+      closeModal();
+      // A spell with no creature does nothing extra
+      ch.spells.known.push({ name: 'Bless', level_int: 1 });
+      cast('Bless', 1);
+      check('ordinary spells open no picker', !document.getElementById('own-familiar-form') && !document.getElementById('own-variant'), null);
+    } catch (err) { check('task 7 block ran', false, err.message + err.stack); }
+  });
+
   const results = await pg.evaluate(() => out);
   results.forEach(r => console.log(r));
   if (errs.length) console.log('PAGE ERRORS:', errs);
