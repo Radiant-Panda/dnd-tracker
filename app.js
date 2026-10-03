@@ -1888,14 +1888,56 @@ function _afterCastCompanion(ch, spellName, level) {
       <button class="btn btn-primary" onclick="confirmSummon('${ch.id}',document.getElementById('own-summon-form').value,${level})">Add</button></div>`);
   return true;
 }
-function _summonCombatBox() { return ''; }   // filled in with combat (Task 9)
+// "Add to combat" on the summon pickers — ticked while a fight is running
+function _summonCombatBox() {
+  const c = currentCampaignId ? getCampaign() : null;
+  const running = !!(c?.initiative?.combatants || []).length;
+  return `<label class="own-combat-box"><input type="checkbox" id="own-add-to-combat"${running ? ' checked' : ''}> Add to combat</label>`;
+}
+function _summonToCombat(charId, oc, toCombat) {
+  if (toCombat && oc && currentCampaignId && getCampaign()) { _addOwnToCombat(charId, oc.id); saveData(db); }
+}
+
+// ── Own companions in combat ──
+// A tracker row for an own companion, linked to it like characters are
+function _ownCombatant(ch, oc, initiative) {
+  const v = _ownCompanionView(ch, oc);
+  return { id: uid(), name: v.name, initiative, ac: v.ac, hp: v.hp, maxHP: v.maxHP, tempHP: v.tempHP, type: 'npc',
+    conditions: JSON.parse(JSON.stringify(v.conditions || [])), notes: '', statBlock: v.statBlock ? JSON.parse(JSON.stringify(v.statBlock)) : null,
+    ownCompanion: { charId: ch.id, companionId: oc.id } };
+}
+// After-owner companions take the owner's initiative and sit right below them (after earlier followers)
+function _placeOwnCombatant(init, cb, oc) {
+  const ownerIdx = init.combatants.findIndex(c => c.charId === cb.ownCompanion.charId);
+  if (oc.turnMode === 'afterOwner' && ownerIdx >= 0) {
+    const owner = init.combatants[ownerIdx];
+    cb.initiative = owner.initiative;
+    let at = ownerIdx + 1;
+    while (at < init.combatants.length && init.combatants[at].ownCompanion?.charId === owner.charId) at++;
+    init.combatants.splice(at, 0, cb);
+    if (_combatStarted(init) && at <= (init.currentIndex || 0)) init.currentIndex = (init.currentIndex || 0) + 1;
+  } else _insertCombatant(init, cb);
+}
+function _addOwnToCombat(charId, ocId, initiative) {
+  const ch = db.characters[charId]; const oc = (ch?.ownCompanions || []).find(c => c.id === ocId); if (!oc) return;
+  const init = getInitiative();
+  if (init.combatants.some(c => c.ownCompanion?.companionId === ocId)) return;   // one row per companion
+  const v = _ownCompanionView(ch, oc);
+  const cb = _ownCombatant(ch, oc, initiative ?? (Math.ceil(Math.random() * 20) + (v.initBonus || 0)));
+  cb.name = _uniqueCombatantName(init, cb.name);
+  _placeOwnCombatant(init, cb, oc);
+  combatLog(`${cb.name} (${ch.name}'s) added to combat (init ${cb.initiative})`);
+}
+function quickAddOwnCompanion(charId, ocId) { _addOwnToCombat(charId, ocId); saveData(db); closeModal(); renderApp(); }
 function confirmSummon(charId, key, level, variant) {
   const ch = db.characters[charId], t = _ownTemplate({ templateKey: key }); if (!ch || !t) return null;
   // Casting the same summon again replaces the earlier one from that spell
   ch.ownCompanions = (ch.ownCompanions || []).filter(c => _ownTemplate(c)?.grantedBy?.spell !== t.grantedBy.spell);
   const usesLevel = t.concentration || /\bSL\b/.test(JSON.stringify([t.acF, t.hpF]));
+  const toCombat = document.getElementById('own-add-to-combat')?.checked;
   const oc = addOwnCompanion(charId, key, { variant: variant || null, spellLevel: usesLevel ? level : null,
     concentrationSpell: t.concentration ? t.grantedBy.spell : null });
+  _summonToCombat(charId, oc, toCombat);
   closeModal(); renderApp();
   return oc;
 }
@@ -1914,7 +1956,9 @@ function _openFamiliarPicker(ch) {
 function confirmFamiliar(charId, key) {
   const ch = db.characters[charId]; if (!ch || !_ownTemplate({ templateKey: key })) return null;
   ch.ownCompanions = (ch.ownCompanions || []).filter(c => _ownTemplate(c)?.kind !== 'familiar');
+  const toCombat = document.getElementById('own-add-to-combat')?.checked;
   const oc = addOwnCompanion(charId, key);
+  _summonToCombat(charId, oc, toCombat);
   closeModal(); renderApp();
   return oc;
 }
@@ -2491,6 +2535,7 @@ function openAddCombatantModal() {
   const pcs = (campaign.characters||[]).map(id=>db.characters[id]).filter(Boolean);
   const npcs = (campaign.npcs||[]).map(id=>db.npcs[id]).filter(Boolean);
   const comps = Object.values(db.companions || {}).filter(c => c.campaignId === campaign.id);
+  const own = pcs.flatMap(ch => (ch.ownCompanions || []).map(oc => ({ ch, oc })));
   openModal(`<h2>Add Combatant</h2>
     <div class="form-row">
       <div class="form-group"><label>Name</label><input type="text" id="cb-name" placeholder="Goblin Archer"></div>
@@ -2501,13 +2546,15 @@ function openAddCombatantModal() {
       <div class="form-group"><label>Max HP</label><input type="number" id="cb-hp" value="10" min="1"></div>
       <div class="form-group"><label>Type</label><select id="cb-type"><option value="monster">Monster</option><option value="player">Player</option><option value="npc">NPC</option></select></div>
     </div>
-    ${pcs.length>0||npcs.length>0||comps.length>0?`<hr class="divider"><div class="panel-title" style="margin-bottom:0.5rem">Quick Add from Campaign</div>
+    ${pcs.length>0||npcs.length>0||comps.length>0||own.length>0?`<hr class="divider"><div class="panel-title" style="margin-bottom:0.5rem">Quick Add from Campaign</div>
     <div class="flex gap-1 flex-wrap">
       ${pcs.map(ch=>`<button class="btn btn-sm" onclick="quickAddCombatant('${ch.id}','player')">${esc(ch.name)}</button>`).join('')}
       ${npcs.filter(n => !_companionForNpc(n)).map(n=>`<button class="btn btn-sm" onclick="quickAddCombatant('${n.id}','npc')">${esc(_npcName(n))}</button>`).join('')}
     </div>
     ${comps.length ? `<div class="panel-title" style="margin:0.6rem 0 0.4rem">Companions</div>
-    <div class="flex gap-1 flex-wrap">${comps.map(c => `<button class="btn btn-sm" onclick="quickAddCombatant('${c.id}','companion')">${esc(c.name)} · ${esc(_companionOwnerName(c))}'s companion</button>`).join('')}</div>` : ''}`:''}
+    <div class="flex gap-1 flex-wrap">${comps.map(c => `<button class="btn btn-sm" onclick="quickAddCombatant('${c.id}','companion')">${esc(c.name)} · ${esc(_companionOwnerName(c))}'s companion</button>`).join('')}</div>` : ''}
+    ${own.length ? `<div class="panel-title" style="margin:0.6rem 0 0.4rem">Character companions</div>
+    <div class="flex gap-1 flex-wrap">${own.map(({ ch, oc }) => `<button class="btn btn-sm" onclick="quickAddOwnCompanion('${ch.id}','${oc.id}')">${esc(oc.name)} · ${esc(ch.name)}'s</button>`).join('')}</div>` : ''}`:''}
     <div class="form-actions"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="addCombatant()">Add</button></div>`);
   document.getElementById('cb-name').focus();
 }
@@ -2540,6 +2587,9 @@ function quickAddCombatant(entityId, type) {
   const rolled = d20 + initBonus;
 
   // Store state and open modal
+  const ownList = type === 'player' ? (db.characters[entityId].ownCompanions || []) : [];
+  const ownHtml = ownList.length ? `<div class="form-group"><label>Also add</label>${ownList.map(oc =>
+    `<label class="own-combat-box"><input type="checkbox" class="qa-own" value="${oc.id}" checked> ${esc(oc.name)}</label>`).join('')}</div>` : '';
   _quickAddState = { charId, npcId: type === 'npc' ? entityId : null, companionId: comp ? comp.id : null, name, type, ac, hp, maxHP, rolled };
   openModal(`
     <div class="panel surface2">
@@ -2550,6 +2600,7 @@ function quickAddCombatant(entityId, type) {
           <label for="qa-init">Initiative${initBonus ? ` <span class="text-dim" style="font-weight:normal">(d20 ${d20} ${initBonus >= 0 ? '+' : '−'} ${Math.abs(initBonus)})</span>` : ''}</label>
           <input type="number" id="qa-init" value="${rolled}">
         </div>
+        ${ownHtml}
         <div class="form-actions">
           <button class="btn" onclick="_closeQuickAdd()">Cancel</button>
           <button class="btn btn-primary" onclick="_confirmQuickAdd()">Add</button>
@@ -2562,6 +2613,7 @@ function quickAddCombatant(entityId, type) {
 function _confirmQuickAdd() {
   if (!_quickAddState) return;
   const initiative = parseInt(document.getElementById('qa-init').value) || _quickAddState.rolled;
+  const ownIds = [...document.querySelectorAll('#modal-content .qa-own:checked')].map(b => b.value);
   const { charId, npcId, type, ac, hp, maxHP } = _quickAddState;
   const init = getInitiative();
   const name = _uniqueCombatantName(init, _quickAddState.name);
@@ -2582,6 +2634,7 @@ function _confirmQuickAdd() {
   }
   _insertCombatant(init, cb);
   combatLog(`${name} added to combat (init ${initiative})`);
+  if (charId) ownIds.forEach(id => _addOwnToCombat(charId, id));
   _quickAddState = null;
   saveData(db); closeModal(); renderApp();
 }
@@ -2598,6 +2651,8 @@ function addAllPcsToInitiative() {
     _insertCombatant(init, {id:uid(),charId:id,name:ch.name,initiative,ac:ch.combat.ac,hp:ch.combat.currentHP,maxHP:ch.combat.maxHP,type:'player',conditions:ch.combat.conditions||[],notes:'',tempHP:ch.combat.tempHP||0});
     combatLog(`${ch.name} added to combat (init ${initiative})`);
   });
+  // Their active companions come along (one row each)
+  (campaign.characters||[]).forEach(id => (db.characters[id]?.ownCompanions || []).forEach(oc => _addOwnToCombat(id, oc.id)));
   saveData(db); renderApp();
 }
 function _getConcentrationSpell(cb) {

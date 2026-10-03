@@ -4161,3 +4161,4 @@ header::after {
 .own-field input { width:5rem; }
 .own-rename-row { display:flex; gap:0.5rem; align-items:center; justify-content:space-between; flex-wrap:wrap; margin-bottom:0.4rem; }
 .own-revive { margin-top:0.4rem; font-size:0.8rem; }
+.own-combat-box { display:flex; gap:0.4rem; align-items:center; font-size:0.85rem; margin:0.2rem 0; }

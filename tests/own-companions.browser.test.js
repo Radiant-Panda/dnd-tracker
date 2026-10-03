@@ -211,6 +211,53 @@ const { launch, openApp } = require('./browser');
     } catch (err) { check('task 8 block ran', false, err.message + err.stack); }
   });
 
+  // Task 9: adding to combat
+  await pg.evaluate(() => {
+    try {
+      const ch = setup('Artificer', 7, 'Battle Smith');
+      const sd = addOwnCompanion(ch.id, 'Steel Defender|TCE');
+      const horse = addOwnCompanion(ch.id, 'Riding Horse|MM');
+      const init = () => getCampaign().initiative;
+      document.getElementById('modal-content').innerHTML = '';
+      quickAddCombatant(ch.id, 'player');
+      const boxes = [...document.querySelectorAll('#modal-content .qa-own')];
+      check('quick add lists the character\'s companions ticked', boxes.length === 2 && boxes.every(b => b.checked), boxes.length);
+      boxes.find(b => b.value === horse.id).checked = false;
+      document.getElementById('qa-init').value = 15;
+      _confirmQuickAdd();
+      const rows = init().combatants;
+      check('owner and ticked companion added, unticked left out', rows.length === 2 && rows.some(r => r.ownCompanion?.companionId === sd.id) && !rows.some(r => r.ownCompanion?.companionId === horse.id), rows.map(r => r.name));
+      const sdRow = rows.find(r => r.ownCompanion);
+      check('after-owner companion sits right below the owner with its initiative', rows.indexOf(sdRow) === rows.findIndex(r => r.charId === ch.id) + 1 && sdRow.initiative === 15, rows.map(r => [r.name, r.initiative]));
+      check('linked row has live numbers and a stat block', sdRow.maxHP === 40 && sdRow.ac === 15 && !!sdRow.statBlock, sdRow);
+      init().combatants = [];
+      addAllPcsToInitiative();
+      check('Add all PCs also adds active companions', init().combatants.some(r => r.ownCompanion?.companionId === sd.id) && init().combatants.some(r => r.ownCompanion?.companionId === horse.id), init().combatants.map(r => r.name));
+      addAllPcsToInitiative();
+      check('adding again never duplicates a companion row', init().combatants.filter(r => r.ownCompanion?.companionId === sd.id).length === 1, init().combatants.map(r => r.name));
+      init().combatants = [];
+      document.getElementById('modal-content').innerHTML = '';
+      openAddCombatantModal();
+      check('add menu lists own companions under the owner', /Steel Defender · Tinker's/.test(document.getElementById('modal-content').textContent), null);
+      closeModal();
+      // Summoning mid-fight
+      addAllPcsToInitiative();
+      ch.spells.slots = { 1: 4, 2: 3, 3: 3, 4: 1 }; ch.spells.known = [{ name: 'Find Familiar', level_int: 1 }];
+      document.getElementById('modal-content').innerHTML = '';
+      confirmCast('Find Familiar', 1);
+      const box = document.getElementById('own-add-to-combat');
+      check('summon popup offers Add to combat, ticked while combat runs', box && box.checked, !!box);
+      document.querySelector('#modal-content .btn-primary').click();
+      const fam = ch.ownCompanions.find(c => COMPANION_TEMPLATES[c.templateKey].kind === 'familiar');
+      check('the familiar joined combat', !!fam && init().combatants.some(r => r.ownCompanion?.companionId === fam.id), init().combatants.map(r => r.name));
+      init().combatants = [];
+      document.getElementById('modal-content').innerHTML = '';
+      confirmCast('Find Familiar', 1);
+      check('with no combat the box is unticked', document.getElementById('own-add-to-combat') && !document.getElementById('own-add-to-combat').checked, null);
+      closeModal();
+    } catch (err) { check('task 9 block ran', false, err.message + err.stack); }
+  });
+
   const results = await pg.evaluate(() => out);
   results.forEach(r => console.log(r));
   if (errs.length) console.log('PAGE ERRORS:', errs);
