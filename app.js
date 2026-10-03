@@ -1928,6 +1928,50 @@ function _addOwnToCombat(charId, ocId, initiative) {
   _placeOwnCombatant(init, cb, oc);
   combatLog(`${cb.name} (${ch.name}'s) added to combat (init ${cb.initiative})`);
 }
+function _ownForRow(cb) {
+  if (!cb?.ownCompanion) return null;
+  const ch = db.characters[cb.ownCompanion.charId];
+  const oc = ch && (ch.ownCompanions || []).find(c => c.id === cb.ownCompanion.companionId);
+  return oc ? { ch, oc } : null;
+}
+// Rows whose companion is gone (dismissed, vanished, concentration ended) leave the tracker; the turn stays put
+function _dropMissingOwnRows(init) {
+  const before = init.combatants.length;
+  const cur = init.combatants[init.currentIndex || 0];
+  const kept = init.combatants.filter(cb => !cb.ownCompanion || _ownForRow(cb));
+  if (kept.length === before) return;
+  init.combatants = kept;
+  const at = cur ? kept.indexOf(cur) : -1;
+  init.currentIndex = at >= 0 ? at : Math.min(init.currentIndex || 0, Math.max(0, kept.length - 1));
+}
+// After-owner followers keep their owner's initiative and sit directly after them
+function _keepFollowersWithOwners(init) {
+  init.combatants.filter(cb => _ownForRow(cb)?.oc.turnMode === 'afterOwner').forEach(cb => {
+    const owner = init.combatants.find(c => c.charId === cb.ownCompanion.charId);
+    if (!owner) return;
+    const cur = init.combatants[init.currentIndex || 0];
+    init.combatants.splice(init.combatants.indexOf(cb), 1);
+    cb.initiative = owner.initiative;
+    let at = init.combatants.indexOf(owner) + 1;
+    while (at < init.combatants.length && init.combatants[at].ownCompanion?.charId === owner.charId) at++;
+    init.combatants.splice(at, 0, cb);
+    if (cur) init.currentIndex = init.combatants.indexOf(cur);
+  });
+}
+// At 0 HP: lasting companions go Down; summons and familiars vanish
+function _ownAtZero(ch, oc) {
+  if (oc.hp <= 0 && _ownTemplate(oc)?.atZero === 'vanish') dismissOwnCompanion(ch.id, oc.id, 'vanished (0 hit points)');
+}
+function toggleOwnTurnMode(i) {
+  const init = getInitiative(), cb = init.combatants[i], f = _ownForRow(cb); if (!f) return;
+  f.oc.turnMode = f.oc.turnMode === 'afterOwner' ? 'own' : 'afterOwner';
+  const cur = init.combatants[init.currentIndex || 0];
+  init.combatants.splice(i, 1);
+  if (cur !== cb) init.currentIndex = init.combatants.indexOf(cur);
+  if (f.oc.turnMode === 'own') { cb.initiative = Math.ceil(Math.random() * 20) + (_ownCompanionView(f.ch, f.oc).initBonus || 0); _insertCombatant(init, cb); }
+  else _placeOwnCombatant(init, cb, f.oc);
+  saveData(db); renderApp();
+}
 function quickAddOwnCompanion(charId, ocId) { _addOwnToCombat(charId, ocId); saveData(db); closeModal(); renderApp(); }
 function confirmSummon(charId, key, level, variant) {
   const ch = db.characters[charId], t = _ownTemplate({ templateKey: key }); if (!ch || !t) return null;
@@ -1974,6 +2018,7 @@ function companionDamage(id, amt) {
   let remaining = amt, temp = comp.tempHP || 0;
   if (temp > 0) { const absorbed = Math.min(temp, remaining); temp -= absorbed; remaining -= absorbed; }
   _companionWrite(comp, { tempHP: temp, hp: Math.max(0, comp.hp - remaining) });
+  if (comp._own) { const f = _findOwnCompanion(id); if (f) _ownAtZero(f.ch, f.oc); }
   renderApp();
 }
 function companionHeal(id, amt) {
@@ -2377,7 +2422,11 @@ function getInitiative() { const c=getCampaign(); if(!c.initiative) c.initiative
 // A linked character is the source of truth for its own HP, temp HP, max HP and AC, so
 // damage, healing or armour changed on the character sheet shows in the tracker too
 function _syncLinkedCombatants(init) {
+  if (init?.combatants) _dropMissingOwnRows(init);
   (init?.combatants || []).forEach(cb => {
+    const own = _ownForRow(cb);
+    if (own) { const v = _ownCompanionView(own.ch, own.oc); cb.hp = v.hp; cb.tempHP = v.tempHP; cb.maxHP = v.maxHP; cb.ac = v.ac;
+      cb.conditions = JSON.parse(JSON.stringify(v.conditions || [])); return; }
     const ch = cb.charId && db.characters[cb.charId];
     if (ch?.combat) { cb.hp = ch.combat.currentHP; cb.tempHP = ch.combat.tempHP || 0; cb.maxHP = ch.combat.maxHP; cb.ac = ch.combat.ac; return; }
     const comp = cb.companionId && (db.companions || {})[cb.companionId];
@@ -2385,16 +2434,19 @@ function _syncLinkedCombatants(init) {
     const npc = cb.npcId && db.npcs[cb.npcId];
     if (npc) { cb.hp = npc.hp ?? cb.hp; cb.maxHP = npc.maxHP ?? cb.maxHP; cb.ac = npc.ac ?? cb.ac; cb.tempHP = npc.tempHP || 0; }
   });
+  if (init?.combatants) _keepFollowersWithOwners(init);
 }
 // After the tracker changes a linked NPC's or companion's HP (or a companion's conditions), write it back
 function _pushLinked(cb) {
+  const own = _ownForRow(cb);
+  if (own) { own.oc.hp = cb.hp; own.oc.tempHP = cb.tempHP || 0; own.oc.conditions = JSON.parse(JSON.stringify(cb.conditions || [])); _ownAtZero(own.ch, own.oc); return; }
   const comp = cb?.companionId && (db.companions || {})[cb.companionId];
   if (comp) { comp.hp = cb.hp; comp.tempHP = cb.tempHP || 0; comp.conditions = JSON.parse(JSON.stringify(cb.conditions || [])); return; }
   const npc = cb?.npcId && db.npcs[cb.npcId];
   if (npc) { npc.hp = cb.hp; npc.tempHP = cb.tempHP || 0; }
 }
 // Monsters and NPCs at 0 HP are out of the fight; characters and companions at 0 HP still take turns
-function _isDefeated(cb) { return !cb.charId && !cb.companionId && cb.type !== 'player' && cb.maxHP > 0 && cb.hp <= 0; }
+function _isDefeated(cb) { return !cb.charId && !cb.companionId && !cb.ownCompanion && cb.type !== 'player' && cb.maxHP > 0 && cb.hp <= 0; }
 function _combatStarted(init) { return (init.round || 1) > 1 || (init.currentIndex || 0) > 0; }
 // Places a combatant by initiative (after any ties) without moving the current turn
 function _insertCombatant(init, cb) {
@@ -2453,17 +2505,19 @@ function renderInitiativeTracker(campaign) {
         const hpPct = cb.maxHP>0?Math.round((cb.hp/cb.maxHP)*100):100;
         const defeated = _isDefeated(cb);
         // Players see how a monster is doing, not its numbers
-        const hideNumbers = IS_PLAYER_VIEW && !cb.charId && !cb.companionId && cb.type !== 'player';
+        const hideNumbers = IS_PLAYER_VIEW && !cb.charId && !cb.companionId && !cb.ownCompanion && cb.type !== 'player';
+        const ownRow = _ownForRow(cb), follower = ownRow?.oc.turnMode === 'afterOwner';
         const cbComp = cb.companionId && (db.companions || {})[cb.companionId];
         const health = defeated ? 'Defeated' : (cb.maxHP > 0 && cb.hp / cb.maxHP <= 0.5 ? 'Bloodied' : 'Healthy');
-        return `<div class="initiative-row ${isActive?'active':''}${defeated?' defeated':''}">
+        return `<div class="initiative-row ${isActive?'active':''}${defeated?' defeated':''}${follower?' init-follower':''}">
           <div class="init-order">${IS_PLAYER_VIEW ? `<span class="init-order-input" style="text-align:center">${cb.initiative}</span>` : `<input type="number" class="init-order-input" value="${cb.initiative}" min="1" max="30" title="Click to edit initiative" oninput="updateCombatantInitiative(${i},+this.value)"><button class="btn-reroll-init" onclick="rerollCombatantInitiative(${i})" title="Re-roll initiative">🎲</button>`}</div>
           <div class="init-body">
             <div class="init-top">
               <span class="init-name">${esc(cb.name)}</span>
               <span class="init-type ${cb.type}">${cb.type}</span>
               ${cb.companionId ? `<span class="companion-tag">Companion · ${esc(cbComp ? _companionOwnerName(cbComp) : 'party')}</span>` : ''}
-              ${cb.companionId && cb.hp <= 0 ? '<span class="defeated-tag">Down</span>' : ''}
+              ${(cb.companionId || ownRow) && cb.hp <= 0 ? '<span class="defeated-tag">Down</span>' : ''}
+              ${ownRow ? `<span class="companion-tag init-owner-tag">${esc(ownRow.ch.name)}'s</span>${!IS_PLAYER_VIEW ? `<button class="btn btn-sm own-turn-toggle" onclick="toggleOwnTurnMode(${i})" title="Switch between acting right after its owner and rolling its own initiative">${follower ? 'Acts after owner' : 'Own turn'}</button>` : ''}` : ''}
               ${(()=>{ const cs = _getConcentrationSpell(cb); const canClear = !IS_PLAYER_VIEW || cb.charId === _PV_PLAYER; return cs ? `<span class="conc-badge" title="Concentrating on ${esc(cs)}">C: ${esc(cs)}</span>${canClear ? `<button class="btn btn-sm conc-clear-combat" onclick="clearConcentrationForCombatant('${cb.charId}')" title="End concentration" style="font-size:0.6rem;padding:0.1rem 0.3rem;margin-left:0.25rem;opacity:0.7">&times;</button>` : ''}` : ''; })()}
               ${isActive?'<span class="active-arrow">&#9654; Active</span>':''}
               ${defeated?'<span class="defeated-tag">Defeated</span>':''}
@@ -2760,7 +2814,7 @@ function nextTurn() {
     if (prev.charId && db.characters[prev.charId]) {
       db.characters[prev.charId].combat.conditions = [...prev.conditions];
     }
-    if (prev.companionId) _pushLinked(prev);
+    if (prev.companionId || prev.ownCompanion) _pushLinked(prev);
   }
   // Advance, skipping defeated monsters (at most one full lap, so it can't hang)
   for (let step = 0; step < init.combatants.length; step++) {
@@ -3064,7 +3118,7 @@ function toggleCondition(i, cond) {
     db.characters[cb.charId].combat.conditions = [...cb.conditions];
   }
   // Write to a linked companion before logging: combatLog re-syncs linked rows from their cards
-  if (cb.companionId) _pushLinked(cb);
+  if (cb.companionId || cb.ownCompanion) _pushLinked(cb);
   combatLog(logText);
   saveData(db);
   const isActive = cb.conditions.some(c => condName(c) === cond);
@@ -3106,7 +3160,7 @@ function setConditionDuration(i, cond, dur) {
   if (cb.charId && db.characters[cb.charId]) {
     db.characters[cb.charId].combat.conditions = [...cb.conditions];
   }
-  if (cb.companionId) _pushLinked(cb);
+  if (cb.companionId || cb.ownCompanion) _pushLinked(cb);
   saveData(db);
   const row=document.querySelectorAll('.initiative-row')[i];
   if(row) { const cr=row.querySelector('.condition-row'); if(cr) cr.innerHTML=_conditionRowHtml(i, cb.conditions, _condOpts(cb)); }
@@ -3133,7 +3187,7 @@ function removeCondition(i,cond) {
   if (cb.charId && db.characters[cb.charId]) {
     db.characters[cb.charId].combat.conditions = [...cb.conditions];
   }
-  if (cb.companionId) _pushLinked(cb);
+  if (cb.companionId || cb.ownCompanion) _pushLinked(cb);
   combatLog(`${cb.name}: ${cond} removed`);
   saveData(db); renderApp();
 }

@@ -4162,3 +4162,6 @@ header::after {
 .own-rename-row { display:flex; gap:0.5rem; align-items:center; justify-content:space-between; flex-wrap:wrap; margin-bottom:0.4rem; }
 .own-revive { margin-top:0.4rem; font-size:0.8rem; }
 .own-combat-box { display:flex; gap:0.4rem; align-items:center; font-size:0.85rem; margin:0.2rem 0; }
+.init-follower { margin-left:1.2rem; border-left:2px solid var(--accent); }
+.init-owner-tag { margin-left:0.3rem; }
+.own-turn-toggle { font-size:0.65rem; padding:0.1rem 0.35rem; margin-left:0.25rem; }
