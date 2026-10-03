@@ -181,7 +181,8 @@ const { launch, openApp } = require('./browser');
       clearConcentration();
       check('clearing concentration dismisses the summon', !sum(), ch.ownCompanions);
       summon();
-      ch.activeConcentration = { spellName: 'Bless', castLevel: 1 }; renderApp();
+      confirmCast('Bless', 1);   // casting another concentration spell (the app asks first; confirm it)
+      document.querySelector('#confirm-ok, .confirm-ok, #modal-content .btn-danger, #modal-content .btn-primary')?.click();
       check('a new concentration spell dismisses it', !sum(), ch.ownCompanions);
       summon();
       doLongRest();
@@ -313,6 +314,98 @@ const { launch, openApp } = require('./browser');
       check('players see exact companion HP', /Tinker's/.test(document.body.innerHTML) && !/Healthy/.test([...document.querySelectorAll('.initiative-row')].find(r => /Steel Defender/.test(r.textContent))?.textContent || 'Healthy'), null);
       IS_PLAYER_VIEW = false; currentView = 'character';
     } catch (err) { check('task 10 block ran', false, err.message + err.stack); }
+  });
+
+  // Final review fixes
+  await pg.evaluate(() => {
+    const block = (name, fn) => { try { fn(); } catch (err) { check(name + ' ran', false, err.message + err.stack); } };
+    block('C2 prototype key', () => {
+      const ch = setup('Artificer', 7, 'Battle Smith');
+      ch.ownCompanions.push({ id: 'proto', templateKey: 'constructor|X', hp: 1 });
+      ch.ownCompanions.push({ id: 'proto2', templateKey: 'Steel Defender|TCE', hp: 1 });
+      COMPANION_TEMPLATES['Steel Defender|TCE'] = COMPANION_TEMPLATES['Steel Defender|TCE'];
+      let threw = null; try { migrateCharacter(ch); renderApp(); } catch (e) { threw = e.message; }
+      check('C2: odd template keys never break the sheet', threw === null, threw);
+      check('C2: a template key naming an object method is not a template', _ownTemplate({ templateKey: 'constructor' }) === null && _ownTemplate({ templateKey: 'toString' }) === null, null);
+    });
+    block('C3 migrate is side-effect free', () => {
+      const ch = setup('Druid', 9, 'Circle of the Land');
+      ch.ownCompanions.push({ id: 'stale1', templateKey: 'Bestial Spirit|XPHB', concentrationSpell: 'Summon Beast', spellLevel: 2, variant: 'Air', hp: 20 });
+      ch.activeConcentration = null;
+      const realSave = saveData; let saves = 0; saveData = d => { saves++; return realSave(d); };
+      try { migrateCharacter(ch); } finally { saveData = realSave; }
+      check('C3: migrateCharacter never saves', saves === 0, saves);
+      check('C3: migrateCharacter does not dismiss (sync does that where concentration changes)', ch.ownCompanions.some(c => c.id === 'stale1'), ch.ownCompanions.map(c => c.id));
+    });
+    block('I1 tracker x', () => {
+      const ch = setup('Druid', 9, 'Circle of the Land'); ch.edition = '2024';
+      ch.activeConcentration = { spellName: 'Summon Beast', castLevel: 2 };
+      const s = confirmSummon(ch.id, 'Bestial Spirit|XPHB', 2, 'Air');
+      addAllPcsToInitiative(); _addOwnToCombat(ch.id, s.id);
+      currentView = 'campaign'; getCampaign().campaignTab = 'initiative';
+      clearConcentrationForCombatant(ch.id);
+      check('I1: ending concentration from the tracker dismisses the summon', !ch.ownCompanions.some(c => c.id === s.id), ch.ownCompanions.map(c => c.id));
+      check('I1: and removes its row', !getInitiative().combatants.some(r => r.ownCompanion?.companionId === s.id), getInitiative().combatants.map(r => r.name));
+      currentView = 'character';
+    });
+    block('I2 index shift', () => {
+      const wiz = setup('Wizard', 9, ''); wiz.edition = '2024';
+      wiz.activeConcentration = { spellName: 'Haste', castLevel: 3 };
+      const owl = addOwnCompanion(wiz.id, 'Owl|XMM');
+      const g1 = { id: 'g1', name: 'G1', initiative: 30, ac: 10, hp: 30, maxHP: 30, type: 'monster', conditions: [], notes: '', tempHP: 0 };
+      const g2 = { id: 'g2', name: 'G2', initiative: 1, ac: 10, hp: 30, maxHP: 30, type: 'monster', conditions: [], notes: '', tempHP: 0 };
+      const init = getInitiative(); init.combatants = [g1]; init.currentIndex = 0;
+      _addOwnToCombat(wiz.id, owl.id, 25);
+      addAllPcsToInitiative();          // wizard after the owl
+      init.combatants.push(g2);
+      const names = () => getInitiative().combatants.map(r => r.name);
+      const owlIdx = getInitiative().combatants.findIndex(r => r.ownCompanion?.companionId === owl.id);
+      damageCombatant(owlIdx, 50);
+      const wizRow = getInitiative().combatants.find(r => r.charId === wiz.id);
+      check('I2: a vanishing summon does not hand its concentration check to the next row', !wizRow._concCheck, wizRow._concCheck);
+      // AoE across a vanishing summon
+      const owl2 = addOwnCompanion(wiz.id, 'Owl|XMM'); _addOwnToCombat(wiz.id, owl2.id, 25);
+      const list = getInitiative().combatants;
+      openAoeDamageModal();
+      document.querySelectorAll('#modal-content input[type=checkbox]').forEach(b => { b.checked = false; });
+      const tick = id => { const i = list.findIndex(r => r.id === id || r.ownCompanion?.companionId === id); document.querySelector(`#modal-content input[data-idx="${i}"]`).checked = true; };
+      tick('g1'); tick(owl2.id); tick('g2');
+      document.getElementById('aoe-dmg').value = 5;
+      applyAoeDamage();
+      const hp = id => getInitiative().combatants.find(r => r.id === id).hp;
+      check('I2: AoE still hits every chosen row after a summon vanishes', hp('g1') === 25 && hp('g2') === 25 && !getInitiative().combatants.some(r => r.ownCompanion?.companionId === owl2.id), [names(), hp('g1'), hp('g2')]);
+    });
+    block('I3 player view', () => {
+      const ch = setup('Artificer', 7, 'Battle Smith');
+      const sd = addOwnCompanion(ch.id, 'Steel Defender|TCE');
+      addAllPcsToInitiative();
+      const saved = db.characters[ch.id];
+      delete db.characters[ch.id];      // another player's character isn't loaded in this player's view
+      IS_PLAYER_VIEW = true;
+      check('I3: other players\' companion rows stay in the player view', getInitiative().combatants.some(r => r.ownCompanion?.companionId === sd.id), getInitiative().combatants.map(r => r.name));
+      IS_PLAYER_VIEW = false; db.characters[ch.id] = saved;
+    });
+    block('I4 modal refresh', () => {
+      const ch = setup('Artificer', 7, 'Battle Smith');
+      const sd = addOwnCompanion(ch.id, 'Steel Defender|TCE');
+      openOwnCompanionModal(ch.id, sd.id);
+      companionDamage(sd.id, 15);
+      check('I4: the open companion modal shows the new HP', /25 \/ 40/.test(document.getElementById('modal-content').innerHTML), null);
+      closeModal(); renderApp();
+    });
+    block('I5 player combat box', () => {
+      const ch = setup('Wizard', 5, ''); ch.edition = '2024';
+      addAllPcsToInitiative();
+      IS_PLAYER_VIEW = true;
+      check('I5: players are not offered Add to combat', !/own-add-to-combat/.test(_summonCombatBox()), null);
+      IS_PLAYER_VIEW = false;
+    });
+    block('M4 concentration only when concentrating', () => {
+      const ch = setup('Druid', 9, 'Circle of the Land'); ch.edition = '2024';
+      ch.activeConcentration = null;
+      const s = confirmSummon(ch.id, 'Bestial Spirit|XPHB', 2, 'Air');
+      check('M4: a summon added without active concentration is not tied to it', s && s.concentrationSpell === null && ch.ownCompanions.some(c => c.id === s.id), s);
+    });
   });
 
   const results = await pg.evaluate(() => out);
