@@ -123,6 +123,7 @@ function fillTokens(text, vars) {
 }
 
 // ── Working a template out against its owner ──────────────────────────────
+const OWN_TEMPLATE_KEY_RE = /^[A-Za-z0-9 ,()-]+\|[A-Za-z0-9]+$/;   // "Steel Defender|TCE"
 const OWN_COMPANION_OVERRIDES = ['ac', 'maxHP', 'speed', 'initBonus', 'attackBonus', 'saveDC'];
 const _CT_CAST_ABILITY = { Artificer: 'int', Wizard: 'int', Cleric: 'wis', Druid: 'wis', Ranger: 'wis', Bard: 'cha',
   Paladin: 'cha', Sorcerer: 'cha', Warlock: 'cha' };
@@ -212,7 +213,8 @@ function newOwnCompanion(t, opts = {}) {
 
 // The character record is player-writable: keep known keys, numbers as numbers, short text, known conditions
 function sanitizeOwnCompanion(raw, conditionNames) {
-  if (!raw || typeof raw !== 'object' || typeof raw.templateKey !== 'string') return null;
+  // The id and template key end up inside onclick handlers, so they must be plain words
+  if (!raw || typeof raw !== 'object' || typeof raw.templateKey !== 'string' || !OWN_TEMPLATE_KEY_RE.test(raw.templateKey)) return null;
   const num = (v, d, min = -Infinity) => { const n = Number(v); return Number.isFinite(n) ? Math.max(min, n) : d; };
   const str = (v, n = 200) => (v === undefined || v === null ? '' : String(v)).slice(0, n);
   const known = new Set(conditionNames || []);
@@ -224,8 +226,10 @@ function sanitizeOwnCompanion(raw, conditionNames) {
     else if (Number.isFinite(Number(v))) overrides[k] = Number(v);
   }
   return {
-    id: str(raw.id, 40) || ('oc' + Math.random().toString(36).slice(2, 9)), templateKey: str(raw.templateKey, 120), name: str(raw.name),
-    variant: raw.variant ? str(raw.variant, 60) : null, spellLevel: raw.spellLevel ? num(raw.spellLevel, null, 0) : null,
+    id: /^[A-Za-z0-9_-]{1,40}$/.test(String(raw.id)) ? String(raw.id) : ('oc' + Math.random().toString(36).slice(2, 9)),
+    templateKey: raw.templateKey, name: str(raw.name),
+    variant: raw.variant ? str(raw.variant, 60) : null,
+    spellLevel: raw.spellLevel ? Math.min(9, Math.max(0, Math.floor(num(raw.spellLevel, 0, 0)))) || null : null,
     concentrationSpell: raw.concentrationSpell ? str(raw.concentrationSpell, 100) : null,
     hp: num(raw.hp, 0, 0), tempHP: num(raw.tempHP, 0, 0), hitDiceUsed: num(raw.hitDiceUsed, 0, 0),
     conditions: (Array.isArray(raw.conditions) ? raw.conditions : []).map(x => {

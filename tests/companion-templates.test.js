@@ -186,6 +186,15 @@ test('Review focus: sanitizeOwnCompanion cleans player-written junk', () => {
     [12, 0, ['Prone', { name: 'Stunned', duration: 2 }], { maxHP: 30 }, { a: 2 }, null, 'own']);
   assert.strictEqual(R.sanitizeOwnCompanion({ name: 'no key' }, []), null);
 });
+test('Final review: sanitize constrains ids, template keys and spell level (XSS through onclick ids)', () => {
+  const evil = R.sanitizeOwnCompanion({ id: "');window.x=1;//", templateKey: 'Steel Defender|TCE', spellLevel: 99 }, []);
+  assert.match(evil.id, /^[A-Za-z0-9_-]{1,40}$/);
+  assert.strictEqual(evil.spellLevel, 9);
+  assert.strictEqual(R.sanitizeOwnCompanion({ id: 'a', templateKey: 'Steel Defender|TCE', spellLevel: 2.5 }, []).spellLevel, 2);
+  assert.strictEqual(R.sanitizeOwnCompanion({ id: 'ok_1-A', templateKey: 'Owl|MM' }, []).id, 'ok_1-A');
+  assert.strictEqual(R.sanitizeOwnCompanion({ id: 'a', templateKey: "x'|<b>" }, []), null);
+  assert.strictEqual(R.sanitizeOwnCompanion({ id: 'a', templateKey: 'constructor' }, []), null);
+});
 test('staleConcentrationCompanions finds summons whose spell ended', () => {
   const ch = { activeConcentration: { spellName: 'Summon Fey' }, ownCompanions: [
     { id: 'a', concentrationSpell: 'Summon Beast' }, { id: 'b', concentrationSpell: 'Summon Fey' }, { id: 'c', concentrationSpell: null }] };

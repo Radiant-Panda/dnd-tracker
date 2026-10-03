@@ -1048,6 +1048,16 @@ function renderApp() {
     }, 0);
   }
   renderCharSelector();
+  _refreshOwnCompanionModal();
+}
+// The companion modal shows live numbers: re-draw it after any change (or close it if the companion is gone)
+function _refreshOwnCompanionModal() {
+  const box = document.querySelector('#modal-content .own-companion-modal');
+  const overlay = document.getElementById('modal-overlay');
+  if (!box || !_openOwnModalId || overlay?.classList.contains('hidden')) return;
+  const comp = _companionById(_openOwnModalId);
+  if (!comp) { _openOwnModalId = null; closeModal(); return; }
+  box.innerHTML = renderCompanionSheet(comp);
 }
 
 // ── Campaign List ─────────────────────────────────────────────────────────────
@@ -1628,22 +1638,26 @@ function _companionById(id) {
 
 // ── Own companions (Stage 2): class companions, summons, familiars, mounts — stored on the character ──
 // Numbers are never stored: they are worked out from the template and the owner on every view.
-function _ownTemplate(oc) { return typeof COMPANION_TEMPLATES !== 'undefined' ? COMPANION_TEMPLATES[oc?.templateKey] || null : null; }
+function _ownTemplate(oc) {
+  if (typeof COMPANION_TEMPLATES === 'undefined' || !Object.prototype.hasOwnProperty.call(COMPANION_TEMPLATES, oc?.templateKey)) return null;
+  return COMPANION_TEMPLATES[oc.templateKey];
+}
 function _ownResolve(ch, oc) {
   const t = _ownTemplate(oc); if (!t) return null;
-  return resolveCompanion(t, oc, companionContext(ch, t, oc));
+  try { return resolveCompanion(t, oc, companionContext(ch, t, oc)); } catch (e) { return null; }   // bad data never takes the sheet down
 }
-// Runs on every render (from migrateCharacter): summons whose concentration ended vanish — this covers
-// the × button, a failed check, a new concentration spell and a long rest in one place — and HP stays
-// inside the live maximum (a level-down or a removed GM edit can lower it)
+// Summons whose concentration ended vanish. Called wherever concentration changes (the × buttons, a new
+// concentration spell, a long rest) — never from migrateCharacter, which must stay free of side effects.
+// The caller saves.
+function syncCompanionState(ch) {
+  const stale = ch ? staleConcentrationCompanions(ch) : [];
+  if (!stale.length) return;
+  const gone = new Set(stale.map(c => c.id));
+  ch.ownCompanions = ch.ownCompanions.filter(c => !gone.has(c.id));
+  stale.forEach(c => showToast(`<strong>${esc(c.name)}</strong> vanished (concentration ended)`));
+}
+// From migrateCharacter (every render): HP stays inside the live maximum (a level-down or a removed GM edit can lower it)
 function _syncOwnCompanions(ch) {
-  const stale = typeof staleConcentrationCompanions === 'function' ? staleConcentrationCompanions(ch) : [];
-  if (stale.length) {
-    const gone = new Set(stale.map(c => c.id));
-    ch.ownCompanions = ch.ownCompanions.filter(c => !gone.has(c.id));
-    if (typeof showToast === 'function') stale.forEach(c => { try { showToast(`<strong>${esc(c.name)}</strong> vanished (concentration ended)`); } catch (e) {} });
-    if (typeof db !== 'undefined' && db) saveData(db);
-  }
   (ch.ownCompanions || []).forEach(oc => {
     const r = _ownResolve(ch, oc);
     if (r && r.maxHP !== null && oc.hp > r.maxHP) oc.hp = r.maxHP;
@@ -1744,8 +1758,10 @@ function _openOwnFormPicker(charId, key, sel, extra = {}) {
       <button class="btn btn-primary" onclick="${extra.onConfirm || `confirmAddOwnCompanion('${charId}','${jsStr(key)}', document.getElementById('own-variant')?.value || null, parseInt(document.getElementById('own-sl')?.value) || null)`}">Add</button></div>`);
 }
 function askDismissOwnCompanion(charId, ocId) { _confirmDismissOwn = ocId; renderApp(); }
+let _openOwnModalId = null;   // the own companion shown in the modal, re-drawn on every renderApp
 function openOwnCompanionModal(charId, ocId) {
   const comp = _companionById(ocId); if (!comp) return;
+  _openOwnModalId = ocId;
   openModal(`<div class="own-companion-modal">${renderCompanionSheet(comp)}</div>
     <div class="form-actions"><button class="btn" onclick="closeModal()">Close</button></div>`);
 }
@@ -1890,6 +1906,7 @@ function _afterCastCompanion(ch, spellName, level) {
 }
 // "Add to combat" on the summon pickers — ticked while a fight is running
 function _summonCombatBox() {
+  if (IS_PLAYER_VIEW) return '';   // players can't write to combat; the GM adds it
   const c = currentCampaignId ? getCampaign() : null;
   const running = !!(c?.initiative?.combatants || []).length;
   return `<label class="own-combat-box"><input type="checkbox" id="own-add-to-combat"${running ? ' checked' : ''}> Add to combat</label>`;
@@ -1938,7 +1955,10 @@ function _ownForRow(cb) {
 function _dropMissingOwnRows(init) {
   const before = init.combatants.length;
   const cur = init.combatants[init.currentIndex || 0];
-  const kept = init.combatants.filter(cb => !cb.ownCompanion || _ownForRow(cb));
+  // Only when the owner is loaded and the companion is gone: the player view loads just its own character,
+  // so other players' companions must stay
+  if (IS_PLAYER_VIEW) return;
+  const kept = init.combatants.filter(cb => !cb.ownCompanion || !db.characters[cb.ownCompanion.charId] || _ownForRow(cb));
   if (kept.length === before) return;
   init.combatants = kept;
   const at = cur ? kept.indexOf(cur) : -1;
@@ -1980,7 +2000,7 @@ function confirmSummon(charId, key, level, variant) {
   const usesLevel = t.concentration || /\bSL\b/.test(JSON.stringify([t.acF, t.hpF]));
   const toCombat = document.getElementById('own-add-to-combat')?.checked;
   const oc = addOwnCompanion(charId, key, { variant: variant || null, spellLevel: usesLevel ? level : null,
-    concentrationSpell: t.concentration ? t.grantedBy.spell : null });
+    concentrationSpell: t.concentration && ch.activeConcentration?.spellName === t.grantedBy.spell ? t.grantedBy.spell : null });
   _summonToCombat(charId, oc, toCombat);
   closeModal(); renderApp();
   return oc;
@@ -2882,7 +2902,8 @@ function updateCombatantHP(i,val) {
     const diff = Math.abs(newHP - oldHP);
     if (newHP < oldHP) {
       combatLog(`${cb.name} took ${diff} damage (HP ${oldHP}→${newHP})`);
-      _checkConcentration(i, diff);
+      const at = getInitiative().combatants.indexOf(cb);   // the row may have vanished (summon at 0 HP)
+      if (at >= 0) _checkConcentration(at, diff);
     } else {
       combatLog(`${cb.name} healed ${diff} HP (HP ${oldHP}→${newHP})`);
     }
@@ -2905,7 +2926,9 @@ function _damageCombatant(i, amt) {
   }
   _syncLinkedCombatants(init);
   combatLog(`${cb.name} took ${amt} damage (HP ${oldHP}→${cb.hp})${_isDefeated(cb) ? ' — defeated' : ''}`);
-  _checkConcentration(i, amt);
+  // A summon that vanished at 0 HP has left the list: look the row up again rather than trusting i
+  const at = init.combatants.indexOf(cb);
+  if (at >= 0) _checkConcentration(at, amt);
 }
 function damageCombatant(i,amt) {
   _damageCombatant(i, amt);
@@ -2989,6 +3012,7 @@ function clearConcentrationForCombatant(charId) {
   const ch = db.characters[charId];
   if (!ch) return;
   ch.activeConcentration = null;
+  syncCompanionState(ch);
   saveData(db);
   renderApp();
 }
@@ -3032,7 +3056,7 @@ function aoeToggleAll(checked) {
 function applyAoeDamage() {
   const baseDmg = parseInt(document.getElementById('aoe-dmg').value) || 0;
   if (baseDmg <= 0) return;
-  const combatants = getInitiative().combatants;
+  const combatants = getInitiative().combatants.slice();   // rows by their index when the modal opened
   let totalHit = 0, fullCount = 0, halfCount = 0, halfDmg = 0;
 
   document.querySelectorAll('.aoe-row').forEach(row => {
@@ -3046,7 +3070,9 @@ function applyAoeDamage() {
     // 'none' = 0 damage
     if (dmg <= 0) return;
     totalHit++;
-    _damageCombatant(idx, dmg);
+    // Summons that vanish at 0 HP leave the list, so find each target again by identity
+    const at = getInitiative().combatants.indexOf(combatants[idx]);
+    if (at >= 0) _damageCombatant(at, dmg);
   });
   saveData(db); renderApp();
 
@@ -3063,7 +3089,7 @@ function applyAoeDamage() {
     const idx = parseInt(row.querySelector('input[type=checkbox]').dataset.idx);
     const cb = combatants[idx];
     const hpEl = row.querySelector('.aoe-hp');
-    if (hpEl) {
+    if (hpEl && cb) {
       hpEl.textContent = `${cb.hp}/${cb.maxHP}`;
       const pct = cb.maxHP > 0 ? Math.round((cb.hp / cb.maxHP) * 100) : 100;
       hpEl.className = 'aoe-hp' + (pct <= 25 ? ' low' : pct <= 50 ? ' mid' : '');
@@ -5523,7 +5549,7 @@ function confirmCastPact(spellName) {
     ch.sessionLog = ch.sessionLog || [];
     ch.sessionLog.unshift({ text: entry, ts: Date.now() });
     if (ch.sessionLog.length > 100) ch.sessionLog = ch.sessionLog.slice(0, 100);
-    if (isConc) ch.activeConcentration = { spellName, castLevel: pactLvl };
+    if (isConc) { ch.activeConcentration = { spellName, castLevel: pactLvl }; syncCompanionState(ch); }
     saveData(db);
     closeModal();
     _preserveScroll(() => renderApp());
@@ -5543,7 +5569,7 @@ function confirmCastRitual(spellName) {
     ch.sessionLog = ch.sessionLog || [];
     ch.sessionLog.unshift({ text: `${spellName} (ritual)`, ts: Date.now() });
     if (ch.sessionLog.length > 100) ch.sessionLog = ch.sessionLog.slice(0, 100);
-    if (isConc) ch.activeConcentration = { spellName, castLevel: fullSpellData(spellName, ch)?.level_int || 1 };
+    if (isConc) { ch.activeConcentration = { spellName, castLevel: fullSpellData(spellName, ch)?.level_int || 1 }; syncCompanionState(ch); }
     saveData(db);
     closeModal();
     showToast(`<strong>${esc(spellName)}</strong> cast as a ritual`);
@@ -5567,7 +5593,7 @@ function castCantrip(spellName) {
     ch.sessionLog = ch.sessionLog || [];
     ch.sessionLog.unshift({ text: `${spellName} (cantrip)`, ts: Date.now() });
     if (ch.sessionLog.length > 100) ch.sessionLog = ch.sessionLog.slice(0, 100);
-    if (isConc) ch.activeConcentration = { spellName, castLevel: 0 };
+    if (isConc) { ch.activeConcentration = { spellName, castLevel: 0 }; syncCompanionState(ch); }
     saveData(db);
     showToast(`<strong>${esc(spellName)}</strong> cast!`);
 
@@ -5596,7 +5622,7 @@ function confirmCast(spellName, slotLevel) {
     ch.sessionLog = ch.sessionLog || [];
     ch.sessionLog.unshift({ text: entry, ts: Date.now() });
     if (ch.sessionLog.length > 100) ch.sessionLog = ch.sessionLog.slice(0, 100);
-    if (isConc) ch.activeConcentration = { spellName, castLevel: slotLevel };
+    if (isConc) { ch.activeConcentration = { spellName, castLevel: slotLevel }; syncCompanionState(ch); }
     saveData(db);
     closeModal();
     _preserveScroll(() => renderApp()); // refresh slots, combat pill, everything
@@ -9186,6 +9212,7 @@ function toggleInspiration() {
 function clearConcentration() {
   const ch = db.characters[currentCharId]; if (!ch) return;
   ch.activeConcentration = null;
+  syncCompanionState(ch);
   saveData(db); renderApp();
 }
 function setExhaustion(level) {
@@ -9388,7 +9415,8 @@ function doLongRest() {
   // A long rest removes one level of exhaustion (both editions)
   ch.exhaustionLevel = Math.max(0, (ch.exhaustionLevel || 0) - 1);
   // Clear concentration
-  ch.activeConcentration = null;
+  ch.activeConcentration = null;   // a long rest ends concentration
+  syncCompanionState(ch);
   // Clear concentration warnings on any initiative combatant linked to this character
   const charId = currentCharId;
   db.campaigns.forEach(camp => {
