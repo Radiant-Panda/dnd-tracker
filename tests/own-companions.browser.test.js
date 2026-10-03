@@ -5,8 +5,9 @@ const { launch, openApp } = require('./browser');
   const b = await launch();
   const pg = await b.newPage(); const errs = []; pg.on('pageerror', e => errs.push(e.message));
   await openApp(pg);
-  await pg.evaluate(() => {
+  await pg.evaluate(async () => {
     showToast = () => {}; _showApp();
+    await fetchAllSpells();   // the Spells tab loads these on demand; casting reads concentration from them
     window.out = [];
     window.check = (name, cond, detail) => out.push((cond ? 'PASS ' : 'FAIL ') + name + (cond ? '' : '  → ' + String(JSON.stringify(detail)).slice(0, 300)));
     // Campaign cO with one character "Tinker" (2014, INT 16) open on the GM character page
@@ -165,6 +166,49 @@ const { launch, openApp } = require('./browser');
       cast('Bless', 1);
       check('ordinary spells open no picker', !document.getElementById('own-familiar-form') && !document.getElementById('own-variant'), null);
     } catch (err) { check('task 7 block ran', false, err.message + err.stack); }
+  });
+
+  // Task 8: concentration + offers
+  await pg.evaluate(() => {
+    try {
+      const ch = setup('Druid', 9, 'Circle of the Land'); ch.edition = '2024';
+      ch.spells.slots = { 1: 4, 2: 3, 3: 3, 4: 3, 5: 1 }; ch.spells.known = [{ name: 'Summon Beast', level_int: 2 }, { name: 'Bless', level_int: 1 }];
+      const sum = () => ch.ownCompanions.find(c => c.concentrationSpell === 'Summon Beast');
+      // As a real cast does: concentration is set first, then the creature is added
+      const summon = () => { ch.activeConcentration = { spellName: 'Summon Beast', castLevel: 2 }; confirmSummon(ch.id, 'Bestial Spirit|XPHB', 2, 'Air'); };
+      summon(); renderApp();
+      check('a summon stays while concentrating', !!sum(), ch.ownCompanions);
+      clearConcentration();
+      check('clearing concentration dismisses the summon', !sum(), ch.ownCompanions);
+      summon();
+      ch.activeConcentration = { spellName: 'Bless', castLevel: 1 }; renderApp();
+      check('a new concentration spell dismisses it', !sum(), ch.ownCompanions);
+      summon();
+      doLongRest();
+      check('a long rest dismisses it', !sum(), ch.ownCompanions);
+      const fam = addOwnCompanion(ch.id, 'Owl|XMM');
+      doLongRest();
+      check('familiars stay through a long rest', ch.ownCompanions.some(c => c.id === fam.id), ch.ownCompanions);
+      // Offers
+      const sm = setup('Artificer', 2, 'Battle Smith');
+      check('no offer before the feature level', !_pendingCompanionOffer(sm), _pendingCompanionOffer(sm)?.key);
+      sm.classes[0].level = 3; sm.level = 3; migrateCharacter(sm); renderApp();
+      check('offer appears when the feature is gained', _pendingCompanionOffer(sm)?.name === 'Steel Defender' && /Add your Steel Defender\?/.test(document.body.innerHTML), _pendingCompanionOffer(sm)?.key);
+      answerCompanionOffer(sm.id, _pendingCompanionOffer(sm).key, false);
+      check('Not now records it and it does not come back', !_pendingCompanionOffer(sm) && sm.companionOffers.length === 1, sm.companionOffers);
+      const sd = setup('Sorcerer', 6, 'Shadow Magic');
+      check('temporary class creatures are not offered', !_pendingCompanionOffer(sd), _pendingCompanionOffer(sd)?.key);
+      const bm = setup('Ranger', 3, 'Beast Master');
+      const offer = _pendingCompanionOffer(bm);
+      check('Beast Master gets one offer for the Primal Companion', offer && offer.group === 'Primal Companion', offer?.key);
+      document.getElementById('modal-content').innerHTML = '';
+      answerCompanionOffer(bm.id, offer.key, true);
+      check('accepting opens the Land/Sea/Sky choice', /Beast of the Sea/.test(document.getElementById('modal-content').innerHTML), null);
+      closeModal();
+      const ad = setup('Artificer', 3, 'Battle Smith');
+      answerCompanionOffer(ad.id, _pendingCompanionOffer(ad).key, true);
+      check('accepting a single companion adds it', ad.ownCompanions.some(c => /Steel Defender/.test(c.templateKey)) && !_pendingCompanionOffer(ad), ad.ownCompanions);
+    } catch (err) { check('task 8 block ran', false, err.message + err.stack); }
   });
 
   const results = await pg.evaluate(() => out);
