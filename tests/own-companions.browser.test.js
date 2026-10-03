@@ -258,6 +258,63 @@ const { launch, openApp } = require('./browser');
     } catch (err) { check('task 9 block ran', false, err.message + err.stack); }
   });
 
+  // Task 10: linked rows
+  await pg.evaluate(() => {
+    try {
+      const ch = setup('Artificer', 7, 'Battle Smith');
+      const sd = addOwnCompanion(ch.id, 'Steel Defender|TCE');
+      const mon = { id: 'm1', name: 'Goblin', initiative: 20, ac: 13, hp: 7, maxHP: 7, type: 'monster', conditions: [], notes: '', tempHP: 0 };
+      const init = getInitiative(); init.combatants = [mon]; init.currentIndex = 0; init.round = 1;
+      addAllPcsToInitiative();
+      const list = () => getInitiative().combatants;
+      const idx = id => list().findIndex(r => r.ownCompanion?.companionId === id);
+      const row = id => list()[idx(id)];
+      damageCombatant(idx(sd.id), 10);
+      check('tracker damage writes back to the companion', ch.ownCompanions[0].hp === 30, ch.ownCompanions[0].hp);
+      companionHeal(sd.id, 5);
+      check('sheet changes show in the tracker', row(sd.id).hp === 35, row(sd.id).hp);
+      const ownerIdx = list().findIndex(r => r.charId === ch.id);
+      updateCombatantInitiative(ownerIdx, 25);
+      sortInitiative();
+      check('follower moves with its owner', list().findIndex(r => r.charId === ch.id) + 1 === idx(sd.id) && row(sd.id).initiative === 25, list().map(r => [r.name, r.initiative]));
+      // Next Turn goes owner → companion
+      getInitiative().currentIndex = list().findIndex(r => r.charId === ch.id);
+      nextTurn();
+      check('Next Turn steps owner → companion', getInitiative().currentIndex === idx(sd.id), getInitiative().currentIndex);
+      // 0 HP: Steel Defender goes Down (not skipped)
+      damageCombatant(idx(sd.id), 999);
+      check('class companion at 0 HP is Down, still in the order', idx(sd.id) >= 0 && !_isDefeated(row(sd.id)) && ch.ownCompanions.some(c => c.id === sd.id), row(sd.id));
+      // Familiars vanish
+      const fam = addOwnCompanion(ch.id, 'Owl|MM');
+      _addOwnToCombat(ch.id, fam.id, 1);
+      damageCombatant(idx(fam.id), 999);
+      check('familiar at 0 HP vanishes from the character and the tracker', !ch.ownCompanions.some(c => c.id === fam.id) && idx(fam.id) < 0, list().map(r => r.name));
+      // Dismiss removes the row and keeps the current turn on the same combatant
+      getInitiative().currentIndex = list().findIndex(r => r.id === 'm1');
+      const current = list()[getInitiative().currentIndex].id;
+      dismissOwnCompanion(ch.id, sd.id); getInitiative();
+      check('dismiss removes the row', idx(sd.id) < 0, list().map(r => r.name));
+      check('Review focus: current turn stays on the same combatant', list()[getInitiative().currentIndex].id === current, getInitiative().currentIndex);
+      // Removing a row BEFORE the current turn keeps the turn too
+      const sd2 = addOwnCompanion(ch.id, 'Steel Defender|TCE'); _addOwnToCombat(ch.id, sd2.id);
+      getInitiative().currentIndex = list().length - 1;
+      const cur2 = list()[getInitiative().currentIndex].id;
+      dismissOwnCompanion(ch.id, sd2.id); getInitiative();
+      check('Review focus: removing an earlier row keeps the turn', list()[getInitiative().currentIndex].id === cur2, [getInitiative().currentIndex, list().map(r => r.id)]);
+      // GM can flip the mode
+      const sd3 = addOwnCompanion(ch.id, 'Steel Defender|TCE'); _addOwnToCombat(ch.id, sd3.id);
+      currentView = 'campaign'; getCampaign().campaignTab = 'initiative'; renderApp();
+      check('follower rows are marked in the tracker', !!document.querySelector('.init-follower'), null);
+      check('tracker shows whose companion it is', /Tinker's/.test(document.querySelector('.init-follower')?.textContent || ''), null);
+      toggleOwnTurnMode(idx(sd3.id));
+      check('turn mode toggles to own', ch.ownCompanions.find(c => c.id === sd3.id).turnMode === 'own', ch.ownCompanions.find(c => c.id === sd3.id).turnMode);
+      // Player view shows exact HP for own companions
+      IS_PLAYER_VIEW = true; renderApp();
+      check('players see exact companion HP', /Tinker's/.test(document.body.innerHTML) && !/Healthy/.test([...document.querySelectorAll('.initiative-row')].find(r => /Steel Defender/.test(r.textContent))?.textContent || 'Healthy'), null);
+      IS_PLAYER_VIEW = false; currentView = 'character';
+    } catch (err) { check('task 10 block ran', false, err.message + err.stack); }
+  });
+
   const results = await pg.evaluate(() => out);
   results.forEach(r => console.log(r));
   if (errs.length) console.log('PAGE ERRORS:', errs);
