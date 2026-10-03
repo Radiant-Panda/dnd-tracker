@@ -1612,7 +1612,7 @@ function _pvCharacterViewHtml() {
       ${own.map(c => tab(c.id, `${esc(c.name)} (${esc(c.role)})`)).join('')}
       <button class="pv-tab pv-tab-add" onclick="openAddOwnCompanionModal('${ch.id}')" title="Add companion" aria-label="Add companion">+</button>
     </div>` : '';
-  return tabs + (_pvTab === 'character' ? renderCharacterSheet() : renderCompanionSheet(_companionById(_pvTab)));
+  return tabs + (_pvTab === 'character' ? (ch ? renderCompanionOffer(ch) : '') + renderCharacterSheet() : renderCompanionSheet(_companionById(_pvTab)));
 }
 
 // Fields the viewer may change on this companion: everything for the GM, the access setting's fields for a player
@@ -1633,8 +1633,17 @@ function _ownResolve(ch, oc) {
   const t = _ownTemplate(oc); if (!t) return null;
   return resolveCompanion(t, oc, companionContext(ch, t, oc));
 }
-// Keeps HP inside the live maximum (a level-down or a removed GM edit can lower it)
+// Runs on every render (from migrateCharacter): summons whose concentration ended vanish — this covers
+// the × button, a failed check, a new concentration spell and a long rest in one place — and HP stays
+// inside the live maximum (a level-down or a removed GM edit can lower it)
 function _syncOwnCompanions(ch) {
+  const stale = typeof staleConcentrationCompanions === 'function' ? staleConcentrationCompanions(ch) : [];
+  if (stale.length) {
+    const gone = new Set(stale.map(c => c.id));
+    ch.ownCompanions = ch.ownCompanions.filter(c => !gone.has(c.id));
+    if (typeof showToast === 'function') stale.forEach(c => { try { showToast(`<strong>${esc(c.name)}</strong> vanished (concentration ended)`); } catch (e) {} });
+    if (typeof db !== 'undefined' && db) saveData(db);
+  }
   (ch.ownCompanions || []).forEach(oc => {
     const r = _ownResolve(ch, oc);
     if (r && r.maxHP !== null && oc.hp > r.maxHP) oc.hp = r.maxHP;
@@ -1742,7 +1751,7 @@ function openOwnCompanionModal(charId, ocId) {
 }
 function renderOwnCompanionsPanel(ch) {
   const list = (ch.ownCompanions || []).map(oc => _ownCompanionView(ch, oc));
-  return `<div class="sheet-panel own-companions-panel">
+  return `${renderCompanionOffer(ch)}<div class="sheet-panel own-companions-panel">
     <div class="cs-section-label">Companions</div>
     ${list.map(c => `<div class="own-companion-row">
       ${_companionArtHtml(c, 40)}
@@ -1816,6 +1825,38 @@ function renderOwnSheetExtras(comp) {
     ${comp.hp <= 0 && t.revive ? `<div class="own-revive"><span class="defeated-tag">Down</span> ${esc(t.revive)}</div>` : ''}
   </div>`;
 }
+// ── Class companion offers ──
+// The first lasting class companion the character qualifies for and hasn't been asked about.
+// Primal Companion beasts share one offer (by group).
+function _pendingCompanionOffer(ch) {
+  if (!ch || typeof COMPANION_TEMPLATES === 'undefined') return null;
+  const asked = new Set(ch.companionOffers || []);
+  const have = new Set((ch.ownCompanions || []).map(c => _ownTemplate(c)?.group));
+  const cls = (_ownCompanionChoices(ch).find(g => g.group === 'From your class')?.items || [])
+    .map(i => COMPANION_TEMPLATES[i.key]).filter(t => t.offer);
+  return cls.find(t => !asked.has(t.group) && !have.has(t.group)) || null;
+}
+function answerCompanionOffer(charId, key, add) {
+  const ch = db.characters[charId], t = _ownTemplate({ templateKey: key }); if (!ch || !t) return;
+  ch.companionOffers = [...new Set([...(ch.companionOffers || []), t.group])];
+  saveData(db);
+  if (!add) { renderApp(); return; }
+  const siblings = (_ownCompanionChoices(ch).find(g => g.group === 'From your class')?.items || []).filter(i => i.group === t.group);
+  if (siblings.length > 1) {
+    openModal(`<h2>${esc(t.group)} — choose your companion</h2>
+      <div class="flex gap-1 flex-wrap">${siblings.map(i => `<button class="btn" onclick="confirmAddOwnCompanion('${charId}','${jsStr(i.key)}')">${esc(i.name)}</button>`).join('')}</div>
+      <div class="form-actions"><button class="btn" onclick="closeModal()">Cancel</button></div>`);
+    return;
+  }
+  confirmAddOwnCompanion(charId, key);
+}
+function renderCompanionOffer(ch) {
+  const t = _pendingCompanionOffer(ch); if (!t) return '';
+  return `<div class="sheet-panel companion-offer">Add your ${esc(t.group)}?
+    <button class="btn btn-sm btn-primary" onclick="answerCompanionOffer('${ch.id}','${jsStr(t.key)}',true)">Add</button>
+    <button class="btn btn-sm" onclick="answerCompanionOffer('${ch.id}','${jsStr(t.key)}',false)">Not now</button></div>`;
+}
+
 // ── Summoning by casting ──
 // Summon templates for a spell, preferring the character's edition
 function _summonTemplatesFor(ch, spellName) {
