@@ -624,6 +624,7 @@ async function _initPlayerView() {
 
     currentCampaignId = camp.id || _PV_CAMPAIGN;
     currentCharId = ch.id || _PV_PLAYER;
+    _pvCharId = currentCharId;
     currentView = 'character';
 
     // Update header for player view
@@ -694,15 +695,20 @@ function _pvUpdateHeader(charName) {
 // Player view saves — write the full character back to GM's Firestore
 function _pvSaveCharacter() {
   if (!IS_PLAYER_VIEW || !_firestoreReady || !_pvGmUid) return;
-  const charId = _PV_PLAYER || currentCharId;
+  const charId = _pvMyCharId();
   const ch = db.characters[charId];
   if (!ch) return;
   const base = `users/${_pvGmUid}`;
   // The companion list belongs to the GM; never write back a copy that may be out of date
-  const { companionIds, ...data } = ch;
-  _fireDb.doc(`${base}/characters/${charId}`).update(data).catch(e => {
-    console.warn('[PlayerView] Save failed:', e.message);
-  });
+  const { companionIds, ...rest } = ch;
+  // Firestore's update() throws (rather than rejecting) on undefined values, which used to break
+  // every save after one crept in; the JSON round trip drops them, as the GM's save does
+  try {
+    const data = JSON.parse(JSON.stringify(rest));
+    _fireDb.doc(`${base}/characters/${charId}`).update(data).catch(e => {
+      console.warn('[PlayerView] Save failed:', e.message);
+    });
+  } catch (e) { console.warn('[PlayerView] Save failed:', e.message); }
 }
 
 // ── GM: Share Link Generation ────────────────────────────────────────────────
@@ -973,6 +979,9 @@ const _PV_TOKEN    = _urlParams.get('token');
 let IS_PLAYER_VIEW = !!((_PV_CAMPAIGN && _PV_PLAYER && _PV_TOKEN));
 let _pvGmUid       = _urlParams.get('gm') || null; // GM's uid for Firestore paths
 let _pvListeners   = []; // player-view onSnapshot unsubscribe handles
+// The player view's own character. currentCharId can't be relied on: opening the Combat tab clears it
+var _pvCharId = null;
+function _pvMyCharId() { return _PV_PLAYER || _pvCharId || currentCharId; }
 
 // ── Setup View Detection ─────────────────────────────────────────────────────
 // Setup mode = anonymous player following a setup link to create a new character.
@@ -3286,7 +3295,7 @@ function openSendRequestModal() {
   _renderSendRequestModal();
 }
 function _renderSendRequestModal() {
-  const d = _reqDraft, ch = db.characters[currentCharId], init = getCampaign()?.initiative;
+  const d = _reqDraft, ch = db.characters[_pvMyCharId()], init = getCampaign()?.initiative;
   if (!d || !ch || !init?.combatants?.length) { closeModal(); return; }
   const typeOpts = sel => DAMAGE_TYPES.map(t => `<option value="${t}" ${t === sel ? 'selected' : ''}>${t}</option>`).join('');
   const partRows = (parts, key) => parts.map((p, j) => `<div class="req-part-row">
@@ -3382,7 +3391,7 @@ function _buildRequestFromDraft(d, ch, init, uidStr) {
   return { req: { ...req, shareToken: ch.shareToken } };
 }
 async function sendCombatRequest() {
-  const ch = db.characters[currentCharId], init = getCampaign()?.initiative;
+  const ch = db.characters[_pvMyCharId()], init = getCampaign()?.initiative;
   let me = null; try { me = firebase.auth().currentUser; } catch (e) {}
   if (!_reqDraft || !ch || !init?.combatId) return;
   const built = _buildRequestFromDraft(_reqDraft, ch, init, me?.uid || '');
@@ -10138,7 +10147,7 @@ function pickWeapon(idx) {
       }
     }
 
-    ch.attacks.push({ id: uid(), name: w.name, weaponType, bonus: bonusStr, damage: finalDmg, mastery: w.mastery || '', _unarmed: w._isUnarmed });
+    ch.attacks.push({ id: uid(), name: w.name, weaponType, bonus: bonusStr, damage: finalDmg, mastery: w.mastery || '', _unarmed: !!w._isUnarmed });
     saveData(db); renderApp();
   }
 
