@@ -83,8 +83,8 @@ Each request is a card:
 `applyCombatRequest(req, amounts)` — for each surviving target, in order:
 
 1. Snapshot the row (and linked character / companion): hp, tempHP, death saves.
-2. Damage → `_damageCombatant(i, amount)`; Heal → the existing heal path (never above max HP; a dead
-   monster/NPC at 0 HP is not revived by healing — matches current behaviour). Rows are found by
+2. Damage → `_damageCombatant(i, amount)`; Heal → the existing heal path (never above max HP). Players
+   can't pick defeated monsters/NPCs, so healing one only happens if the GM edits a card that way. Rows are found by
    combatant id each time, because summons may vanish mid-request.
 3. One combat log entry per request, e.g.
    "Thorn (Fireball): Goblin 1 takes 28 fire; Goblin 2 takes 14 fire (saved); Ogre takes 8 (immune to fire)".
@@ -160,9 +160,10 @@ match /users/{gmId}/campaigns/{campaignId}/combatRequests/{reqId} {
 }
 ```
 
-`validRequest` checks the exact key set, types, string lengths, `kind`, `save` shape, target and part
-counts (lists up to 20 / 4 can be checked by index in rules), amount ranges and that each `type` is in
-the fixed list. Players list their own pending requests with `where('uid', '==', auth.uid)`, which
+`validRequest` checks the exact key set, string lengths, `kind`, that `save` is a map or null, the
+server timestamp, and 1–20 targets. Per-target and per-part checks (part counts, amounts, types) are
+**not** in the rules: checking 20 targets × 4 parts exceeds Firestore's 1,000-expression limit per
+request. The GM app's `sanitizeRequest` checks all of them before anything is shown or applied. Players list their own pending requests with `where('uid', '==', auth.uid)`, which
 these rules allow and which survives a page reload (anonymous uid persists).
 
 The GM app **re-validates** every request with `sanitizeRequest` regardless of the rules, and escapes
