@@ -33,6 +33,7 @@ Check rules questions against these instead of answering from memory. Both cover
 - Class options: `node data/build-class-options.js`
 - Rules-text markup (subclasses, feats, species, spells): `node data/update-rules-text.js`
 - Official book imports: `node data/import-official-books.js [--dry] [spells|spells2014|feats|backgrounds|species|subclasses]`
+- Cantrip damage (for scaling attack rows): `node data/build-cantrip-damage.js`
 - Others: `build-spellcasting.js`, `build-proficiencies.js`, `build-item-weights.js`, `build-companion-templates.js`, `add-subclass-resources.js`
 - `data/subclass_spells.js` also holds SUBCLASS_TABLES. Never rewrite it wholesale.
 - `process-spells.js` reads `../dnd-data-main`, not 5etools.
@@ -48,6 +49,7 @@ Check rules questions against these instead of answering from memory. Both cover
 - Combat: linked characters, NPCs, and companions are the source of truth (`_syncLinkedCombatants`). `combatLog()` re-syncs linked rows, so write to a linked card before logging.
 - Anything a player can write (player view, companions) must be sanitized and escaped (`esc()`). An XSS was found here before.
 - Combat requests (players send damage/healing): records in `users/{gm}/campaigns/{id}/combatRequests`, wrapped by `_reqStore` (tests swap in an in-memory store). Maths and checks in `damage-rules.js`; the GM re-checks every request with `sanitizeRequest` and drops requests whose doc id isn't `[A-Za-z0-9_-]` (ids go into onclick handlers). Rows are addressed by `cb.id` and fights by `init.combatId`, which only the GM assigns (`_ensureCombatIds`). Firestore rules can't check every target/part (1,000-expression limit), so keep per-item checks in `sanitizeRequest`.
+- Attacks: rows with `auto: true` get bonus and damage from level and ability scores on every render (`_syncAutoAttacks`, maths in `attack-rules.js`). Weapons keep `dice`/`dmgType` (or `unarmed`), cantrips keep `cantrip` (data in `data/cantrip_damage.js`). Typing over bonus or damage sets `auto: false`; `addAttack` rows start manual. `_migrateAutoAttacks` converts old weapon-picker rows (bare dice like "1d8 slashing").
 - `String.replace` treats `$'`, `$&` and `` $` `` in the replacement as patterns; use a function replacement when the new text holds `$` (a rules edit got mangled this way).
 - Sign-in: `signInWithGoogle` must open exactly one popup straight from the click, with no `await` before it.
 
