@@ -1120,6 +1120,19 @@ main {
 .attack-actions { white-space: nowrap; text-align: right; }
 .attack-actions .btn-icon { padding: 0.1rem 0.25rem; font-size: 0.8rem; opacity: 0.7; }
 .attack-actions .btn-icon:hover { opacity: 1; }
+/* Attack rows that follow level and ability scores */
+.atk-auto, .atk-auto-link { display: inline-block; margin-top: 1px; font-size: 0.58rem; line-height: 1.2; border-radius: 3px; padding: 0 4px; }
+.atk-auto { color: var(--text-dim); border: 1px solid var(--border); cursor: help; }
+.atk-save { font-size: 0.6rem; color: var(--gold-lt); white-space: nowrap; }
+.atk-auto-link { color: var(--gold); background: none; border: 1px dashed var(--gold); cursor: pointer; font-family: inherit; }
+.atk-auto-link:hover { background: rgba(var(--accent-rgb), 0.12); }
+.cantrip-pick-row { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; width: 100%; margin-bottom: 0.25rem; padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border); border-radius: 5px; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.cantrip-pick-row:hover:not(:disabled) { border-color: var(--gold); }
+.cantrip-pick-row:disabled { opacity: 0.5; cursor: default; }
+.cantrip-pick-name { font-size: 0.82rem; font-weight: 600; min-width: 120px; }
+.cantrip-pick-dmg { font-size: 0.8rem; color: #f59e0b; font-weight: 600; }
+.cantrip-pick-how { font-size: 0.72rem; color: var(--text-dim); margin-left: auto; }
 
 /* Currency */
 .currency-grid {

@@ -802,6 +802,7 @@ function migrateCharacter(ch) {
   }
   if (!ch.currency)       ch.currency = { cp:0, sp:0, ep:0, gp:0, pp:0 };
   if (!ch.attacks)        ch.attacks = [];
+  _migrateAutoAttacks(ch);
   if (!ch.skillExpertise) ch.skillExpertise = [];
   if (!ch.sessionLog)    ch.sessionLog = [];
   // v2 fields
@@ -4905,6 +4906,7 @@ function renderCombatSection(ch) {
 
 function renderAttacksSection(ch) {
   const rows = ch.attacks||[];
+  const live = _syncAutoAttacks(ch);
   return `<div class="sheet-panel" style="margin-top:0.6rem">
     <div class="cs-section-label">Attacks &amp; Spellcasting</div>
     <table class="attacks-table">
@@ -4918,7 +4920,7 @@ function renderAttacksSection(ch) {
       <tbody>
         ${rows.length === 0 ? `<tr><td colspan="5" style="text-align:center;color:var(--text-dim);font-style:italic;padding:0.8rem">No attacks added yet.</td></tr>` : ''}
         ${rows.map((atk,i)=>`<tr>
-          <td><input class="attack-input" value="${esc(atk.name)}" placeholder="Longsword" oninput="updateAttack(${i},'name',this.value)">${atk.mastery ? `<div title="${esc((typeof WEAPON_MASTERY_DESC !== 'undefined' && WEAPON_MASTERY_DESC[atk.mastery]) || '')}" style="font-size:0.58rem;color:#f59e0b;margin-top:1px;cursor:help">✦ ${esc(atk.mastery)}</div>` : ''}</td>
+          <td><input class="attack-input" value="${esc(atk.name)}" placeholder="Longsword" oninput="updateAttack(${i},'name',this.value)">${_attackTagHtml(atk, i)}${live[i] && live[i].save ? ` <span class="atk-save">${live[i].save} save</span>` : ''}${atk.mastery ? `<div title="${esc((typeof WEAPON_MASTERY_DESC !== 'undefined' && WEAPON_MASTERY_DESC[atk.mastery]) || '')}" style="font-size:0.58rem;color:#f59e0b;margin-top:1px;cursor:help">✦ ${esc(atk.mastery)}</div>` : ''}</td>
           <td><select class="attack-type-select" onchange="autoCalcAttackBonus(${i},this.value)">
             <option value="" ${!atk.weaponType?'selected':''}>—</option>
             <option value="melee-str" ${atk.weaponType==='melee-str'?'selected':''}>Melee (STR)</option>
@@ -4929,16 +4931,17 @@ function renderAttacksSection(ch) {
           <td><input class="attack-input" value="${esc(atk.bonus)}" placeholder="+5" oninput="updateAttack(${i},'bonus',this.value)"></td>
           <td><input class="attack-input" value="${esc(atk.damage)}" placeholder="1d8+3 slashing" oninput="updateAttack(${i},'damage',this.value)"></td>
           <td class="attack-actions">
-            <button class="btn btn-icon" onclick="rollAttack(${i})" title="Roll attack">🎲</button>
+            ${live[i] && live[i].save ? '' : `<button class="btn btn-icon" onclick="rollAttack(${i})" title="Roll attack">🎲</button>`}
             <button class="btn btn-icon" onclick="rollDamage(${i})" title="Roll damage">⚄</button>
             <button class="btn btn-icon btn-danger" onclick="removeAttack(${i})">&times;</button>
           </td>
         </tr>`).join('')}
       </tbody>
     </table>
-    <div style="display:flex;gap:0.4rem;margin-top:0.5rem">
+    <div style="display:flex;flex-wrap:wrap;gap:0.4rem;margin-top:0.5rem">
       <button class="btn btn-sm" onclick="addAttack()">+ Add Attack</button>
       <button class="btn btn-sm" onclick="openWeaponPicker()">⚔ Pick Weapon</button>
+      <button class="btn btn-sm" onclick="openCantripPicker()">✦ Add Cantrip</button>
     </div>
   </div>`;
 }
@@ -9986,22 +9989,118 @@ function adjustHitDice(delta) {
   saveData(db); renderApp();
 }
 
+// ── Attacks that keep up with the character ──────────────────────────────────
+// Rows with auto set work out their bonus and damage from level and ability scores on every
+// render (attack-rules.js). Typing over the bonus or damage makes a row manual; ↺ auto undoes that.
+function _monkLevel(ch) {
+  const e = (ch.classes || []).find(c => c.class === 'Monk');
+  return e ? (parseInt(e.level) || 1) : (ch.class === 'Monk' ? (parseInt(ch.level) || 1) : 0);
+}
+function _weaponData(name) {
+  return (typeof WEAPONS_DATA !== 'undefined' ? WEAPONS_DATA : []).find(w => w.name === name) || null;
+}
+// Cantrip damage for the character's edition (falling back to the other one), with its proper name
+function _cantripInfo(name, ch) {
+  if (typeof CANTRIP_DAMAGE === 'undefined' || !name) return null;
+  const ed = (ch && ch.edition) === '2014' ? '2014' : '2024', lc = String(name).trim().toLowerCase();
+  for (const e of [ed, ed === '2014' ? '2024' : '2014']) {
+    const key = Object.keys(CANTRIP_DAMAGE[e]).find(k => k.toLowerCase() === lc);
+    if (key) return { name: key, ...CANTRIP_DAMAGE[e][key] };
+  }
+  return null;
+}
+// The ability a cantrip is cast with: a feat's chosen ability, else the class whose list has it
+function _cantripAbility(ch, name) {
+  const lc = String(name).toLowerCase();
+  const sp = (ch.spells?.known || []).find(s => s && typeof s === 'object' && String(s.name).toLowerCase() === lc);
+  if (sp && (sp._miAbility || sp._sfAbility)) return sp._miAbility || sp._sfAbility;
+  const casters = casterEntries(ch);
+  const lists = String(sp?.dnd_class || (typeof _spellByName === 'function' && _spellByName(name, ch)?.dnd_class) || '');
+  const e = casters.find(c => lists.includes(c.cls)) || casters[0];
+  return e?.prog?.ability || SPELL_ABILITY[ch.class] || 'int';
+}
+// Bonus and damage for an auto row right now, or null for a manual row
+function _attackLive(ch, atk) {
+  if (!atk || !atk.auto) return null;
+  if (atk.cantrip) {
+    const info = _cantripInfo(atk.cantrip, ch);
+    if (!info) return null;
+    return cantripStats(info, { level: ch.level, abilityMod: mod((ch.abilities || {})[_cantripAbility(ch, atk.cantrip)] || 10),
+      atkBonus: parseInt(ch.spellBonus?.atk) || 0, dcBonus: parseInt(ch.spellBonus?.dc) || 0 });
+  }
+  return weaponStats(atk, { level: ch.level, abilities: ch.abilities, edition: ch.edition === '2014' ? '2014' : '2024',
+    monkLevel: _monkLevel(ch), weapon: _weaponData(atk.weapon || atk.name) });
+}
+// Writes each auto row's current bonus and damage onto it (so rolls and saves see them); returns them by row
+function _syncAutoAttacks(ch) {
+  return (ch.attacks || []).map(atk => {
+    const live = _attackLive(ch, atk);
+    if (live) { atk.bonus = live.bonus; atk.damage = live.damage; }
+    return live;
+  });
+}
+// Weapon-picker rows from before, and rows named after a damage cantrip, become auto (no saving here)
+function _migrateAutoAttacks(ch) {
+  (ch.attacks || []).forEach(a => {
+    if (!a || typeof a !== 'object') return;
+    const w = autoWeaponFrom(a);
+    if (w) { Object.assign(a, w, { auto: true }); return; }
+    if (a.auto === undefined && a.weaponType === 'spell' && (!String(a.damage || '').trim() || splitDamage(a.damage))) {
+      const info = _cantripInfo(a.name, ch);
+      if (info) Object.assign(a, { auto: true, cantrip: info.name });
+    }
+  });
+}
+function _attackCanAuto(atk) { return !!(atk.dice || atk.unarmed || atk.cantrip); }
+function _attackTagHtml(atk, i) {
+  if (atk.auto) return `<span class="atk-auto" id="atk-tag-${i}" title="Bonus and damage follow your level and ability scores. Type over them to set your own.">auto</span>`;
+  if (_attackCanAuto(atk)) return `<button class="atk-auto-link" id="atk-tag-${i}" onclick="setAttackAuto(${i})" title="Work out bonus and damage from your level and ability scores again">↺ auto</button>`;
+  return '';
+}
+function setAttackAuto(i) {
+  const ch = db.characters[currentCharId], atk = ch?.attacks?.[i];
+  if (!atk || !_attackCanAuto(atk)) return;
+  atk.auto = true;
+  saveData(db); renderApp();
+}
+
 function addAttack() {
   const ch = db.characters[currentCharId];
   ch.attacks = ch.attacks||[];
-  ch.attacks.push({id:uid(),name:'',bonus:'',damage:'',weaponType:''});
+  ch.attacks.push({id:uid(),name:'',bonus:'',damage:'',weaponType:'',auto:false});
   saveData(db); renderApp();
 }
 function removeAttack(i) { db.characters[currentCharId].attacks.splice(i,1); saveData(db); renderApp(); }
 function updateAttack(i, field, value) {
   const ch = db.characters[currentCharId];
-  if (ch.attacks[i]) ch.attacks[i][field] = value;
+  const atk = ch.attacks[i];
+  if (!atk) return;
+  atk[field] = value;
+  // Typing your own bonus or damage takes the row off auto
+  if ((field === 'bonus' || field === 'damage') && atk.auto) {
+    atk.auto = false;
+    const tag = document.getElementById('atk-tag-' + i);
+    if (tag) tag.outerHTML = _attackTagHtml(atk, i);
+  }
   _queueSave();
 }
 function autoCalcAttackBonus(i, weaponType) {
   const ch = db.characters[currentCharId];
   if (!ch || !ch.attacks[i]) return;
-  ch.attacks[i].weaponType = weaponType;
+  const atk = ch.attacks[i];
+  atk.weaponType = weaponType;
+  // Spell Attack on a damage cantrip's row, or a weapon type on bare dice, makes the row auto
+  const cantrip = weaponType === 'spell' ? _cantripInfo(atk.name, ch) : null;
+  if (cantrip) {
+    Object.assign(atk, { auto: true, cantrip: cantrip.name });
+    saveData(db); renderApp(); return;
+  }
+  if (atk.cantrip) { delete atk.cantrip; atk.auto = false; }
+  if (['melee-str', 'melee-finesse', 'ranged-dex'].includes(weaponType)) {
+    const bare = !atk.auto && !atk.unarmed && splitDamage(atk.damage);
+    if (bare) Object.assign(atk, bare, { auto: true });
+    if (atk.auto) { saveData(db); renderApp(); return; }
+  } else if (atk.auto) atk.auto = false;
   if (weaponType) {
     const pb = profBonus(ch.level);
     const abs = ch.abilities || {};
@@ -10062,10 +10161,8 @@ function updateWeaponResults() {
   let unarmedDmg = '1 bludgeoning';
   const unarmedStrike = { id: '_unarmed', name: 'Unarmed Strike', weapon_type: 'melee-str', dmg: unarmedDmg, category: 'simple', properties: [], _isUnarmed: true };
   if (isMonk) {
-    let die = 'd6';
-    if (monkLevel >= 17) die = 'd12';
-    else if (monkLevel >= 11) die = 'd10';
-    else if (monkLevel >= 5) die = 'd8';
+    const dice = ch.edition === '2014' ? ['d4', 'd6', 'd8', 'd10'] : ['d6', 'd8', 'd10', 'd12'];
+    const die = dice[cantripTier(monkLevel)]; // martial arts dice change at the same levels as cantrips
     unarmedDmg = `1${die} bludgeoning`;
     unarmedStrike.dmg = unarmedDmg;
     unarmedStrike._monkBadge = true;
@@ -10122,42 +10219,25 @@ function pickWeapon(idx) {
   const isMelee     = w.weapon_type !== 'ranged-dex';
 
   // Determine weapon_type and damage, then possibly ask follow-up questions
-  function applyWeapon(weaponType, dmg) {
+  // Bonus and damage are filled in on render from level and ability scores (auto rows)
+  function applyWeapon(weaponType, dmg, thrown) {
     const ch = db.characters[currentCharId];
     ch.attacks = ch.attacks || [];
-    const pb = profBonus(ch.level);
-    const abs = ch.abilities || {};
-    const strMod = mod(abs.str || 10);
-    const dexMod = mod(abs.dex || 10);
-    let abilityMod;
-    if (weaponType === 'melee-str')       abilityMod = strMod;
-    else if (weaponType === 'melee-finesse') abilityMod = Math.max(strMod, dexMod);
-    else                                  abilityMod = dexMod;
-    const bonus = pb + abilityMod;
-    const bonusStr = (bonus >= 0 ? '+' : '') + bonus;
-
-    // For unarmed strike, adjust damage based on Monk status
-    let finalDmg = dmg;
-    if (w._isUnarmed) {
-      const isMonk = ch.class === 'Monk' || (ch.classes && ch.classes.some(c => c.class === 'Monk'));
-      if (!isMonk) {
-        // Non-Monk: damage is 1 + STR mod (no dice, stored as flat bonus)
-        const flatDamage = 1 + strMod;
-        finalDmg = flatDamage + ' bludgeoning';
-      }
-    }
-
-    ch.attacks.push({ id: uid(), name: w.name, weaponType, bonus: bonusStr, damage: finalDmg, mastery: w.mastery || '', _unarmed: !!w._isUnarmed });
+    const unarmed = !!w._isUnarmed;
+    const parts = unarmed ? { unarmed: true, dmgType: 'bludgeoning' }
+      : (splitDamage(dmg) || { dice: '—', dmgType: '' });
+    ch.attacks.push({ id: uid(), name: w.name + (thrown ? ' (thrown)' : ''), weapon: unarmed ? '' : w.name, weaponType,
+      bonus: '', damage: '', mastery: w.mastery || '', _unarmed: unarmed, auto: true, ...parts });
     saveData(db); renderApp();
   }
 
-  // Step 1: thrown+melee asks Melee or Thrown?
+  // Step 1: thrown+melee asks Melee or Thrown? A thrown melee weapon uses the same ability as in melee.
   function askThrown(dmg, meleeType) {
     openModal(`<h2>${esc(w.name)}</h2>
       <p style="margin-bottom:1rem">How do you want to use this weapon?</p>
       <div style="display:flex;gap:0.5rem">
         <button class="btn btn-primary" style="flex:1" onclick="closeModal();pickWeaponApply('${meleeType}','${esc(dmg)}')">Melee</button>
-        <button class="btn" style="flex:1" onclick="closeModal();pickWeaponApply('ranged-dex','${esc(dmg)}')">Thrown (DEX)</button>
+        <button class="btn" style="flex:1" onclick="closeModal();pickWeaponApply('${meleeType}','${esc(dmg)}',true)">Thrown</button>
       </div>`);
   }
 
@@ -10175,7 +10255,7 @@ function pickWeapon(idx) {
 
   // Store pending apply for onclick strings
   window._pendingWeapon = w;
-  window.pickWeaponApply = function(weaponType, dmg) { applyWeapon(weaponType, dmg); };
+  window.pickWeaponApply = function(weaponType, dmg, thrown) { applyWeapon(weaponType, dmg, thrown); };
 
   if (isThrown && isMelee && !w.properties.includes('Ammunition')) {
     // Dagger, Handaxe, Javelin, Spear, Trident etc — ask melee or thrown first
@@ -10185,7 +10265,7 @@ function pickWeapon(idx) {
         <p style="margin-bottom:1rem">How do you want to use this weapon?</p>
         <div style="display:flex;gap:0.5rem">
           <button class="btn btn-primary" style="flex:1" onclick="closeModal();_askVersatileFor('${w.weapon_type}')">Melee</button>
-          <button class="btn" style="flex:1" onclick="closeModal();pickWeaponApply('ranged-dex','${esc(w.dmg)}')">Thrown (DEX)</button>
+          <button class="btn" style="flex:1" onclick="closeModal();pickWeaponApply('${w.weapon_type}','${esc(w.dmg)}',true)">Thrown</button>
         </div>`);
       window._askVersatileFor = function(wt) { askVersatile(wt); };
     } else {
@@ -10198,10 +10278,51 @@ function pickWeapon(idx) {
   }
 }
 
+// ── Cantrip Picker ────────────────────────────────────────────────────────────
+// Damage cantrips the character knows (or every damage cantrip, if they know none) as auto attack rows
+function _cantripChoices(ch) {
+  const known = [...new Set((ch.spells?.known || []).map(s => typeof s === 'object' && s ? s.name : s)
+    .map(n => _cantripInfo(n, ch)?.name).filter(Boolean))];
+  if (known.length) return { names: known.sort(), all: false };
+  const ed = ch.edition === '2014' ? '2014' : '2024';
+  return { names: typeof CANTRIP_DAMAGE === 'undefined' ? [] : Object.keys(CANTRIP_DAMAGE[ed]), all: true };
+}
+function openCantripPicker() {
+  const ch = db.characters[currentCharId];
+  if (!ch) return;
+  const { names, all } = _cantripChoices(ch);
+  const have = new Set((ch.attacks || []).map(a => a.cantrip).filter(Boolean));
+  const rows = names.map(n => {
+    const info = _cantripInfo(n, ch);
+    const s = _attackLive(ch, { auto: true, cantrip: n });
+    const added = have.has(n);
+    return `<button class="cantrip-pick-row" ${added ? 'disabled' : ''} data-cantrip="${esc(n)}" onclick="addCantripAttack(this.dataset.cantrip)">
+      <span class="cantrip-pick-name">${esc(n)}</span>
+      <span class="cantrip-pick-dmg">${esc(s ? s.damage : '')}</span>
+      <span class="cantrip-pick-how">${added ? 'added' : esc(info.save ? `${s.save} save, ${s.bonus}` : (s.bonus + ' to hit'))}</span>
+    </button>`;
+  }).join('');
+  openModal(`<h2>✦ Add Cantrip</h2>
+    <p style="font-size:0.78rem;color:var(--text-dim);margin-bottom:0.5rem">${all
+      ? 'You don\'t know any damage cantrips yet, so here are all of them.'
+      : 'Damage cantrips you know.'} The damage grows at levels 5, 11 and 17.</p>
+    <div style="max-height:400px;overflow-y:auto">${rows || '<p style="color:var(--text-dim);text-align:center">No damage cantrips found.</p>'}</div>`);
+}
+function addCantripAttack(name) {
+  const ch = db.characters[currentCharId];
+  const info = ch && _cantripInfo(name, ch);
+  if (!info) return;
+  closeModal();
+  ch.attacks = ch.attacks || [];
+  ch.attacks.push({ id: uid(), name: info.name, weaponType: 'spell', cantrip: info.name, auto: true, bonus: '', damage: '' });
+  saveData(db); renderApp();
+}
+
 function rollAttack(i) {
   const ch = db.characters[currentCharId];
   const atk = ch?.attacks?.[i];
   if (!atk) return;
+  _syncAutoAttacks(ch);
   const d20 = Math.floor(Math.random() * 20) + 1;
   const bonusNum = parseInt(atk.bonus) || 0;
   const exPen = exhaustionPenalty(ch);
@@ -10224,17 +10345,15 @@ function rollAttack(i) {
 function rollDamage(i) {
   const ch = db.characters[currentCharId];
   const atk = ch?.attacks?.[i];
+  if (ch) _syncAutoAttacks(ch);
   if (!atk?.damage) { showToast('No damage dice set.'); return; }
 
-  // Handle unarmed strike for non-Monks (flat damage, no dice)
-  if (atk._unarmed) {
-    const flatMatch = atk.damage.match(/^(\d+)\s/);
-    if (flatMatch) {
-      const flatDamage = parseInt(flatMatch[1]);
-      const dmgType = atk.damage.split(/\s+/).slice(1).join(' ');
-      showToast(`<strong>${esc(atk.name || 'Unarmed Strike')} damage:</strong> <strong>${flatDamage}</strong> ${esc(dmgType)}`);
-      return;
-    }
+  // Flat damage, no dice (an unarmed strike for non-Monks, a Blowgun)
+  const flatMatch = atk.damage.trim().match(/^(\d+)(\s|$)/);
+  if (flatMatch) {
+    const dmgType = atk.damage.trim().split(/\s+/).slice(1).join(' ');
+    showToast(`<strong>${esc(atk.name || 'Attack')} damage:</strong> <strong>${parseInt(flatMatch[1])}</strong> ${esc(dmgType)}`);
+    return;
   }
 
   const diceStr = atk.damage.trim().split(/\s+/)[0];
@@ -10246,7 +10365,8 @@ function rollDamage(i) {
   const total = rollSum + bonus;
   const rollsStr = count === 1 ? `${rolls[0]}` : `${rolls.join('+')}=${rollSum}`;
   const bonusStr = bonus > 0 ? ` + ${bonus}` : bonus < 0 ? ` \u2212 ${Math.abs(bonus)}` : '';
-  showToast(`<strong>${esc(atk.name || 'Attack')} damage:</strong> ${count}d${sides}(${rollsStr})${bonusStr} = <strong>${total}</strong>`);
+  const perBeam = /×\d+ beams/.test(atk.damage) ? ' (one beam; each beam rolls to hit)' : '';
+  showToast(`<strong>${esc(atk.name || 'Attack')} damage:</strong> ${count}d${sides}(${rollsStr})${bonusStr} = <strong>${total}</strong>${perBeam}`);
 }
 function updateCurrency(coin, value) {
   const ch = db.characters[currentCharId];
