@@ -23,6 +23,39 @@ service cloud.firestore {
                         || request.resource.data.characters.hasAll(resource.data.characters));
     }
 
+    // Combat requests: a player sends damage or healing for the GM's tracker. Players may only create
+    // requests (for a shared character in this campaign, proving the share link with its token) and
+    // read, list or cancel their own. Nobody but the GM changes one; the GM's app re-checks every field.
+    match /users/{gmId}/campaigns/{campaignId}/combatRequests/{reqId} {
+      function campaignDoc() { return get(/databases/$(database)/documents/users/$(gmId)/campaigns/$(campaignId)).data; }
+      function charDoc(charId) { return get(/databases/$(database)/documents/users/$(gmId)/characters/$(charId)).data; }
+      function text(v, max) { return v is string && v.size() <= max; }
+      // Only the list size is checked here: checking every target and part runs past Firestore's
+      // limit of 1000 expressions per request. The GM's app (sanitizeRequest) checks each one.
+      function validTargets(ts) { return ts is list && ts.size() >= 1 && ts.size() <= 20; }
+      function validRequest(d) {
+        return d.keys().hasOnly(['uid', 'charId', 'shareToken', 'combatId', 'fromCompanionId', 'fromName',
+                                 'kind', 'note', 'save', 'targets', 'createdAt'])
+          && d.keys().hasAll(['uid', 'charId', 'shareToken', 'combatId', 'kind', 'targets', 'createdAt'])
+          && text(d.charId, 64) && text(d.combatId, 64)
+          && text(d.get('fromCompanionId', ''), 64) && text(d.get('fromName', ''), 60)
+          && text(d.get('note', ''), 100)
+          && d.kind in ['damage', 'heal']
+          && (d.get('save', null) == null || d.save is map)
+          && d.createdAt == request.time
+          && validTargets(d.targets);
+      }
+
+      allow create: if request.auth != null
+                    && reqId.matches('^[A-Za-z0-9_-]{1,64}$')
+                    && request.resource.data.uid == request.auth.uid
+                    && validRequest(request.resource.data)
+                    && campaignDoc().get('characters', []).hasAny([request.resource.data.charId])
+                    && charDoc(request.resource.data.charId).get('shareToken', null) != null
+                    && request.resource.data.shareToken == charDoc(request.resource.data.charId).shareToken;
+      allow get, list, delete: if request.auth != null && resource.data.uid == request.auth.uid;
+    }
+
     // Player view + setup view: single-document reads/writes on characters.
     // "get" only — prevents listing all characters across users.
     match /users/{gmId}/characters/{charId} {

@@ -102,6 +102,7 @@ function signOut() {
   _playerCharListeners = {};
   _pvListeners.forEach(fn => fn());
   _pvListeners = [];
+  _stopRequestListener();
   // Clear local state
   _FS_USER = 'local';
   db = { campaigns: [], characters: {}, npcs: {}, companions: {} };
@@ -623,6 +624,7 @@ async function _initPlayerView() {
 
     currentCampaignId = camp.id || _PV_CAMPAIGN;
     currentCharId = ch.id || _PV_PLAYER;
+    _pvCharId = currentCharId;
     currentView = 'character';
 
     // Update header for player view
@@ -653,6 +655,13 @@ async function _initPlayerView() {
         if (currentView === 'character') renderApp();
       }, err => console.warn('[PlayerView] Character listener error:', err))
     );
+
+    // This player's own waiting combat requests (survives reloads: the anonymous uid persists)
+    const me = firebase.auth().currentUser;
+    if (me) _pvListeners.push(_reqStore.listenOwn(_pvGmUid, _PV_CAMPAIGN, me.uid, docs => {
+      _pvReqs = docs.map(d => ({ id: d.id, ...d.data }));
+      if (currentView === 'campaign') renderApp();
+    }));
 
 
   } catch (e) {
@@ -686,15 +695,20 @@ function _pvUpdateHeader(charName) {
 // Player view saves — write the full character back to GM's Firestore
 function _pvSaveCharacter() {
   if (!IS_PLAYER_VIEW || !_firestoreReady || !_pvGmUid) return;
-  const charId = _PV_PLAYER || currentCharId;
+  const charId = _pvMyCharId();
   const ch = db.characters[charId];
   if (!ch) return;
   const base = `users/${_pvGmUid}`;
   // The companion list belongs to the GM; never write back a copy that may be out of date
-  const { companionIds, ...data } = ch;
-  _fireDb.doc(`${base}/characters/${charId}`).update(data).catch(e => {
-    console.warn('[PlayerView] Save failed:', e.message);
-  });
+  const { companionIds, ...rest } = ch;
+  // Firestore's update() throws (rather than rejecting) on undefined values, which used to break
+  // every save after one crept in; the JSON round trip drops them, as the GM's save does
+  try {
+    const data = JSON.parse(JSON.stringify(rest));
+    _fireDb.doc(`${base}/characters/${charId}`).update(data).catch(e => {
+      console.warn('[PlayerView] Save failed:', e.message);
+    });
+  } catch (e) { console.warn('[PlayerView] Save failed:', e.message); }
 }
 
 // ── GM: Share Link Generation ────────────────────────────────────────────────
@@ -788,6 +802,7 @@ function migrateCharacter(ch) {
   }
   if (!ch.currency)       ch.currency = { cp:0, sp:0, ep:0, gp:0, pp:0 };
   if (!ch.attacks)        ch.attacks = [];
+  _migrateAutoAttacks(ch);
   if (!ch.skillExpertise) ch.skillExpertise = [];
   if (!ch.sessionLog)    ch.sessionLog = [];
   // v2 fields
@@ -965,6 +980,9 @@ const _PV_TOKEN    = _urlParams.get('token');
 let IS_PLAYER_VIEW = !!((_PV_CAMPAIGN && _PV_PLAYER && _PV_TOKEN));
 let _pvGmUid       = _urlParams.get('gm') || null; // GM's uid for Firestore paths
 let _pvListeners   = []; // player-view onSnapshot unsubscribe handles
+// The player view's own character. currentCharId can't be relied on: opening the Combat tab clears it
+var _pvCharId = null;
+function _pvMyCharId() { return _PV_PLAYER || _pvCharId || currentCharId; }
 
 // ── Setup View Detection ─────────────────────────────────────────────────────
 // Setup mode = anonymous player following a setup link to create a new character.
@@ -1026,6 +1044,7 @@ function renderBreadcrumb() {
 
 // ── Main Render ───────────────────────────────────────────────────────────────
 function renderApp() {
+  _syncRequestListener();
   const scrollY = window.scrollY;
   const appEl = document.getElementById('app');
   const appScrollTop = appEl ? appEl.scrollTop : 0;
@@ -1145,7 +1164,7 @@ function renderCampaignDetail() {
     <div class="tabs">
       <div class="tab ${tab==='characters'?'active':''}" onclick="showCampaign('${campaign.id}','characters')">Characters</div>
       ${!IS_PLAYER_VIEW ? `<div class="tab ${tab==='npcs'?'active':''}" onclick="showCampaign('${campaign.id}','npcs')">NPCs</div>` : ''}
-      <div class="tab ${tab==='initiative'?'active':''}" onclick="showCampaign('${campaign.id}','initiative')">&#9876; Combat</div>
+      <div class="tab ${tab==='initiative'?'active':''}" onclick="showCampaign('${campaign.id}','initiative')">&#9876; Combat${!IS_PLAYER_VIEW && _reqCampaign === campaign.id && _reqList.length ? ` <span class="spell-count req-count">${_reqList.length}</span>` : ''}</div>
       ${!IS_PLAYER_VIEW ? `<div class="tab ${tab==='journal'?'active':''}" onclick="showCampaign('${campaign.id}','journal')">📖 Journal ${(campaign.journal||[]).length>0?`<span class="spell-count">${(campaign.journal||[]).length}</span>`:''}</div>` : ''}
     </div>
     ${tab==='characters' ? renderCharacterCards(campaign) : ''}
@@ -2437,7 +2456,16 @@ function getConditionClass(cond) {
 }
 
 function getCampaign() { return db.campaigns.find(c => c.id === currentCampaignId); }
-function getInitiative() { const c=getCampaign(); if(!c.initiative) c.initiative={round:1,currentIndex:0,combatants:[],log:[]}; c.initiative.combatants.forEach(cb => { if(typeof cb.tempHP === 'undefined') cb.tempHP = 0; }); if(!c.initiative.log) c.initiative.log=[]; _syncLinkedCombatants(c.initiative); return c.initiative; }
+function getInitiative() { const c=getCampaign(); if(!c.initiative) c.initiative={round:1,currentIndex:0,combatants:[],log:[]}; c.initiative.combatants.forEach(cb => { if(typeof cb.tempHP === 'undefined') cb.tempHP = 0; }); if(!c.initiative.log) c.initiative.log=[]; _ensureCombatIds(c.initiative); _syncLinkedCombatants(c.initiative); return c.initiative; }
+// Combat requests address a fight by combatId and a row by its id. Only the GM assigns them
+// (the player view would invent ids nobody else knows). Returns true if anything was added.
+function _ensureCombatIds(init) {
+  if (IS_PLAYER_VIEW || !init?.combatants?.length) return false;
+  let changed = false;
+  if (!init.combatId) { init.combatId = uid(); changed = true; }
+  init.combatants.forEach(cb => { if (!cb.id) { cb.id = uid(); changed = true; } });
+  return changed;
+}
 
 // A linked character is the source of truth for its own HP, temp HP, max HP and AC, so
 // damage, healing or armour changed on the character sheet shows in the tracker too
@@ -2476,9 +2504,9 @@ function _insertCombatant(init, cb) {
   if (_combatStarted(init) && at <= (init.currentIndex || 0)) init.currentIndex = (init.currentIndex || 0) + 1;
 }
 
-function combatLog(text) {
+function combatLog(text, extra) {
   const init = getInitiative();
-  init.log.push({ round: init.round||1, text, ts: Date.now() });
+  init.log.push({ round: init.round||1, text, ts: Date.now(), ...(extra || {}) });
   saveData(db);
   // Update log panel in-place if visible — no full re-render needed
   const panel = document.getElementById('combat-log-entries');
@@ -2490,13 +2518,14 @@ function _renderCombatLogEntries(init) {
   return log.map(e =>
     `<div style="display:flex;align-items:baseline;gap:0.4rem;padding:0.15rem 0">
       <span style="font-size:0.6rem;background:rgba(var(--accent-rgb),0.25);color:#c4b5fd;border:1px solid rgba(var(--accent-rgb),0.35);border-radius:99px;padding:1px 5px;flex-shrink:0;white-space:nowrap">R${e.round}</span>
-      <span style="font-size:0.75rem;color:var(--text-dim)">${esc(e.text)}</span>
+      <span style="font-size:0.75rem;color:var(--text-dim)">${esc(e.text)}${_undoLinkHtml(init, e.undoId)}</span>
     </div>`
   ).join('');
 }
 
 function renderInitiativeTracker(campaign) {
   const init = campaign.initiative || {round:1,currentIndex:0,combatants:[]};
+  if (_ensureCombatIds(init)) setTimeout(() => saveData(db));
   _syncLinkedCombatants(init);
   const combatants = init.combatants || [];
   if (combatants.length === 0) return IS_PLAYER_VIEW
@@ -2517,8 +2546,10 @@ function renderInitiativeTracker(campaign) {
         <button class="btn btn-sm" onclick="addAllPcsToInitiative()">Add All PCs</button>
         <button class="btn btn-sm" onclick="sortInitiative()">Sort &#8595;</button>
         <button class="btn btn-sm${_combatLogOpen?' btn-primary':''}" onclick="toggleCombatLog()">📜 Log${(init.log||[]).length>0?` (${init.log.length})`:''}</button>
+        <label class="req-auto" title="Apply players' damage and healing as soon as it arrives. Save effects still wait for you to mark saves."><input type="checkbox" id="req-auto-toggle" ${init.autoApply ? 'checked' : ''} onchange="toggleAutoApply()"> Auto-apply</label>
       </div>` : ''}
     </div>
+    ${IS_PLAYER_VIEW ? _pvRequestBarHtml(init) : _renderRequestsPanel(init)}
     <div class="initiative-list">
       ${combatants.map((cb,i) => {
         const isActive = i===(init.currentIndex%combatants.length);
@@ -2912,7 +2943,7 @@ function updateCombatantHP(i,val) {
 }
 function updateCombatantInitiative(i,val) { if(!val||isNaN(val)) return; getInitiative().combatants[i].initiative=val; saveData(db); }
 // Temp HP soaks damage first. Linked characters use the sheet's rules (death saves, massive damage).
-function _damageCombatant(i, amt) {
+function _damageCombatant(i, amt, log = true) {
   const init = getInitiative(), cb = init.combatants[i];
   if (!cb || amt <= 0) return;
   const oldHP = cb.hp;
@@ -2925,7 +2956,7 @@ function _damageCombatant(i, amt) {
     _pushLinked(cb);
   }
   _syncLinkedCombatants(init);
-  combatLog(`${cb.name} took ${amt} damage (HP ${oldHP}→${cb.hp})${_isDefeated(cb) ? ' — defeated' : ''}`);
+  if (log) combatLog(`${cb.name} took ${amt} damage (HP ${oldHP}→${cb.hp})${_isDefeated(cb) ? ' — defeated' : ''}`);
   // A summon that vanished at 0 HP has left the list: look the row up again rather than trusting i
   const at = init.combatants.indexOf(cb);
   if (at >= 0) _checkConcentration(at, amt);
@@ -2934,7 +2965,7 @@ function damageCombatant(i,amt) {
   _damageCombatant(i, amt);
   saveData(db); renderApp();
 }
-function healCombatant(i,amt) {
+function _healCombatant(i, amt, log = true) {
   const init=getInitiative(), cb=init.combatants[i];
   if (!cb || amt <= 0) return;
   const oldHP = cb.hp;
@@ -2942,7 +2973,10 @@ function healCombatant(i,amt) {
   if (ch) _heal(ch, amt);
   else { cb.hp = Math.min(cb.maxHP, cb.hp + amt); _pushLinked(cb); }
   _syncLinkedCombatants(init);
-  combatLog(`${cb.name} healed ${amt} HP (HP ${oldHP}→${cb.hp})`);
+  if (log) combatLog(`${cb.name} healed ${amt} HP (HP ${oldHP}→${cb.hp})`);
+}
+function healCombatant(i,amt) {
+  _healCombatant(i, amt);
   saveData(db); renderApp();
 }
 function openTempHPInput(i) {
@@ -2985,6 +3019,394 @@ function resetLegendary(i) {
   cb.legendaryUsed = 0;
   saveData(db); renderApp();
 }
+// ── Combat requests ──────────────────────────────────────────────────────────
+// Players send damage or healing from the player view; the GM approves it (or auto-applies plain hits).
+// Spec: docs/superpowers/specs/2026-10-13-combat-requests-design.md. Maths and checks: damage-rules.js.
+// Requests are records in users/{gm}/campaigns/{campaign}/combatRequests. _reqStore wraps Firestore
+// so the browser tests can swap in an in-memory store.
+var _reqStore = {
+  _col(gmUid, campId) { return _fireDb.collection(`users/${gmUid}/campaigns/${campId}/combatRequests`); },
+  send(gmUid, campId, data) {
+    return this._col(gmUid, campId).add({ ...data, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+  },
+  remove(gmUid, campId, id) { return this._col(gmUid, campId).doc(id).delete(); },
+  // Resolves true only for the one GM tab whose transaction deletes the record, so a request is never applied twice
+  claim(gmUid, campId, id) {
+    const ref = this._col(gmUid, campId).doc(id);
+    return _fireDb.runTransaction(async t => { const s = await t.get(ref); if (!s.exists) return false; t.delete(ref); return true; });
+  },
+  _docs(snap) { return snap.docs.map(d => ({ id: d.id, data: d.data({ serverTimestamps: 'estimate' }) })); },
+  listenAll(gmUid, campId, onDocs) {
+    return this._col(gmUid, campId).onSnapshot(s => onDocs(this._docs(s)), err => console.warn('[Requests] listener error:', err));
+  },
+  listenOwn(gmUid, campId, uid, onDocs) {
+    return this._col(gmUid, campId).where('uid', '==', uid)
+      .onSnapshot(s => onDocs(this._docs(s)), err => console.warn('[Requests] own listener error:', err));
+  },
+};
+
+// GM state: sanitized waiting requests for the open campaign, and per-request edits on the cards
+var _reqUnsub = null, _reqCampaign = null, _reqList = [], _reqEdits = {}, _reqApplying = new Set();
+// Player state: this player's own waiting requests, and the send-form draft
+var _pvReqs = [], _reqDraft = null;
+
+function _stopRequestListener() {
+  if (_reqUnsub) _reqUnsub();
+  _reqUnsub = null; _reqCampaign = null; _reqList = []; _reqEdits = {}; _reqApplying = new Set();
+}
+// Watch requests for whichever campaign the GM has open (called from renderApp; no-op if unchanged)
+function _syncRequestListener() {
+  if (IS_PLAYER_VIEW) return;
+  const want = (_firestoreReady && _FS_USER && _FS_USER !== 'local' && currentCampaignId) ? currentCampaignId : null;
+  if (want === _reqCampaign) return;
+  _stopRequestListener();
+  _reqCampaign = want;
+  if (want) _reqUnsub = _reqStore.listenAll(_FS_USER, want, docs => _onCombatRequests(want, docs));
+}
+function _charOwnsCompanion(charId, compId) {
+  const ch = db.characters[charId];
+  return !!ch && ((ch.ownCompanions || []).some(oc => oc.id === compId) || (ch.companionIds || []).includes(compId)
+    || (db.companions || {})[compId]?.ownerCharId === charId);
+}
+function _onCombatRequests(campId, docs) {
+  if (campId !== _reqCampaign) return;
+  const c = db.campaigns.find(x => x.id === campId);
+  if (!c) return;
+  const init = c.initiative;
+  const ctx = { charIds: c.characters || [], ownsCompanion: _charOwnsCompanion };
+  const list = [];
+  docs.forEach(({ id, data }) => {
+    const req = sanitizeRequest(data, ctx);
+    // Malformed, oddly named (the id goes into the card's buttons), or left over from another fight: throw it away
+    if (!req || !/^[A-Za-z0-9_-]{1,64}$/.test(id) || !init?.combatants?.length || req.combatId !== init.combatId) {
+      _reqStore.remove(_FS_USER, campId, id).catch(() => {});
+      return;
+    }
+    const ts = data.createdAt;
+    req.id = id;
+    req.createdAt = ts && typeof ts.toMillis === 'function' ? ts.toMillis() : (+ts || Date.now());
+    list.push(req);
+  });
+  list.sort((a, b) => a.createdAt - b.createdAt);
+  _reqList = list.filter(r => !_reqApplying.has(r.id));
+  Object.keys(_reqEdits).forEach(id => { if (!list.some(r => r.id === id)) delete _reqEdits[id]; });
+  if (init?.autoApply) _autoApplyWaiting();
+  if (currentView === 'campaign') renderApp();
+}
+// Plain hits apply straight away; save effects always wait for the GM to mark saves
+function _autoApplyWaiting() {
+  _reqList.filter(r => !r.save).forEach(r => applyCombatRequest(r.id));
+}
+function toggleAutoApply() {
+  const init = getInitiative();
+  init.autoApply = !init.autoApply;
+  saveData(db);
+  if (init.autoApply) _autoApplyWaiting();
+  renderApp();
+}
+function _clearCombatRequests() {
+  if (_reqCampaign) _reqList.forEach(r => _reqStore.remove(_FS_USER, _reqCampaign, r.id).catch(() => {}));
+  _reqList = []; _reqEdits = {};
+}
+
+// The stat block whose damage defenses apply to a row
+function _rowStatBlock(cb) {
+  if (cb.statBlock) return cb.statBlock;
+  const own = _ownForRow(cb);
+  if (own) return _ownCompanionView(own.ch, own.oc).statBlock;
+  const comp = cb.companionId && (db.companions || {})[cb.companionId];
+  return comp?.statBlock || null;
+}
+// Each target of a request with its worked-out amount (or gone, if it left the tracker)
+function _reqTargetRows(req, init, edit = _reqEdits[req.id] || {}) {
+  return req.targets.map(t => {
+    const cb = (init.combatants || []).find(c => c.id === t.cbId);
+    if (!cb) return { t, gone: true };
+    const saved = !!(edit.saved || {})[t.cbId];
+    const res = req.kind === 'heal'
+      ? { total: t.parts[0].amount, tags: [], warnings: [] }
+      : resolveTargetDamage(t.parts, parseDefenses(_rowStatBlock(cb)), { saved, onSave: req.save?.onSave });
+    const override = (edit.amounts || {})[t.cbId];
+    const edited = Number.isInteger(override);
+    return { t, cb, saved, res, edited, amount: edited ? override : res.total };
+  });
+}
+function setRequestSaved(reqId, cbId, on) {
+  const e = _reqEdits[reqId] = _reqEdits[reqId] || {};
+  (e.saved = e.saved || {})[cbId] = !!on;
+  renderApp();
+}
+// Typing a number fixes that target's amount; clearing the box goes back to the calculated one
+function setRequestAmount(reqId, cbId, value) {
+  const e = _reqEdits[reqId] = _reqEdits[reqId] || {};
+  e.amounts = e.amounts || {};
+  const n = parseInt(value, 10);
+  if (value === '' || isNaN(n)) delete e.amounts[cbId]; else e.amounts[cbId] = Math.max(0, Math.min(9999, n));
+}
+function dismissCombatRequest(reqId) {
+  if (_reqCampaign) _reqStore.remove(_FS_USER, _reqCampaign, reqId).catch(() => {});
+  _reqList = _reqList.filter(r => r.id !== reqId);
+  delete _reqEdits[reqId];
+  renderApp();
+}
+
+// What a row and its linked character looked like before a request, so Undo can put it back
+function _snapshotRow(cb) {
+  const s = { cbId: cb.id, name: cb.name, hp: cb.hp, tempHP: cb.tempHP || 0, conditions: JSON.parse(JSON.stringify(cb.conditions || [])) };
+  const ch = cb.charId && db.characters[cb.charId];
+  if (ch?.combat) s.char = { currentHP: ch.combat.currentHP, tempHP: ch.combat.tempHP || 0,
+    deathSaves: JSON.parse(JSON.stringify(ch.deathSaves || { successes: 0, failures: 0 })) };
+  return s;
+}
+function _restoreRow(init, s) {
+  const cb = init.combatants.find(c => c.id === s.cbId);
+  if (!cb) return false;
+  const ch = cb.charId && db.characters[cb.charId];
+  if (ch?.combat && s.char) {
+    ch.combat.currentHP = s.char.currentHP; ch.combat.tempHP = s.char.tempHP; ch.deathSaves = s.char.deathSaves;
+  }
+  cb.hp = s.hp; cb.tempHP = s.tempHP; cb.conditions = s.conditions;
+  if (!ch) _pushLinked(cb);
+  return true;
+}
+
+async function applyCombatRequest(reqId) {
+  const req = _reqList.find(r => r.id === reqId);
+  if (!req || _reqApplying.has(reqId)) return;
+  const campId = _reqCampaign;
+  if (campId !== currentCampaignId) return;
+  const edits = _reqEdits[reqId] || {};          // the card's Saved ticks and typed amounts
+  _reqApplying.add(reqId);
+  let claimed = false;
+  try { claimed = await _reqStore.claim(_FS_USER, campId, reqId); }
+  catch (e) { console.warn('[Requests] claim failed:', e); showToast("Couldn't apply that request — try again."); }
+  _reqApplying.delete(reqId);
+  _reqList = _reqList.filter(r => r.id !== reqId);
+  delete _reqEdits[reqId];
+  if (!claimed || campId !== currentCampaignId) { renderApp(); return; }
+
+  const init = getInitiative();
+  const rows = _reqTargetRows(req, init, edits).filter(r => !r.gone);
+  if (!rows.length) { showToast('Nothing to apply — the targets are gone.'); renderApp(); return; }
+
+  const snapshots = rows.map(r => _snapshotRow(r.cb));
+  const results = [];
+  rows.forEach(r => {
+    const i = init.combatants.findIndex(c => c.id === r.t.cbId);   // summons may vanish mid-request
+    if (i < 0) return;
+    if (req.kind === 'heal') _healCombatant(i, r.amount, false); else _damageCombatant(i, r.amount, false);
+    results.push({ cbId: r.t.cbId, name: r.cb.name, total: r.amount, tags: r.edited ? ['set by GM'] : r.res.tags });
+  });
+  let text = summarizeRequest(req, results);
+  const warnings = rows.flatMap(r => r.edited ? [] : r.res.warnings.map(w => `${r.cb.name} ${w}`));
+  if (warnings.length) text += ` — check: ${warnings.join('; ')}`;
+  const undoId = uid();
+  init.undo = [{ id: undoId, text, snapshots }, ...(init.undo || [])].slice(0, 10);
+  combatLog(text, { undoId });
+  saveData(db); renderApp();
+}
+
+function undoCombatRequest(undoId) {
+  const init = getInitiative();
+  const u = (init.undo || []).find(x => x.id === undoId);
+  if (!u) return;
+  const gone = u.snapshots.filter(s => !_restoreRow(init, s)).map(s => s.name);
+  init.undo = init.undo.filter(x => x.id !== undoId);
+  _syncLinkedCombatants(init);
+  combatLog(`Undid: ${u.text}${gone.length ? ` — ${gone.join(', ')} ${gone.length > 1 ? 'were' : 'was'} gone, not restored` : ''}`);
+  saveData(db); renderApp();
+}
+function _undoLinkHtml(init, undoId) {
+  if (IS_PLAYER_VIEW || !undoId || !(init.undo || []).some(u => u.id === undoId)) return '';
+  return ` <button class="btn-link req-undo" onclick="undoCombatRequest('${esc(undoId)}')">Undo</button>`;
+}
+
+function _reqPartsText(parts, kind) {
+  if (kind === 'heal') return `${parts[0].amount} healing`;
+  return parts.map(p => `${p.amount} ${p.type}`).join(' + ');
+}
+function _reqSaveText(save) {
+  if (!save) return '';
+  const what = [save.ability, 'save', save.dc ? `DC ${save.dc}` : ''].filter(Boolean).join(' ');
+  return `${what} · ${save.onSave === 'half' ? 'half' : 'no damage'} on a success`;
+}
+function _renderRequestsPanel(init) {
+  const last = (init.undo || [])[0];
+  const lastLine = last ? `<div class="req-last">Last applied: ${esc(last.text)}${_undoLinkHtml(init, last.id)}</div>` : '';
+  if (_reqCampaign !== currentCampaignId || !_reqList.length) return lastLine ? `<div class="req-panel req-panel-quiet">${lastLine}</div>` : '';
+  const cards = _reqList.map(req => {
+    const rows = _reqTargetRows(req, init);
+    const warnings = rows.filter(r => !r.gone).flatMap(r => r.res.warnings.map(w => `${esc(r.cb.name)} ${esc(w)}`));
+    return `<div class="req-card" data-req="${esc(req.id)}">
+      <div class="req-title"><strong>${esc(req.fromName || 'A player')}</strong> ${req.kind === 'heal' ? '✚ heals' : '→'}${req.note ? ` <span class="req-note">${esc(req.note)}</span>` : ''}
+        ${req.save ? `<span class="req-save">${esc(_reqSaveText(req.save))}</span>` : ''}</div>
+      ${rows.map(r => r.gone ? `<div class="req-target req-gone">A target has left the fight (gone)</div>` : `<div class="req-target">
+        ${req.save ? `<label class="req-saved"><input type="checkbox" ${r.saved ? 'checked' : ''} onchange="setRequestSaved('${esc(req.id)}','${esc(r.t.cbId)}',this.checked)"> Saved</label>` : ''}
+        <span class="req-target-name">${esc(r.cb.name)}</span>
+        <span class="req-parts">${esc(_reqPartsText(r.t.parts, req.kind))}</span>
+        ${r.res.tags.filter(t => t !== 'saved').map(t => `<span class="req-tag">${esc(t)}</span>`).join('')}
+        <span class="req-arrow">→</span>
+        <input type="number" class="req-amount" min="0" max="9999" value="${r.amount}" aria-label="Amount for ${esc(r.cb.name)}"
+          oninput="setRequestAmount('${esc(req.id)}','${esc(r.t.cbId)}',this.value)">
+      </div>`).join('')}
+      ${warnings.map(w => `<div class="req-warn">⚠ ${w} — check</div>`).join('')}
+      <div class="req-actions">
+        <button class="btn btn-sm btn-primary" onclick="applyCombatRequest('${esc(req.id)}')">Apply</button>
+        <button class="btn btn-sm" onclick="dismissCombatRequest('${esc(req.id)}')">Dismiss</button>
+      </div>
+    </div>`;
+  }).join('');
+  return `<div class="req-panel">
+    <div class="req-panel-title">Requests <span class="spell-count">${_reqList.length}</span></div>
+    ${cards}${lastLine}
+  </div>`;
+}
+
+// ── Player side ──
+function _pvMyPending(init) {
+  return _pvReqs.filter(r => r.combatId && r.combatId === init.combatId);
+}
+function _pvRequestBarHtml(init) {
+  if (!init.combatId) return '';
+  const nameOf = id => (init.combatants.find(c => c.id === id) || {}).name || 'someone';
+  const pending = _pvMyPending(init);
+  return `<div class="req-bar">
+    <button class="btn btn-primary" onclick="openSendRequestModal()">⚔ Send damage / heal</button>
+    ${pending.length ? `<div class="req-pending"><div class="req-pending-title">Waiting for the GM</div>
+      ${pending.map(r => `<div class="req-pending-row">${esc(r.note || (r.kind === 'heal' ? 'Healing' : 'Damage'))} → ${esc((r.targets || []).map(t => nameOf(t.cbId)).join(', '))}
+        <button class="btn-link" onclick="cancelCombatRequest('${esc(r.id)}')">Cancel</button></div>`).join('')}
+    </div>` : ''}
+  </div>`;
+}
+function cancelCombatRequest(reqId) {
+  _reqStore.remove(_pvGmUid, _PV_CAMPAIGN, reqId).catch(e => console.warn('[Requests] cancel failed:', e));
+  _pvReqs = _pvReqs.filter(r => r.id !== reqId);
+  renderApp();
+}
+// Who the player can send as: their character, then their companions
+function _pvSenders(ch) {
+  const out = [{ id: '', name: ch.name }];
+  (ch.ownCompanions || []).forEach(oc => out.push({ id: oc.id, name: _ownCompanionView(ch, oc).name }));
+  (ch.companionIds || []).map(id => (db.companions || {})[id]).filter(Boolean).forEach(c => out.push({ id: c.id, name: c.name }));
+  return out;
+}
+function openSendRequestModal() {
+  _reqDraft = { from: '', kind: 'damage', parts: [{ amount: '', type: 'slashing' }], heal: '', isSave: false,
+    onSave: 'half', ability: '', dc: '', note: '', targets: {}, error: '' };
+  _renderSendRequestModal();
+}
+function _renderSendRequestModal() {
+  const d = _reqDraft, ch = db.characters[_pvMyCharId()], init = getCampaign()?.initiative;
+  if (!d || !ch || !init?.combatants?.length) { closeModal(); return; }
+  const typeOpts = sel => DAMAGE_TYPES.map(t => `<option value="${t}" ${t === sel ? 'selected' : ''}>${t}</option>`).join('');
+  const partRows = (parts, key) => parts.map((p, j) => `<div class="req-part-row">
+      <input type="number" min="0" max="999" placeholder="0" value="${esc(p.amount)}" aria-label="Amount"
+        oninput="reqDraftPart(${key},${j},'amount',this.value)">
+      <select aria-label="Damage type" onchange="reqDraftPart(${key},${j},'type',this.value)">${typeOpts(p.type)}</select>
+      ${parts.length > 1 ? `<button class="btn btn-icon" onclick="reqDraftRemovePart(${key},${j})" aria-label="Remove part">&times;</button>` : ''}
+    </div>`).join('') + (parts.length < 4 ? `<button class="btn btn-sm" onclick="reqDraftAddPart(${key})">+ part</button>` : '');
+  const targetRows = init.combatants.map(cb => {
+    if (!cb.id) return '';
+    const isMonster = !cb.charId && !cb.companionId && !cb.ownCompanion && cb.type !== 'player';
+    const defeated = _isDefeated(cb);
+    const health = defeated ? 'Defeated' : (cb.maxHP > 0 && cb.hp / cb.maxHP <= 0.5 ? 'Bloodied' : 'Healthy');
+    const t = d.targets[cb.id];
+    const on = !!t && !defeated;
+    const own = on && d.kind === 'damage' && t.parts;
+    return `<div class="req-pick${defeated ? ' req-pick-off' : ''}" data-cb="${esc(cb.id)}">
+      <label><input type="checkbox" ${on ? 'checked' : ''} ${defeated ? 'disabled' : ''} onchange="reqDraftTarget('${esc(cb.id)}',this.checked)">
+        ${esc(cb.name)} <span class="req-pick-info">${isMonster ? health : `HP ${cb.hp}/${cb.maxHP}`}</span></label>
+      ${on && d.kind === 'damage' ? (own
+        ? `<button class="btn-link" onclick="reqDraftOwnParts('${esc(cb.id)}',false)">use shared</button><div class="req-own-parts">${partRows(t.parts, `'${esc(cb.id)}'`)}</div>`
+        : `<button class="btn-link" onclick="reqDraftOwnParts('${esc(cb.id)}',true)">edit</button>`) : ''}
+    </div>`;
+  }).join('');
+  const senders = _pvSenders(ch);
+  openModal(`<h2>Send to the GM</h2>
+    <div class="form-group"><label>From</label>
+      <select id="req-from" onchange="_reqDraft.from=this.value">${senders.map(s => `<option value="${esc(s.id)}" ${s.id === d.from ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></div>
+    <div class="req-kind" role="group" aria-label="Damage or heal">
+      <button class="btn btn-sm${d.kind === 'damage' ? ' btn-primary' : ''}" onclick="reqDraftKind('damage')">Damage</button>
+      <button class="btn btn-sm${d.kind === 'heal' ? ' btn-primary' : ''}" onclick="reqDraftKind('heal')">Heal</button>
+    </div>
+    ${d.kind === 'damage' ? `<div class="form-group"><label>Damage</label>${partRows(d.parts, 'null')}</div>
+      <div class="form-group"><label class="req-check"><input type="checkbox" ${d.isSave ? 'checked' : ''} onchange="_reqDraft.isSave=this.checked;_renderSendRequestModal()"> Saving throw effect</label>
+      ${d.isSave ? `<div class="req-save-row">
+        <select aria-label="On a success" onchange="_reqDraft.onSave=this.value"><option value="half" ${d.onSave === 'half' ? 'selected' : ''}>Half damage on a success</option><option value="none" ${d.onSave === 'none' ? 'selected' : ''}>No damage on a success</option></select>
+        <select aria-label="Save ability" onchange="_reqDraft.ability=this.value">${['', 'STR', 'DEX', 'CON', 'INT', 'WIS', 'CHA'].map(a => `<option value="${a}" ${a === d.ability ? 'selected' : ''}>${a || 'Save…'}</option>`).join('')}</select>
+        <input type="number" min="1" max="30" placeholder="DC" value="${esc(d.dc)}" aria-label="Save DC" oninput="_reqDraft.dc=this.value">
+      </div>` : ''}</div>`
+    : `<div class="form-group"><label>Healing</label><input type="number" id="req-heal" min="0" max="999" placeholder="0" value="${esc(d.heal)}" oninput="_reqDraft.heal=this.value"></div>`}
+    <div class="form-group"><label>Targets</label><div class="req-pick-list">${targetRows}</div></div>
+    <div class="form-group"><label>Note <span class="text-dim">(optional)</span></label>
+      <input type="text" id="req-note" maxlength="100" placeholder="Fireball, Sneak Attack…" value="${esc(d.note)}" oninput="_reqDraft.note=this.value"></div>
+    ${d.error ? `<div class="req-error" role="alert">${esc(d.error)}</div>` : ''}
+    <div class="form-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" id="req-send-btn" onclick="sendCombatRequest()">Send</button>
+    </div>`);
+}
+function _reqDraftParts(key) { return key == null ? _reqDraft.parts : _reqDraft.targets[key]?.parts; }
+function reqDraftPart(key, j, field, value) { const p = _reqDraftParts(key); if (p && p[j]) p[j][field] = value; }
+function reqDraftAddPart(key) { const p = _reqDraftParts(key); if (p && p.length < 4) p.push({ amount: '', type: p[p.length - 1]?.type || 'slashing' }); _renderSendRequestModal(); }
+function reqDraftRemovePart(key, j) { const p = _reqDraftParts(key); if (p && p.length > 1) p.splice(j, 1); _renderSendRequestModal(); }
+function reqDraftKind(kind) { _reqDraft.kind = kind; _reqDraft.error = ''; _renderSendRequestModal(); }
+function reqDraftTarget(cbId, on) {
+  if (on) _reqDraft.targets[cbId] = _reqDraft.targets[cbId] || { parts: null };
+  else delete _reqDraft.targets[cbId];
+  _renderSendRequestModal();
+}
+// A target's own parts start as a copy of the shared ones
+function reqDraftOwnParts(cbId, on) {
+  const t = _reqDraft.targets[cbId]; if (!t) return;
+  t.parts = on ? _reqDraft.parts.map(p => ({ ...p })) : null;
+  _renderSendRequestModal();
+}
+// Turns the draft into a request record, or an error message for the player
+function _buildRequestFromDraft(d, ch, init, uidStr) {
+  const ids = Object.keys(d.targets).filter(id => init.combatants.some(c => c.id === id && !_isDefeated(c)));
+  if (!ids.length) return { error: 'Tick at least one target.' };
+  const num = v => (String(v).trim() === '' ? NaN : Number(v));
+  let targets;
+  if (d.kind === 'heal') {
+    const amount = num(d.heal);
+    targets = ids.map(cbId => ({ cbId, parts: [{ amount, type: '' }] }));
+  } else {
+    targets = ids.map(cbId => ({ cbId, parts: (d.targets[cbId].parts || d.parts).map(p => ({ amount: num(p.amount), type: p.type })) }));
+  }
+  if (targets.some(t => t.parts.some(p => !Number.isInteger(p.amount) || p.amount < 0 || p.amount > 999)))
+    return { error: 'Amounts must be whole numbers from 0 to 999.' };
+  const dc = num(d.dc);
+  if (d.kind === 'damage' && d.isSave && String(d.dc).trim() !== '' && (!Number.isInteger(dc) || dc < 1 || dc > 30))
+    return { error: 'The save DC must be between 1 and 30.' };
+  const senders = _pvSenders(ch);
+  const sender = senders.find(s => s.id === d.from) || senders[0];
+  const raw = {
+    uid: uidStr, charId: ch.id, combatId: init.combatId, fromCompanionId: sender.id, fromName: sender.name.slice(0, 60),
+    kind: d.kind, note: String(d.note || '').trim().slice(0, 100),
+    save: d.kind === 'damage' && d.isSave ? { onSave: d.onSave, ability: d.ability, dc: Number.isInteger(dc) ? dc : 0 } : null,
+    targets,
+  };
+  const req = sanitizeRequest(raw, { charIds: [ch.id], ownsCompanion: (cid, compId) => senders.some(s => s.id && s.id === compId) });
+  if (!req) return { error: "Something in that request isn't right — check the numbers." };
+  return { req: { ...req, shareToken: ch.shareToken } };
+}
+async function sendCombatRequest() {
+  const ch = db.characters[_pvMyCharId()], init = getCampaign()?.initiative;
+  let me = null; try { me = firebase.auth().currentUser; } catch (e) {}
+  if (!_reqDraft || !ch || !init?.combatId) return;
+  const built = _buildRequestFromDraft(_reqDraft, ch, init, me?.uid || '');
+  if (built.error) { _reqDraft.error = built.error; _renderSendRequestModal(); return; }
+  const btn = document.getElementById('req-send-btn'); if (btn) btn.disabled = true;
+  try {
+    await _reqStore.send(_pvGmUid, _PV_CAMPAIGN, built.req);
+    _reqDraft = null; closeModal(); showToast('Sent to the GM');
+  } catch (e) {
+    console.warn('[Requests] send failed:', e);
+    _reqDraft.error = "Couldn't send — try again."; _renderSendRequestModal();
+  }
+}
+
 function toggleCombatLog() { _combatLogOpen = !_combatLogOpen; renderApp(); }
 function clearCombatLog() { const init=getInitiative(); init.log=[]; saveData(db); renderApp(); }
 function copyCombatLog() {
@@ -3003,6 +3425,8 @@ function clearInitiative() {
         db.characters[cb.charId].combat.conditions = [];
       }
     });
+    // Waiting combat requests belong to this fight; auto-apply, undo and the combat id go with it
+    _clearCombatRequests();
     getCampaign().initiative={round:1,currentIndex:0,combatants:[],log:[]};
     saveData(db); renderApp();
   });
@@ -4482,6 +4906,7 @@ function renderCombatSection(ch) {
 
 function renderAttacksSection(ch) {
   const rows = ch.attacks||[];
+  const live = _syncAutoAttacks(ch);
   return `<div class="sheet-panel" style="margin-top:0.6rem">
     <div class="cs-section-label">Attacks &amp; Spellcasting</div>
     <table class="attacks-table">
@@ -4495,7 +4920,7 @@ function renderAttacksSection(ch) {
       <tbody>
         ${rows.length === 0 ? `<tr><td colspan="5" style="text-align:center;color:var(--text-dim);font-style:italic;padding:0.8rem">No attacks added yet.</td></tr>` : ''}
         ${rows.map((atk,i)=>`<tr>
-          <td><input class="attack-input" value="${esc(atk.name)}" placeholder="Longsword" oninput="updateAttack(${i},'name',this.value)">${atk.mastery ? `<div title="${esc((typeof WEAPON_MASTERY_DESC !== 'undefined' && WEAPON_MASTERY_DESC[atk.mastery]) || '')}" style="font-size:0.58rem;color:#f59e0b;margin-top:1px;cursor:help">✦ ${esc(atk.mastery)}</div>` : ''}</td>
+          <td><input class="attack-input" value="${esc(atk.name)}" placeholder="Longsword" oninput="updateAttack(${i},'name',this.value)">${_attackTagHtml(atk, i)}${live[i] && live[i].save ? ` <span class="atk-save">${live[i].save} save</span>` : ''}${atk.mastery ? `<div title="${esc((typeof WEAPON_MASTERY_DESC !== 'undefined' && WEAPON_MASTERY_DESC[atk.mastery]) || '')}" style="font-size:0.58rem;color:#f59e0b;margin-top:1px;cursor:help">✦ ${esc(atk.mastery)}</div>` : ''}</td>
           <td><select class="attack-type-select" onchange="autoCalcAttackBonus(${i},this.value)">
             <option value="" ${!atk.weaponType?'selected':''}>—</option>
             <option value="melee-str" ${atk.weaponType==='melee-str'?'selected':''}>Melee (STR)</option>
@@ -4506,16 +4931,17 @@ function renderAttacksSection(ch) {
           <td><input class="attack-input" value="${esc(atk.bonus)}" placeholder="+5" oninput="updateAttack(${i},'bonus',this.value)"></td>
           <td><input class="attack-input" value="${esc(atk.damage)}" placeholder="1d8+3 slashing" oninput="updateAttack(${i},'damage',this.value)"></td>
           <td class="attack-actions">
-            <button class="btn btn-icon" onclick="rollAttack(${i})" title="Roll attack">🎲</button>
+            ${live[i] && live[i].save ? '' : `<button class="btn btn-icon" onclick="rollAttack(${i})" title="Roll attack">🎲</button>`}
             <button class="btn btn-icon" onclick="rollDamage(${i})" title="Roll damage">⚄</button>
             <button class="btn btn-icon btn-danger" onclick="removeAttack(${i})">&times;</button>
           </td>
         </tr>`).join('')}
       </tbody>
     </table>
-    <div style="display:flex;gap:0.4rem;margin-top:0.5rem">
+    <div style="display:flex;flex-wrap:wrap;gap:0.4rem;margin-top:0.5rem">
       <button class="btn btn-sm" onclick="addAttack()">+ Add Attack</button>
       <button class="btn btn-sm" onclick="openWeaponPicker()">⚔ Pick Weapon</button>
+      <button class="btn btn-sm" onclick="openCantripPicker()">✦ Add Cantrip</button>
     </div>
   </div>`;
 }
@@ -9563,22 +9989,118 @@ function adjustHitDice(delta) {
   saveData(db); renderApp();
 }
 
+// ── Attacks that keep up with the character ──────────────────────────────────
+// Rows with auto set work out their bonus and damage from level and ability scores on every
+// render (attack-rules.js). Typing over the bonus or damage makes a row manual; ↺ auto undoes that.
+function _monkLevel(ch) {
+  const e = (ch.classes || []).find(c => c.class === 'Monk');
+  return e ? (parseInt(e.level) || 1) : (ch.class === 'Monk' ? (parseInt(ch.level) || 1) : 0);
+}
+function _weaponData(name) {
+  return (typeof WEAPONS_DATA !== 'undefined' ? WEAPONS_DATA : []).find(w => w.name === name) || null;
+}
+// Cantrip damage for the character's edition (falling back to the other one), with its proper name
+function _cantripInfo(name, ch) {
+  if (typeof CANTRIP_DAMAGE === 'undefined' || !name) return null;
+  const ed = (ch && ch.edition) === '2014' ? '2014' : '2024', lc = String(name).trim().toLowerCase();
+  for (const e of [ed, ed === '2014' ? '2024' : '2014']) {
+    const key = Object.keys(CANTRIP_DAMAGE[e]).find(k => k.toLowerCase() === lc);
+    if (key) return { name: key, ...CANTRIP_DAMAGE[e][key] };
+  }
+  return null;
+}
+// The ability a cantrip is cast with: a feat's chosen ability, else the class whose list has it
+function _cantripAbility(ch, name) {
+  const lc = String(name).toLowerCase();
+  const sp = (ch.spells?.known || []).find(s => s && typeof s === 'object' && String(s.name).toLowerCase() === lc);
+  if (sp && (sp._miAbility || sp._sfAbility)) return sp._miAbility || sp._sfAbility;
+  const casters = casterEntries(ch);
+  const lists = String(sp?.dnd_class || (typeof _spellByName === 'function' && _spellByName(name, ch)?.dnd_class) || '');
+  const e = casters.find(c => lists.includes(c.cls)) || casters[0];
+  return e?.prog?.ability || SPELL_ABILITY[ch.class] || 'int';
+}
+// Bonus and damage for an auto row right now, or null for a manual row
+function _attackLive(ch, atk) {
+  if (!atk || !atk.auto) return null;
+  if (atk.cantrip) {
+    const info = _cantripInfo(atk.cantrip, ch);
+    if (!info) return null;
+    return cantripStats(info, { level: ch.level, abilityMod: mod((ch.abilities || {})[_cantripAbility(ch, atk.cantrip)] || 10),
+      atkBonus: parseInt(ch.spellBonus?.atk) || 0, dcBonus: parseInt(ch.spellBonus?.dc) || 0 });
+  }
+  return weaponStats(atk, { level: ch.level, abilities: ch.abilities, edition: ch.edition === '2014' ? '2014' : '2024',
+    monkLevel: _monkLevel(ch), weapon: _weaponData(atk.weapon || atk.name) });
+}
+// Writes each auto row's current bonus and damage onto it (so rolls and saves see them); returns them by row
+function _syncAutoAttacks(ch) {
+  return (ch.attacks || []).map(atk => {
+    const live = _attackLive(ch, atk);
+    if (live) { atk.bonus = live.bonus; atk.damage = live.damage; }
+    return live;
+  });
+}
+// Weapon-picker rows from before, and rows named after a damage cantrip, become auto (no saving here)
+function _migrateAutoAttacks(ch) {
+  (ch.attacks || []).forEach(a => {
+    if (!a || typeof a !== 'object') return;
+    const w = autoWeaponFrom(a);
+    if (w) { Object.assign(a, w, { auto: true }); return; }
+    if (a.auto === undefined && a.weaponType === 'spell' && (!String(a.damage || '').trim() || splitDamage(a.damage))) {
+      const info = _cantripInfo(a.name, ch);
+      if (info) Object.assign(a, { auto: true, cantrip: info.name });
+    }
+  });
+}
+function _attackCanAuto(atk) { return !!(atk.dice || atk.unarmed || atk.cantrip); }
+function _attackTagHtml(atk, i) {
+  if (atk.auto) return `<span class="atk-auto" id="atk-tag-${i}" title="Bonus and damage follow your level and ability scores. Type over them to set your own.">auto</span>`;
+  if (_attackCanAuto(atk)) return `<button class="atk-auto-link" id="atk-tag-${i}" onclick="setAttackAuto(${i})" title="Work out bonus and damage from your level and ability scores again">↺ auto</button>`;
+  return '';
+}
+function setAttackAuto(i) {
+  const ch = db.characters[currentCharId], atk = ch?.attacks?.[i];
+  if (!atk || !_attackCanAuto(atk)) return;
+  atk.auto = true;
+  saveData(db); renderApp();
+}
+
 function addAttack() {
   const ch = db.characters[currentCharId];
   ch.attacks = ch.attacks||[];
-  ch.attacks.push({id:uid(),name:'',bonus:'',damage:'',weaponType:''});
+  ch.attacks.push({id:uid(),name:'',bonus:'',damage:'',weaponType:'',auto:false});
   saveData(db); renderApp();
 }
 function removeAttack(i) { db.characters[currentCharId].attacks.splice(i,1); saveData(db); renderApp(); }
 function updateAttack(i, field, value) {
   const ch = db.characters[currentCharId];
-  if (ch.attacks[i]) ch.attacks[i][field] = value;
+  const atk = ch.attacks[i];
+  if (!atk) return;
+  atk[field] = value;
+  // Typing your own bonus or damage takes the row off auto
+  if ((field === 'bonus' || field === 'damage') && atk.auto) {
+    atk.auto = false;
+    const tag = document.getElementById('atk-tag-' + i);
+    if (tag) tag.outerHTML = _attackTagHtml(atk, i);
+  }
   _queueSave();
 }
 function autoCalcAttackBonus(i, weaponType) {
   const ch = db.characters[currentCharId];
   if (!ch || !ch.attacks[i]) return;
-  ch.attacks[i].weaponType = weaponType;
+  const atk = ch.attacks[i];
+  atk.weaponType = weaponType;
+  // Spell Attack on a damage cantrip's row, or a weapon type on bare dice, makes the row auto
+  const cantrip = weaponType === 'spell' ? _cantripInfo(atk.name, ch) : null;
+  if (cantrip) {
+    Object.assign(atk, { auto: true, cantrip: cantrip.name });
+    saveData(db); renderApp(); return;
+  }
+  if (atk.cantrip) { delete atk.cantrip; atk.auto = false; }
+  if (['melee-str', 'melee-finesse', 'ranged-dex'].includes(weaponType)) {
+    const bare = !atk.auto && !atk.unarmed && splitDamage(atk.damage);
+    if (bare) Object.assign(atk, bare, { auto: true });
+    if (atk.auto) { saveData(db); renderApp(); return; }
+  } else if (atk.auto) atk.auto = false;
   if (weaponType) {
     const pb = profBonus(ch.level);
     const abs = ch.abilities || {};
@@ -9639,10 +10161,8 @@ function updateWeaponResults() {
   let unarmedDmg = '1 bludgeoning';
   const unarmedStrike = { id: '_unarmed', name: 'Unarmed Strike', weapon_type: 'melee-str', dmg: unarmedDmg, category: 'simple', properties: [], _isUnarmed: true };
   if (isMonk) {
-    let die = 'd6';
-    if (monkLevel >= 17) die = 'd12';
-    else if (monkLevel >= 11) die = 'd10';
-    else if (monkLevel >= 5) die = 'd8';
+    const dice = ch.edition === '2014' ? ['d4', 'd6', 'd8', 'd10'] : ['d6', 'd8', 'd10', 'd12'];
+    const die = dice[cantripTier(monkLevel)]; // martial arts dice change at the same levels as cantrips
     unarmedDmg = `1${die} bludgeoning`;
     unarmedStrike.dmg = unarmedDmg;
     unarmedStrike._monkBadge = true;
@@ -9699,42 +10219,25 @@ function pickWeapon(idx) {
   const isMelee     = w.weapon_type !== 'ranged-dex';
 
   // Determine weapon_type and damage, then possibly ask follow-up questions
-  function applyWeapon(weaponType, dmg) {
+  // Bonus and damage are filled in on render from level and ability scores (auto rows)
+  function applyWeapon(weaponType, dmg, thrown) {
     const ch = db.characters[currentCharId];
     ch.attacks = ch.attacks || [];
-    const pb = profBonus(ch.level);
-    const abs = ch.abilities || {};
-    const strMod = mod(abs.str || 10);
-    const dexMod = mod(abs.dex || 10);
-    let abilityMod;
-    if (weaponType === 'melee-str')       abilityMod = strMod;
-    else if (weaponType === 'melee-finesse') abilityMod = Math.max(strMod, dexMod);
-    else                                  abilityMod = dexMod;
-    const bonus = pb + abilityMod;
-    const bonusStr = (bonus >= 0 ? '+' : '') + bonus;
-
-    // For unarmed strike, adjust damage based on Monk status
-    let finalDmg = dmg;
-    if (w._isUnarmed) {
-      const isMonk = ch.class === 'Monk' || (ch.classes && ch.classes.some(c => c.class === 'Monk'));
-      if (!isMonk) {
-        // Non-Monk: damage is 1 + STR mod (no dice, stored as flat bonus)
-        const flatDamage = 1 + strMod;
-        finalDmg = flatDamage + ' bludgeoning';
-      }
-    }
-
-    ch.attacks.push({ id: uid(), name: w.name, weaponType, bonus: bonusStr, damage: finalDmg, mastery: w.mastery || '', _unarmed: w._isUnarmed });
+    const unarmed = !!w._isUnarmed;
+    const parts = unarmed ? { unarmed: true, dmgType: 'bludgeoning' }
+      : (splitDamage(dmg) || { dice: '—', dmgType: '' });
+    ch.attacks.push({ id: uid(), name: w.name + (thrown ? ' (thrown)' : ''), weapon: unarmed ? '' : w.name, weaponType,
+      bonus: '', damage: '', mastery: w.mastery || '', _unarmed: unarmed, auto: true, ...parts });
     saveData(db); renderApp();
   }
 
-  // Step 1: thrown+melee asks Melee or Thrown?
+  // Step 1: thrown+melee asks Melee or Thrown? A thrown melee weapon uses the same ability as in melee.
   function askThrown(dmg, meleeType) {
     openModal(`<h2>${esc(w.name)}</h2>
       <p style="margin-bottom:1rem">How do you want to use this weapon?</p>
       <div style="display:flex;gap:0.5rem">
         <button class="btn btn-primary" style="flex:1" onclick="closeModal();pickWeaponApply('${meleeType}','${esc(dmg)}')">Melee</button>
-        <button class="btn" style="flex:1" onclick="closeModal();pickWeaponApply('ranged-dex','${esc(dmg)}')">Thrown (DEX)</button>
+        <button class="btn" style="flex:1" onclick="closeModal();pickWeaponApply('${meleeType}','${esc(dmg)}',true)">Thrown</button>
       </div>`);
   }
 
@@ -9752,7 +10255,7 @@ function pickWeapon(idx) {
 
   // Store pending apply for onclick strings
   window._pendingWeapon = w;
-  window.pickWeaponApply = function(weaponType, dmg) { applyWeapon(weaponType, dmg); };
+  window.pickWeaponApply = function(weaponType, dmg, thrown) { applyWeapon(weaponType, dmg, thrown); };
 
   if (isThrown && isMelee && !w.properties.includes('Ammunition')) {
     // Dagger, Handaxe, Javelin, Spear, Trident etc — ask melee or thrown first
@@ -9762,7 +10265,7 @@ function pickWeapon(idx) {
         <p style="margin-bottom:1rem">How do you want to use this weapon?</p>
         <div style="display:flex;gap:0.5rem">
           <button class="btn btn-primary" style="flex:1" onclick="closeModal();_askVersatileFor('${w.weapon_type}')">Melee</button>
-          <button class="btn" style="flex:1" onclick="closeModal();pickWeaponApply('ranged-dex','${esc(w.dmg)}')">Thrown (DEX)</button>
+          <button class="btn" style="flex:1" onclick="closeModal();pickWeaponApply('${w.weapon_type}','${esc(w.dmg)}',true)">Thrown</button>
         </div>`);
       window._askVersatileFor = function(wt) { askVersatile(wt); };
     } else {
@@ -9775,10 +10278,51 @@ function pickWeapon(idx) {
   }
 }
 
+// ── Cantrip Picker ────────────────────────────────────────────────────────────
+// Damage cantrips the character knows (or every damage cantrip, if they know none) as auto attack rows
+function _cantripChoices(ch) {
+  const known = [...new Set((ch.spells?.known || []).map(s => typeof s === 'object' && s ? s.name : s)
+    .map(n => _cantripInfo(n, ch)?.name).filter(Boolean))];
+  if (known.length) return { names: known.sort(), all: false };
+  const ed = ch.edition === '2014' ? '2014' : '2024';
+  return { names: typeof CANTRIP_DAMAGE === 'undefined' ? [] : Object.keys(CANTRIP_DAMAGE[ed]), all: true };
+}
+function openCantripPicker() {
+  const ch = db.characters[currentCharId];
+  if (!ch) return;
+  const { names, all } = _cantripChoices(ch);
+  const have = new Set((ch.attacks || []).map(a => a.cantrip).filter(Boolean));
+  const rows = names.map(n => {
+    const info = _cantripInfo(n, ch);
+    const s = _attackLive(ch, { auto: true, cantrip: n });
+    const added = have.has(n);
+    return `<button class="cantrip-pick-row" ${added ? 'disabled' : ''} data-cantrip="${esc(n)}" onclick="addCantripAttack(this.dataset.cantrip)">
+      <span class="cantrip-pick-name">${esc(n)}</span>
+      <span class="cantrip-pick-dmg">${esc(s ? s.damage : '')}</span>
+      <span class="cantrip-pick-how">${added ? 'added' : esc(info.save ? `${s.save} save, ${s.bonus}` : (s.bonus + ' to hit'))}</span>
+    </button>`;
+  }).join('');
+  openModal(`<h2>✦ Add Cantrip</h2>
+    <p style="font-size:0.78rem;color:var(--text-dim);margin-bottom:0.5rem">${all
+      ? 'You don\'t know any damage cantrips yet, so here are all of them.'
+      : 'Damage cantrips you know.'} The damage grows at levels 5, 11 and 17.</p>
+    <div style="max-height:400px;overflow-y:auto">${rows || '<p style="color:var(--text-dim);text-align:center">No damage cantrips found.</p>'}</div>`);
+}
+function addCantripAttack(name) {
+  const ch = db.characters[currentCharId];
+  const info = ch && _cantripInfo(name, ch);
+  if (!info) return;
+  closeModal();
+  ch.attacks = ch.attacks || [];
+  ch.attacks.push({ id: uid(), name: info.name, weaponType: 'spell', cantrip: info.name, auto: true, bonus: '', damage: '' });
+  saveData(db); renderApp();
+}
+
 function rollAttack(i) {
   const ch = db.characters[currentCharId];
   const atk = ch?.attacks?.[i];
   if (!atk) return;
+  _syncAutoAttacks(ch);
   const d20 = Math.floor(Math.random() * 20) + 1;
   const bonusNum = parseInt(atk.bonus) || 0;
   const exPen = exhaustionPenalty(ch);
@@ -9801,17 +10345,15 @@ function rollAttack(i) {
 function rollDamage(i) {
   const ch = db.characters[currentCharId];
   const atk = ch?.attacks?.[i];
+  if (ch) _syncAutoAttacks(ch);
   if (!atk?.damage) { showToast('No damage dice set.'); return; }
 
-  // Handle unarmed strike for non-Monks (flat damage, no dice)
-  if (atk._unarmed) {
-    const flatMatch = atk.damage.match(/^(\d+)\s/);
-    if (flatMatch) {
-      const flatDamage = parseInt(flatMatch[1]);
-      const dmgType = atk.damage.split(/\s+/).slice(1).join(' ');
-      showToast(`<strong>${esc(atk.name || 'Unarmed Strike')} damage:</strong> <strong>${flatDamage}</strong> ${esc(dmgType)}`);
-      return;
-    }
+  // Flat damage, no dice (an unarmed strike for non-Monks, a Blowgun)
+  const flatMatch = atk.damage.trim().match(/^(\d+)(\s|$)/);
+  if (flatMatch) {
+    const dmgType = atk.damage.trim().split(/\s+/).slice(1).join(' ');
+    showToast(`<strong>${esc(atk.name || 'Attack')} damage:</strong> <strong>${parseInt(flatMatch[1])}</strong> ${esc(dmgType)}`);
+    return;
   }
 
   const diceStr = atk.damage.trim().split(/\s+/)[0];
@@ -9823,7 +10365,8 @@ function rollDamage(i) {
   const total = rollSum + bonus;
   const rollsStr = count === 1 ? `${rolls[0]}` : `${rolls.join('+')}=${rollSum}`;
   const bonusStr = bonus > 0 ? ` + ${bonus}` : bonus < 0 ? ` \u2212 ${Math.abs(bonus)}` : '';
-  showToast(`<strong>${esc(atk.name || 'Attack')} damage:</strong> ${count}d${sides}(${rollsStr})${bonusStr} = <strong>${total}</strong>`);
+  const perBeam = /×\d+ beams/.test(atk.damage) ? ' (one beam; each beam rolls to hit)' : '';
+  showToast(`<strong>${esc(atk.name || 'Attack')} damage:</strong> ${count}d${sides}(${rollsStr})${bonusStr} = <strong>${total}</strong>${perBeam}`);
 }
 function updateCurrency(coin, value) {
   const ch = db.characters[currentCharId];
