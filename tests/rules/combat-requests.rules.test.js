@@ -60,6 +60,7 @@ const { doc, getDoc, setDoc, updateDoc, deleteDoc, collection, getDocs, query, w
   await test('a long note is rejected', () => assertFails(create(req({ note: 'x'.repeat(101) }), 'r12')));
   await test('an unknown kind is rejected', () => assertFails(create(req({ kind: 'kill' }), 'r13')));
   await test('a made-up timestamp is rejected', () => assertFails(create(req({ createdAt: new Date(0) }), 'r14')));
+  await test('an id with odd characters is rejected', () => assertFails(create(req(), "x');alert(1);('")));
   await test('signed-out visitors cannot send', () => assertFails(setDoc(doc(env.unauthenticatedContext().firestore(), `${REQS}/r15`), req())));
 
   await seed();

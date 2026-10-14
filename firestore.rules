@@ -47,6 +47,7 @@ service cloud.firestore {
       }
 
       allow create: if request.auth != null
+                    && reqId.matches('^[A-Za-z0-9_-]{1,64}$')
                     && request.resource.data.uid == request.auth.uid
                     && validRequest(request.resource.data)
                     && campaignDoc().get('characters', []).hasAny([request.resource.data.charId])
