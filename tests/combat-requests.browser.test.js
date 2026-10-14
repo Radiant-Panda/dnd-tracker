@@ -51,7 +51,8 @@ const { launch, openApp } = require('./browser');
     };
     window.cbId = name => getInitiative().combatants.find(c => c.name === name)?.id;
     window.hp = name => getInitiative().combatants.find(c => c.name === name)?.hp;
-    window.asPlayer = (pc) => { IS_PLAYER_VIEW = true; currentCharId = pc.id; currentView = 'campaign'; renderApp(); };
+    // Like a real player: the player view knows its character, then the player clicks the Combat tab
+    window.asPlayer = (pc) => { IS_PLAYER_VIEW = true; _pvCharId = pc.id; currentCharId = pc.id; showCampaign('cR', 'initiative'); };
     window.asGM = () => { IS_PLAYER_VIEW = false; currentView = 'campaign'; renderApp(); };
     window.tick = name => document.querySelector(`.req-pick[data-cb="${cbId(name)}"] input[type=checkbox]`);
     window.flush = () => new Promise(r => setTimeout(r, 0));
