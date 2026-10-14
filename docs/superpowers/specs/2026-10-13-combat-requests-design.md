@@ -207,8 +207,9 @@ New `combatRequests` match block. Deploy needs **hosting and firestore rules** �
 - Send fails (offline / rules reject) → the modal stays open with "Couldn't send — try again".
 - GM applies a request whose targets are all gone → "Nothing to apply — targets are gone", record
   deleted.
-- Two GM tabs open with auto-apply on: the apply deletes the record inside a transaction-style check
-  (delete first; only the tab whose delete succeeds applies), so a request is never applied twice.
+- Two GM tabs open with auto-apply on: applying first claims the record in a Firestore transaction
+  (read it, fail if it no longer exists, delete it); only the tab whose transaction succeeds applies, so
+  a request is never applied twice.
 - Malformed requests (fails `sanitizeRequest`) are deleted silently.
 
 ## Testing
